@@ -71,12 +71,27 @@ def test_summary_tier_distribution():
 
 def test_summary_status_counts_and_by_status():
     result = build_summary_dashboard(RATINGS, period_label="7-1")
-    assert result["status_counts"]["Профи"] == 4  # Иванов, Петров, Кузнецов, ЗДР Морозов
+    assert result["status_counts"]["Профи"] == 4  # Иванов, Петров, Кузнецов, ЗДР Морозов (включая Н/О)
     assert result["status_counts"]["Лидер"] == 1  # Сидоров
 
+    # by_status считается по evaluated, не по main — Кузнецов (Н/О) сюда не входит
     by_status = {e["status"]: e for e in result["by_status"]}
-    assert by_status["Профи"]["count"] == 4
+    assert by_status["Профи"]["count"] == 3
     assert by_status["Лидер"]["count"] == 1
+
+
+def test_summary_by_status_averages_exclude_na_even_though_status_counts_include_them():
+    ratings = [
+        _row("А", "С1", status="Профи", c1_per_contact=100),
+        _row("Б", "С1", status="Профи", c1_per_contact=200),
+        _row("В", "С1", status="Профи", is_na=True, c1_per_contact=99999),  # Н/О — не должен влиять на среднее
+    ]
+    result = build_summary_dashboard(ratings, period_label="7-1")
+    assert result["status_counts"]["Профи"] == 3  # включая Н/О
+
+    by_status = {e["status"]: e for e in result["by_status"]}
+    assert by_status["Профи"]["count"] == 2  # без Н/О
+    assert by_status["Профи"]["avg_c1_per_contact"] == 150  # (100+200)/2, не с учётом 99999
 
 
 def test_summary_novices_by_supervisor_excludes_region_uk_and_computes_bad_pct():
@@ -148,19 +163,20 @@ def test_newcomer_funnel_count_delta_vs_previous():
 
 # --- каналы ---
 
-def test_channels_dashboard_groups_by_channel_excludes_na():
+def test_channels_dashboard_groups_by_channel_excludes_novices_and_na():
     ratings = [
         _row("А", "С1", channel="radio", ch_per_contact=100, ch_conv=10, ch_sum=1000),
         _row("Б", "С1", channel="radio", ch_per_contact=200, ch_conv=20, ch_sum=2000),
         _row("В", "С1", channel="inet", ch_per_contact=300, ch_conv=30, ch_sum=3000),
-        _row("Г", "С1", channel="inet", is_na=True, ch_per_contact=999),  # Н/О исключён
+        _row("Г", "С1", channel="inet", is_na=True, ch_per_contact=999),        # Н/О исключён
+        _row("Д", "С1", channel="radio", is_novice=True, ch_per_contact=999),   # новичок исключён
     ]
     result = build_channels_dashboard(ratings)
     by_channel = {c["channel"]: c for c in result["channels"]}
-    assert by_channel["radio"]["count"] == 2
+    assert by_channel["radio"]["count"] == 2  # без Д (новичок)
     assert by_channel["radio"]["avg_ch_per_contact"] == 150
     assert by_channel["radio"]["sum_ch_sum"] == 3000
-    assert by_channel["inet"]["count"] == 1  # Г исключён как Н/О
+    assert by_channel["inet"]["count"] == 1  # без Г (Н/О)
     assert by_channel["inet"]["avg_ch_per_contact"] == 300
 
 
@@ -182,17 +198,20 @@ def test_anomalies_ignores_drop_under_10_places():
     assert result == []
 
 
-def test_anomalies_detects_zero_sales_two_periods_in_a_row():
+def test_anomalies_zero_sales_message_includes_both_period_labels():
     current = [_row("А", "С1", c1_sum=0)]
     previous = [_row("А", "С1", c1_sum=0)]
-    result = build_anomalies_dashboard(current, previous)
-    assert any(a["reason"] == "0 продаж 2 периода подряд" for a in result)
+    result = build_anomalies_dashboard(current, previous, period_label="7-2", previous_period_label="7-1")
+    assert any(
+        a["reason"] == "0 продаж по 1 обращению два периода подряд (7-1 и 7-2)"
+        for a in result
+    )
 
 
 def test_anomalies_high_error_rate_does_not_need_previous_period():
     current = [_row("А", "С1", errors_pct=15)]
     result = build_anomalies_dashboard(current, previous_ratings=None)
-    assert any(a["reason"] == "Высокий % ошибок" for a in result)
+    assert any(a["reason"] == "Высокий % ошибок: 15%" for a in result)
 
 
 def test_anomalies_excludes_novices():

@@ -74,5 +74,10 @@ async def get_anomalies_dashboard(
 ):
     client = as_user(user.access_token)
     ratings = await _load_ratings(client, upload_id)
-    previous_ratings = await _load_ratings(client, previous_upload_id) if previous_upload_id else None
-    return build_anomalies_dashboard(ratings, previous_ratings)
+    period_label = await _load_period_label(client, upload_id)
+    previous_ratings = None
+    previous_period_label = None
+    if previous_upload_id:
+        previous_ratings = await _load_ratings(client, previous_upload_id)
+        previous_period_label = await _load_period_label(client, previous_upload_id)
+    return build_anomalies_dashboard(ratings, previous_ratings, period_label, previous_period_label)

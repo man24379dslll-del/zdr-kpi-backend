@@ -83,11 +83,13 @@ def build_summary_dashboard(
         if tier in tier_distribution:
             tier_distribution[tier] += 1
 
-    statuses = sorted({r.get("status") for r in main if r.get("status")})
+    # По evaluated (не main!) — Н/О (тренеры/отпускники/больничные и т.п.)
+    # искажали бы средние показатели статуса, если бы считались тут.
+    statuses = sorted({r.get("status") for r in evaluated if r.get("status")})
     by_status = []
     for status_value in statuses:
-        rows = [r for r in main if r.get("status") == status_value]
-        prev_rows = [r for r in prev_main if r.get("status") == status_value] if has_previous else []
+        rows = [r for r in evaluated if r.get("status") == status_value]
+        prev_rows = [r for r in prev_evaluated if r.get("status") == status_value] if has_previous else []
         entry: dict = {"status": status_value, "count": len(rows)}
         for metric in STATUS_METRICS:
             avg_now = _avg([r.get(metric) for r in rows])
@@ -165,8 +167,8 @@ def build_newcomer_funnel(novices: list[dict], previous_novices: list[dict] | No
 
 
 def build_channels_dashboard(ratings: list[dict]) -> dict:
-    """ratings: строки kpi_ratings ОДНОГО периода; Н/О исключаются."""
-    main = [r for r in ratings if not r.get("is_na")]
+    """ratings: строки kpi_ratings ОДНОГО периода; новички и Н/О исключаются."""
+    main = [r for r in ratings if not r.get("is_novice") and not r.get("is_na")]
     by_channel: dict[str, list[dict]] = {}
     for r in main:
         by_channel.setdefault(r.get("channel") or "unknown", []).append(r)
@@ -184,9 +186,16 @@ def build_channels_dashboard(ratings: list[dict]) -> dict:
     return {"channels": channels}
 
 
-def build_anomalies_dashboard(ratings: list[dict], previous_ratings: list[dict] | None = None) -> list[dict]:
+def build_anomalies_dashboard(
+    ratings: list[dict],
+    previous_ratings: list[dict] | None = None,
+    period_label: str | None = None,
+    previous_period_label: str | None = None,
+) -> list[dict]:
     """ratings: строки kpi_ratings ОДНОГО периода (не новички сравниваются
-    с той же fio в previous_ratings, если она дана)."""
+    с той же fio в previous_ratings, если она дана). period_label/
+    previous_period_label — только для текста сообщения о нулевых продажах,
+    на саму логику не влияют."""
     main = [r for r in ratings if not r.get("is_novice")]
     prev_by_fio = {r.get("fio"): r for r in (previous_ratings or [])}
 
@@ -219,10 +228,17 @@ def build_anomalies_dashboard(ratings: list[dict], previous_ratings: list[dict] 
             if (r.get("c1_sum") or 0) == 0 and (prev.get("c1_sum") or 0) == 0:
                 anomalies.append({
                     "fio": fio, "group": group, "severity": "warn",
-                    "reason": "0 продаж 2 периода подряд",
+                    "reason": (
+                        f"0 продаж по 1 обращению два периода подряд "
+                        f"({previous_period_label} и {period_label})"
+                    ),
                 })
 
-        if (r.get("errors_pct") or 0) >= 10:
-            anomalies.append({"fio": fio, "group": group, "severity": "err", "reason": "Высокий % ошибок"})
+        errors_pct = r.get("errors_pct") or 0
+        if errors_pct >= 10:
+            anomalies.append({
+                "fio": fio, "group": group, "severity": "err",
+                "reason": f"Высокий % ошибок: {errors_pct}%",
+            })
 
     return anomalies
