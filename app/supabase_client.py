@@ -19,12 +19,19 @@ from app.config import settings
 
 
 class SupabaseClient:
-    def __init__(self, bearer_token: str):
+    def __init__(self, bearer_token: str, apikey: str | None = None):
         self._token = bearer_token
+        # Новый формат ключей Supabase (sb_publishable_.../sb_secret_...) —
+        # это не JWT, гейтвей не выводит роль из Authorization: apikey сам
+        # определяет, под какой ролью выполняется запрос. Для service_role
+        # apikey должен быть ИМЕННО секретным ключом, иначе даже с верным
+        # Authorization запрос падает 401 "Expected 3 parts in JWT; got 1"
+        # (проверено вживую на реальном проекте).
+        self._apikey = apikey or settings.supabase_publishable_key
 
     def _headers(self, extra: dict | None = None) -> dict:
         headers = {
-            "apikey": settings.supabase_publishable_key,
+            "apikey": self._apikey,
             "Authorization": f"Bearer {self._token}",
         }
         if extra:
@@ -82,4 +89,4 @@ def as_user(access_token: str) -> SupabaseClient:
 def as_service() -> SupabaseClient:
     """Клиент с полным доступом (service_role). Использовать осторожно —
     только на сервере, никогда не передавать этот ключ клиенту."""
-    return SupabaseClient(settings.supabase_service_key)
+    return SupabaseClient(settings.supabase_service_key, apikey=settings.supabase_service_key)
