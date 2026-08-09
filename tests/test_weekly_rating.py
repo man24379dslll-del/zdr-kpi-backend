@@ -12,6 +12,9 @@
 Сеть/Supabase не задействованы: категории передаются как в
 rating_categories (стартовый набор из app/db/schema.sql), а не
 загружаются через API — это тестирует именно расчёт, а не HTTP-слой.
+Запись в БД (ratings_repository.save_weekly_rating) не тестируется тут —
+для неё нужен реальный Supabase; тестируется только чистая функция
+маппинга build_kpi_rating_row.
 """
 import io
 
@@ -21,6 +24,7 @@ import pytest
 from app.services.excel_parsing import is_na_row, parse_weekly_rating_excel
 from app.services.ladder_groups import TIER_COEFFICIENTS
 from app.services.rating_engine import RatingCategory
+from app.services.ratings_repository import build_kpi_rating_row
 from app.services.weekly_rating import compute_weekly_rating
 
 FIO = "ФИО"
@@ -276,3 +280,30 @@ def test_ladder_groups_assigned_per_supervisor_and_monotonic_with_final_place():
 
     assert by_fio["Комаров К."].tier == 1
     assert by_fio["Комаров К."].coefficient == TIER_COEFFICIENTS[0]
+
+
+def test_build_kpi_rating_row_maps_computed_fields_for_supabase():
+    by_fio = _compute()
+    komarov = by_fio["Комаров К."]
+    row = build_kpi_rating_row("upload-123", komarov)
+
+    assert row["upload_id"] == "upload-123"
+    assert row["fio"] == "Комаров К."
+    assert row["supervisor"] == "Супервайзер - Иванов Иван Иванович"
+    assert row["channel"] == "radio"
+    assert row["c1_place"] == 1
+    assert row["lk_place"] == 1
+    assert row["ch_place"] == 1
+    assert row["final_place"] == 1
+    assert row["is_na"] is False
+    assert row["tier"] == 1
+    assert row["coefficient"] == TIER_COEFFICIENTS[0]
+    assert row["bonus075"] == 100
+    assert row["bonus2"] == 50
+    assert row["salary"] is None  # формула ЗП ещё не перенесена
+
+    novikov = by_fio["Новиков Н."]
+    novikov_row = build_kpi_rating_row("upload-123", novikov)
+    assert novikov_row["is_na"] is True
+    assert novikov_row["final_place"] is None
+    assert novikov_row["tier"] is None
