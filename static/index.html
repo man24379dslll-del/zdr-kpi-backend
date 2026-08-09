@@ -2088,6 +2088,17 @@ async function populateDashPeriodSelect(){
   return dashUploadsDesc;
 }
 
+// Свой бэкенд (Railway, тот же домен) — используется только дашбордами
+// (GET /dashboards/*, только чтение). Остальной сайт пока ходит в Supabase
+// напрямую, это будет переключаться отдельными следующими шагами.
+async function apiGet(path, params){
+  const entries = Object.entries(params || {}).filter(([, v]) => v !== null && v !== undefined);
+  const qs = entries.length ? "?" + new URLSearchParams(entries).toString() : "";
+  const res = await fetch(`${path}${qs}`, { headers: { "Authorization": `Bearer ${session.access_token}` } });
+  if(!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 async function loadDashboardData(){
   const vType = $("dashTypeToggle").querySelector(".active").dataset.type;
   if(!dashUploadsDesc.length) return null;
@@ -2095,12 +2106,7 @@ async function loadDashboardData(){
   const idx = dashUploadsDesc.findIndex(u => u.id === selectedId);
   const latest = dashUploadsDesc[idx] || dashUploadsDesc[0];
   const prev = dashUploadsDesc[idx + 1] || null;
-  const latestRows = await sbGet(`kpi_ratings?upload_id=eq.${latest.id}&select=*`);
-  let prevRows = [];
-  if(prev){
-    prevRows = await sbGet(`kpi_ratings?upload_id=eq.${prev.id}&select=*`);
-  }
-  return { vType, latest, prev, latestRows, prevRows };
+  return { vType, latest, prev };
 }
 
 async function renderDashSummary(){
@@ -2108,37 +2114,27 @@ async function renderDashSummary(){
   c.innerHTML = "";
   const data = await loadDashboardData();
   if(!data){ c.innerHTML = `<div class="history-empty">Периодов ещё нет в базе.</div>`; return; }
-  const { vType, latest, prev, latestRows, prevRows } = data;
-  const main = latestRows.filter(r => !r.is_novice);
-  const evaluated = main.filter(r => !r.is_na);
-  const avgScore = evaluated.length ? evaluated.reduce((s,r)=>s+(r.total_score||0),0)/evaluated.length : 0;
-  const totalSalary = vType === "week" ? main.reduce((s,r)=>s+(r.salary||0),0) : null;
-
-  const prevMain = prevRows.filter(r => !r.is_novice);
-  const prevEvaluated = prevMain.filter(r => !r.is_na);
-  const prevAvgScore = prevEvaluated.length ? prevEvaluated.reduce((s,r)=>s+(r.total_score||0),0)/prevEvaluated.length : null;
-  const prevTotalSalary = vType === "week" ? prevMain.reduce((s,r)=>s+(r.salary||0),0) : null;
+  const { vType, latest, prev } = data;
+  const s = await apiGet("/dashboards/summary", { upload_id: latest.id, previous_upload_id: prev ? prev.id : null });
 
   let html = `<div style="margin-bottom:14px;color:var(--muted);font-size:13px;">Период: <b style="color:var(--text);">${latest.period_label}</b>${prev ? ` (сравнение с ${prev.period_label})` : ""}</div>`;
-  const REGION_PIKI_RE = /операторы\s+без\s+супервизора/i;
-  const mainNoSpecial = main.filter(r => !REGION_PIKI_RE.test(r.supervisor));
   html += `<div class="stats">`;
-  html += statCard(main.length, "всего в рейтинге");
-  html += statCard(mainNoSpecial.length, "без Регион УК / Пиков");
-  html += statCard(evaluated.length, "оценено (не Н/О)");
-  html += statCard(avgScore.toFixed(1), "средний балл");
-  if(vType === "week") html += statCard(fmt(Math.round(totalSalary)), "фонд ЗП, ₽");
+  html += statCard(s.total_in_rating, "всего в рейтинге");
+  html += statCard(s.without_region_uk, "без Регион УК / Пиков");
+  html += statCard(s.evaluated_count, "оценено (не Н/О)");
+  html += statCard((s.avg_score ?? 0).toFixed(1), "средний балл");
+  if(vType === "week") html += statCard(fmt(Math.round(s.salary_fund ?? 0)), "фонд ЗП, ₽");
   html += `</div>`;
   if(prev){
     html += `<div style="margin-top:14px;font-size:13px;">`;
-    html += `Средний балл (меньше — лучше): ${trendNote(prevAvgScore!=null ? avgScore-prevAvgScore : null, "", true)}<br>`;
-    if(vType === "week") html += `Фонд ЗП: ${trendNote(prevTotalSalary!=null ? totalSalary-prevTotalSalary : null, "₽")}`;
+    html += `Средний балл (меньше — лучше): ${trendNote(s.avg_score_delta ? s.avg_score_delta.diff : null, "", true)}<br>`;
+    if(vType === "week") html += `Фонд ЗП: ${trendNote(s.salary_fund_delta ? s.salary_fund_delta.diff : null, "₽")}`;
     html += `</div>`;
   }
 
   if(vType === "week"){
     const tierCounts = new Array(11).fill(0);
-    evaluated.forEach(r => { if(r.tier) tierCounts[r.tier]++; });
+    for(let t = 1; t <= 10; t++) tierCounts[t] = s.tier_distribution[t] || 0;
     const maxCount = Math.max(...tierCounts, 1);
     html += `<div class="sub-title" style="margin-top:22px;">Распределение по тирам ЛГ</div>`;
     html += `<div style="display:flex;gap:6px;align-items:flex-end;height:120px;margin-top:10px;">`;
@@ -2154,9 +2150,7 @@ async function renderDashSummary(){
   }
 
   // ---- 3) средние показатели по каждому статусу (с сравнением к пред. периоду) ----
-  const statuses = [...new Set(evaluated.map(r => r.status).filter(Boolean))];
-  if(statuses.length){
-    const prevEvalForStatus = prevEvaluated; // уже отфильтровано выше (не новички, не Н/О)
+  if(s.by_status.length){
     html += `<div class="sub-title" style="margin-top:26px;">Средние показатели по статусу</div>`;
     html += `<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">Стрелка — изменение к предыдущему периоду. Зелёный всегда означает "стало лучше" (для времени и % ошибок — меньше лучше).</div>`;
     html += `<div class="subtable-wrap" style="margin-top:10px;"><table class="dyn-table"><thead><tr>
@@ -2167,32 +2161,23 @@ async function renderDashSummary(){
       <th>Время</th><th>Δ</th>
       <th>% ошибок</th><th>Δ</th>
     </tr></thead><tbody>`;
-    statuses.forEach(st => {
-      const rows = evaluated.filter(r => r.status === st);
-      const n = rows.length;
-      const avg = (f) => rows.reduce((s,r)=>s+(r[f]||0),0)/n;
-
-      const prevRowsSt = prevEvalForStatus.filter(r => r.status === st);
-      const pAvg = (f) => prevRowsSt.length ? prevRowsSt.reduce((s,r)=>s+(r[f]||0),0)/prevRowsSt.length : null;
-      const delta = (f) => { const p = pAvg(f); return p != null ? avg(f)-p : null; };
-
+    s.by_status.forEach(row => {
+      const d = (f) => row[`${f}_delta`] ? row[`${f}_delta`].diff : null;
       html += `<tr>
-        <td style="font-family:var(--sans);">${st}</td>
-        <td>${n}</td>
-        <td>${avg("c1_per_contact").toFixed(0)} ₽</td><td>${trendCell(delta("c1_per_contact"))}</td>
-        <td>${avg("lk_per_contact").toFixed(0)} ₽</td><td>${trendCell(delta("lk_per_contact"))}</td>
-        <td>${avg("ch_per_contact").toFixed(0)} ₽</td><td>${trendCell(delta("ch_per_contact"))}</td>
-        <td>${fmtTime(avg("time_per_contact"))}</td><td>${trendCell(delta("time_per_contact"), "", true)}</td>
-        <td>${avg("errors_pct").toFixed(1)}%</td><td>${trendCell(delta("errors_pct"), "%", true)}</td>
+        <td style="font-family:var(--sans);">${row.status}</td>
+        <td>${row.count}</td>
+        <td>${(row.avg_c1_per_contact ?? 0).toFixed(0)} ₽</td><td>${trendCell(d("c1_per_contact"))}</td>
+        <td>${(row.avg_lk_per_contact ?? 0).toFixed(0)} ₽</td><td>${trendCell(d("lk_per_contact"))}</td>
+        <td>${(row.avg_ch_per_contact ?? 0).toFixed(0)} ₽</td><td>${trendCell(d("ch_per_contact"))}</td>
+        <td>${fmtTime(row.avg_time_per_contact)}</td><td>${trendCell(d("time_per_contact"), "", true)}</td>
+        <td>${(row.avg_errors_pct ?? 0).toFixed(1)}%</td><td>${trendCell(d("errors_pct"), "%", true)}</td>
       </tr>`;
     });
     html += `</tbody></table></div>`;
   }
 
   // ---- 4) количество людей по уровню (статусу) ----
-  const statusCounts = {};
-  main.forEach(r => { statusCounts[r.status || "—"] = (statusCounts[r.status || "—"] || 0) + 1; });
-  const statusEntries = Object.entries(statusCounts).sort((a,b) => b[1]-a[1]);
+  const statusEntries = Object.entries(s.status_counts).sort((a,b) => b[1]-a[1]);
   const maxStatusCount = Math.max(...statusEntries.map(e=>e[1]), 1);
   html += `<div class="sub-title" style="margin-top:26px;">Количество людей по уровню</div>`;
   html += `<div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">`;
@@ -2210,32 +2195,22 @@ async function renderDashSummary(){
   html += `</div>`;
 
   // ---- 5) новички по супервизорам: сколько не подходят ----
-  const novices = latestRows.filter(r => r.is_novice);
-  if(novices.length){
-    const bySup = {};
-    novices.forEach(r => { (bySup[r.supervisor] ||= []).push(r); });
+  if(s.novices_by_supervisor.length){
     const badBandLabel = CONV_BANDS[0].label; // "Прекращение сотрудничества"
-    const supRows = Object.keys(bySup)
-      .filter(sup => !REGION_PIKI_RE.test(sup))
-      .map(sup => {
-        const list = bySup[sup];
-        const bad = list.filter(r => convBand(r.c1_per_contact).label === badBandLabel).length;
-        const pct = list.length ? Math.round((bad/list.length)*100) : 0;
-        return { sup, total: list.length, bad, pct };
-      })
-      .sort((a,b) => b.pct - a.pct);
+    const supRows = [...s.novices_by_supervisor].sort((a,b) => b.bad_pct - a.bad_pct);
     html += `<div class="sub-title" style="margin-top:26px;">Новички по супервизорам — % неэффективности работы с новичками</div>`;
     html += `<div style="font-size:12.5px;color:var(--muted);margin:4px 0 10px;">% = доля новичков супервизора, попавших в категорию "${badBandLabel}" (0% конверсии), от всех его новичков</div>`;
     html += `<div class="subtable-wrap"><table class="dyn-table"><thead><tr>
       <th>Супервайзер</th><th>Новичков всего</th><th>Не подходят</th><th>% неэффективности</th>
     </tr></thead><tbody>`;
     supRows.forEach(r => {
-      const color = r.pct >= 50 ? "var(--err)" : r.pct >= 25 ? "var(--warn)" : "var(--good)";
+      const pct = Math.round(r.bad_pct);
+      const color = pct >= 50 ? "var(--err)" : pct >= 25 ? "var(--warn)" : "var(--good)";
       html += `<tr>
-        <td style="font-family:var(--sans);">${displayGroupName(r.sup)}</td>
+        <td style="font-family:var(--sans);">${displayGroupName(r.supervisor)}</td>
         <td>${r.total}</td>
-        <td>${r.bad}</td>
-        <td style="color:${color};font-weight:700;">${r.pct}%</td>
+        <td>${r.bad_count}</td>
+        <td style="color:${color};font-weight:700;">${pct}%</td>
       </tr>`;
     });
     html += `</tbody></table></div>`;
@@ -2249,35 +2224,26 @@ async function renderDashFunnel(){
   c.innerHTML = "";
   const data = await loadDashboardData();
   if(!data){ c.innerHTML = `<div class="history-empty">Периодов ещё нет в базе.</div>`; return; }
-  const { vType, latest, prev, latestRows, prevRows } = data;
-  const novices = latestRows.filter(r => r.is_novice);
-  if(!novices.length){ c.innerHTML = `<div class="history-empty">В этом периоде новичков нет.</div>`; return; }
-  const prevNovices = prevRows.filter(r => r.is_novice);
+  const { vType, latest, prev } = data;
+  const f = await apiGet("/dashboards/newcomer-funnel", { upload_id: latest.id, previous_upload_id: prev ? prev.id : null });
+  const bandsByLabel = {};
+  f.bands.forEach(b => { bandsByLabel[b.label] = b; });
+  const totalNovices = f.bands.reduce((s,b)=>s+b.count, 0);
+  if(!totalNovices){ c.innerHTML = `<div class="history-empty">В этом периоде новичков нет.</div>`; return; }
 
-  const groupByBand = (rows) => {
-    const groups = CONV_BANDS.map(() => []);
-    rows.forEach(r => {
-      const b = convBand(r.c1_per_contact);
-      const idx = CONV_BANDS.indexOf(b);
-      groups[idx].push(r);
-    });
-    return groups;
-  };
-  const bandGroups = groupByBand(novices);
-  const counts = bandGroups.map(g => g.length);
-  const prevCounts = prev ? groupByBand(prevNovices).map(g => g.length) : null;
+  const counts = CONV_BANDS.map(b => bandsByLabel[b.label].count);
   const maxCount = Math.max(...counts, 1);
 
-  let html = `<div style="margin-bottom:14px;color:var(--muted);font-size:13px;">Период: <b style="color:var(--text);">${latest.period_label}</b> · новичков: <b style="color:var(--text);">${novices.length}</b> · клик по строке раскрывает список ФИО</div>`;
+  let html = `<div style="margin-bottom:14px;color:var(--muted);font-size:13px;">Период: <b style="color:var(--text);">${latest.period_label}</b> · новичков: <b style="color:var(--text);">${totalNovices}</b> · клик по строке раскрывает список ФИО</div>`;
   html += `<div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">`;
   CONV_BANDS.forEach((b, i) => {
+    const band = bandsByLabel[b.label];
     const w = Math.round((counts[i]/maxCount)*100);
-    const d = prevCounts ? counts[i]-prevCounts[i] : null;
-    const names = [...bandGroups[i]].sort((r1,r2) => (r2.c1_per_contact||0)-(r1.c1_per_contact||0));
-    const namesHtml = names.length ? names.map(r => `
+    const d = band.count_delta ?? null;
+    const namesHtml = band.employees.length ? band.employees.map(r => `
       <div style="display:flex;justify-content:space-between;padding:6px 10px;border-bottom:1px solid var(--line);font-size:13px;">
         <span class="clickable-fio" data-fio="${escapeHtml(r.fio)}" data-period-type="${vType}" style="font-weight:600;">${r.fio}</span>
-        <span style="color:var(--muted);font-family:var(--sans);">${displayGroupName(r.supervisor)}</span>
+        <span style="color:var(--muted);font-family:var(--sans);">${r.group}</span>
         <span style="font-family:var(--mono);">${fmt(r.c1_per_contact)} ₽</span>
       </div>`).join("") : `<div style="padding:8px 10px;color:var(--muted);font-size:13px;">Никого нет в этой группе.</div>`;
     html += `
@@ -2303,23 +2269,25 @@ async function renderDashChannels(){
   c.innerHTML = "";
   const data = await loadDashboardData();
   if(!data){ c.innerHTML = `<div class="history-empty">Периодов ещё нет в базе.</div>`; return; }
-  const { latest, latestRows } = data;
-  const main = latestRows.filter(r => !r.is_novice && !r.is_na && r.channel);
-  if(!main.length){
+  const { latest } = data;
+  const ch = await apiGet("/dashboards/channels", { upload_id: latest.id });
+  if(!ch.channels.length){
     c.innerHTML = `<div class="history-empty">Нет данных о канале в этом периоде (колонка добавлена недавно — попробуйте на следующей загрузке).</div>`;
     return;
   }
-  const byChannel = { radio: main.filter(r=>r.channel==="radio"), inet: main.filter(r=>r.channel==="inet") };
+  const byChannel = {};
+  ch.channels.forEach(row => { byChannel[row.channel] = row; });
   let html = `<div style="margin-bottom:14px;color:var(--muted);font-size:13px;">Период: <b style="color:var(--text);">${latest.period_label}</b></div>`;
   html += `<div class="stats">`;
   for(const key of ["radio","inet"]){
-    const rows = byChannel[key];
+    const row = byChannel[key];
     const label = key === "radio" ? "Радио+ТВ" : "Интернет";
-    const avgPc = rows.length ? rows.reduce((s,r)=>s+(r.ch_per_contact||0),0)/rows.length : 0;
-    const avgConv = rows.length ? rows.reduce((s,r)=>s+(r.ch_conv||0),0)/rows.length : 0;
-    const totalSum = rows.reduce((s,r)=>s+(r.ch_sum||0),0);
+    const count = row ? row.count : 0;
+    const avgPc = row ? (row.avg_ch_per_contact ?? 0) : 0;
+    const avgConv = row ? (row.avg_ch_conv ?? 0) : 0;
+    const totalSum = row ? row.sum_ch_sum : 0;
     html += `<div class="stat" style="min-width:180px;">
-      <div class="l" style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px;">${label} · ${rows.length} чел.</div>
+      <div class="l" style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px;">${label} · ${count} чел.</div>
       <div class="n" style="font-size:19px;">${avgPc.toFixed(0)} ₽</div>
       <div class="l">сред. сумма с контакта</div>
       <div style="margin-top:6px;font-size:12.5px;color:var(--muted);">конв. ${avgConv.toFixed(1)}% · сумма всего ${fmt(totalSum)} ₽</div>
@@ -2334,25 +2302,8 @@ async function renderDashAnomalies(){
   c.innerHTML = "";
   const data = await loadDashboardData();
   if(!data){ c.innerHTML = `<div class="history-empty">Периодов ещё нет в базе.</div>`; return; }
-  const { latest, prev, latestRows, prevRows } = data;
-  const prevMap = {};
-  for(const r of prevRows) prevMap[r.fio] = r;
-
-  const anomalies = [];
-  for(const r of latestRows){
-    if(r.is_novice) continue;
-    const p = prevMap[r.fio];
-    if(p && !p.is_na && !r.is_na && p.final_place != null && r.final_place != null){
-      const drop = r.final_place - p.final_place;
-      if(drop >= 10) anomalies.push({ fio: r.fio, group: r.supervisor, reason: `Резкое падение: было место ${p.final_place}, стало ${r.final_place} (−${drop})`, severity: "err" });
-    }
-    if((r.c1_sum||0) === 0 && p && (p.c1_sum||0) === 0){
-      anomalies.push({ fio: r.fio, group: r.supervisor, reason: `0 продаж по 1 обращению два периода подряд (${prev.period_label} и ${latest.period_label})`, severity: "warn" });
-    }
-    if((r.errors_pct||0) >= 10){
-      anomalies.push({ fio: r.fio, group: r.supervisor, reason: `Высокий % ошибок: ${r.errors_pct}%`, severity: "err" });
-    }
-  }
+  const { latest, prev } = data;
+  const anomalies = await apiGet("/dashboards/anomalies", { upload_id: latest.id, previous_upload_id: prev ? prev.id : null });
 
   let html = `<div style="margin-bottom:14px;color:var(--muted);font-size:13px;">Период: <b style="color:var(--text);">${latest.period_label}</b> · найдено: <b style="color:var(--text);">${anomalies.length}</b></div>`;
   if(!anomalies.length){
@@ -2362,7 +2313,7 @@ async function renderDashAnomalies(){
     for(const a of anomalies){
       const color = a.severity === "err" ? "var(--err)" : "var(--warn)";
       html += `<div style="border-left:3px solid ${color};padding:8px 14px;background:var(--panel-2);border-radius:0 8px 8px 0;">
-        <div style="font-weight:700;">${a.fio} <span style="font-weight:400;color:var(--muted);font-size:12.5px;">· ${displayGroupName(a.group)}</span></div>
+        <div style="font-weight:700;">${a.fio} <span style="font-weight:400;color:var(--muted);font-size:12.5px;">· ${a.group}</span></div>
         <div style="font-size:13px;color:${color};margin-top:2px;">${a.reason}</div>
       </div>`;
     }
