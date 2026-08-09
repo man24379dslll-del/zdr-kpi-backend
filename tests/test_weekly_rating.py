@@ -282,6 +282,24 @@ def test_ladder_groups_assigned_per_supervisor_and_monotonic_with_final_place():
     assert by_fio["Комаров К."].coefficient == TIER_COEFFICIENTS[0]
 
 
+def test_compute_weekly_rating_passes_through_custom_tier_coefficients():
+    # Кастомный набор вместо TIER_COEFFICIENTS по умолчанию — должен
+    # реально применяться до конца пайплайна, а не только внутри
+    # ladder_groups.assign_tier_coefficients (уже проверено отдельно там).
+    custom = [9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+    raw = _build_excel_bytes(ROWS)
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(
+        employees, CATEGORIES, na_predicate=is_na_row, tier_coefficients=custom
+    )
+    by_fio = {r.fio: r for r in results}
+
+    komarov = by_fio["Комаров К."]  # лучший в компании -> тир 1
+    assert komarov.tier == 1
+    assert komarov.coefficient == 9
+    assert komarov.coefficient != TIER_COEFFICIENTS[0]
+
+
 def test_build_kpi_rating_row_maps_computed_fields_for_supabase():
     by_fio = _compute()
     komarov = by_fio["Комаров К."]

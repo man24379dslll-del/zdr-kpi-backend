@@ -101,3 +101,30 @@ create policy "shifts_select" on shift_records
 drop policy if exists "shifts_write" on shift_records;
 create policy "shifts_write" on shift_records
   for all using (is_admin_or_manager()) with check (is_admin_or_manager());
+
+-- ============================================================
+-- ЛГ-коэффициенты (1.4..0.25 по тирам 1..10) — настраиваемые
+-- ============================================================
+-- Раньше это был захардкоженный TIER_COEFFICIENTS в ladder_groups.py.
+-- Теперь админ может их менять через /ladder-tiers, не трогая код.
+create table if not exists ladder_tier_coefficients (
+  tier_number int primary key check (tier_number between 1 and 10),
+  coefficient numeric not null,
+  updated_at timestamptz not null default now()
+);
+
+alter table ladder_tier_coefficients enable row level security;
+
+drop policy if exists "ladder_tiers_select" on ladder_tier_coefficients;
+create policy "ladder_tiers_select" on ladder_tier_coefficients
+  for select using (auth.role() = 'authenticated');
+
+drop policy if exists "ladder_tiers_write" on ladder_tier_coefficients;
+create policy "ladder_tiers_write" on ladder_tier_coefficients
+  for all using (is_admin_or_manager()) with check (is_admin_or_manager());
+
+-- seed теми же значениями, что были захардкожены, чтобы после переезда
+-- на настройку расчёт не изменился
+insert into ladder_tier_coefficients (tier_number, coefficient) values
+  (1,1.4),(2,1.3),(3,1.2),(4,1.1),(5,1.05),(6,1),(7,0.9),(8,0.75),(9,0.5),(10,0.25)
+on conflict (tier_number) do nothing;

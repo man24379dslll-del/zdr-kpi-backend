@@ -54,3 +54,24 @@ def test_supervisors_are_grouped_independently():
     petrov = [r for r in rows if r["supervisor"] == "Петров"]
     assert sorted(r["tier"] for r in ivanov) == [1, 2]
     assert sorted(r["tier"] for r in petrov) == [1, 2]
+
+
+def test_custom_tier_coefficients_override_the_default():
+    # Кастомный набор, явно отличающийся от TIER_COEFFICIENTS по умолчанию:
+    # тир 1 должен получить ×2, а не захардкоженный ×1.4.
+    custom = [2, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    rows = [_row("Иванов", place) for place in range(1, 11)]  # ровно 10 -> по 1 на тир
+    assign_tier_coefficients(rows, custom)
+    by_place = {r["final_place"]: r for r in rows}
+    assert by_place[1]["coefficient"] == 2
+    assert by_place[1]["coefficient"] != TIER_COEFFICIENTS[0]
+    for place in range(2, 11):
+        assert by_place[place]["coefficient"] == 1
+
+
+def test_no_custom_coefficients_falls_back_to_default():
+    rows = [_row("Иванов", place) for place in range(1, 11)]
+    assign_tier_coefficients(rows, None)
+    by_place = {r["final_place"]: r for r in rows}
+    for tier_idx, place in enumerate(range(1, 11)):
+        assert by_place[place]["coefficient"] == TIER_COEFFICIENTS[tier_idx]

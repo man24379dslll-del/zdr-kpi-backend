@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from app.config import settings
-from app.routers import categories, dashboards, payroll, ratings, shifts, supervisor_channels
+from app.routers import categories, dashboards, ladder_tiers, payroll, ratings, shifts, supervisor_channels
 
 STATIC_DIR = Path(__file__).parent.parent / "static"
 
@@ -21,6 +21,7 @@ app.add_middleware(
 
 app.include_router(categories.router)
 app.include_router(dashboards.router)
+app.include_router(ladder_tiers.router)
 app.include_router(payroll.router)
 app.include_router(ratings.router)
 app.include_router(shifts.router)

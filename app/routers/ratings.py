@@ -37,6 +37,20 @@ async def _load_supervisor_channels(user: CurrentUser) -> dict[str, str]:
     return {row["supervisor"]: row["channel"] for row in rows}
 
 
+async def _load_tier_coefficients(user: CurrentUser) -> list[float] | None:
+    """10 чисел по тирам 1..10 из ladder_tier_coefficients. None, если
+    таблица пустая/неполная — тогда ladder_groups сам подставит запасной
+    вариант по умолчанию (TIER_COEFFICIENTS)."""
+    client = as_user(user.access_token)
+    rows = await client.get(
+        "ladder_tier_coefficients",
+        params={"select": "tier_number,coefficient", "order": "tier_number.asc"},
+    )
+    if len(rows) != 10:
+        return None
+    return [row["coefficient"] for row in rows]
+
+
 async def _load_previous_week_coefficients(user: CurrentUser, period_label: str) -> dict[str, float]:
     """Коэффициент ЛГ, который человек заработал НА ПРОШЛОЙ неделе, по fio.
 
@@ -79,13 +93,16 @@ async def compute_weekly_rating_endpoint(
 
     categories = await _load_categories(user)
     supervisor_channels = await _load_supervisor_channels(user)
+    tier_coefficients = await _load_tier_coefficients(user)
     raw = await file.read()
     employees = parse_weekly_rating_excel(raw, supervisor_channels)
     if not employees:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Не нашлось ни одной валидной строки в файле")
 
     try:
-        results = compute_weekly_rating(employees, categories, na_predicate=is_na_row)
+        results = compute_weekly_rating(
+            employees, categories, na_predicate=is_na_row, tier_coefficients=tier_coefficients
+        )
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 

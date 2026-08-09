@@ -7,8 +7,11 @@
 Внутри каждой группы супервайзера сотрудников (не Н/О) сортируют по
 итоговому месту недели и делят на 10 примерно равных частей ("лестница");
 первые (n % 10) тиров получают на 1 человека больше остальных. Тиру
-присваивается коэффициент из TIER_COEFFICIENTS, который идёт в формулу
-ЗП СЛЕДУЮЩЕЙ недели:
+присваивается коэффициент — настраивается через /ladder-tiers
+(таблица ladder_tier_coefficients в Supabase), TIER_COEFFICIENTS ниже —
+только запасной вариант по умолчанию, если таблица пустая/недоступна,
+НЕ единственный источник истины. Коэффициент идёт в формулу ЗП
+СЛЕДУЮЩЕЙ недели:
 
     ЗП = (Ставка_за_неделю + бонус075 + бонус2) × коэффициент_ПРОШЛОЙ_недели
 
@@ -31,15 +34,20 @@ def tier_sizes(n: int) -> list[int]:
     return [base + 1 if i < rem else base for i in range(10)]
 
 
-def assign_tier_coefficients(rows: list[dict]) -> None:
+def assign_tier_coefficients(rows: list[dict], tier_coefficients: list[float] | None = None) -> None:
     """
     Модифицирует rows на месте: каждой не-Н/О строке проставляет
-    row['tier'] (1..10) и row['coefficient'] (1.4..0.25) на основе
-    итогового места ЗА ЭТУ НЕДЕЛЮ (row['final_place']), отдельно в
-    рамках каждого супервайзера (row['supervisor']).
+    row['tier'] (1..10) и row['coefficient'] на основе итогового места
+    ЗА ЭТУ НЕДЕЛЮ (row['final_place']), отдельно в рамках каждого
+    супервайзера (row['supervisor']).
 
     rows: строки рейтинга с полями supervisor, is_na, final_place.
+    tier_coefficients: 10 чисел по порядку тиров 1..10 (обычно результат
+        GET /ladder-tiers). Если не передан — берётся TIER_COEFFICIENTS
+        (запасной вариант по умолчанию, не единственный источник истины).
     """
+    coefficients = tier_coefficients if tier_coefficients is not None else TIER_COEFFICIENTS
+
     by_supervisor: dict[str, list[dict]] = {}
     for r in rows:
         by_supervisor.setdefault(r["supervisor"], []).append(r)
@@ -56,5 +64,5 @@ def assign_tier_coefficients(rows: list[dict]) -> None:
                 if idx >= len(evaluated):
                     break
                 evaluated[idx]["tier"] = tier_idx + 1
-                evaluated[idx]["coefficient"] = TIER_COEFFICIENTS[tier_idx]
+                evaluated[idx]["coefficient"] = coefficients[tier_idx]
                 idx += 1

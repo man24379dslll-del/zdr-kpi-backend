@@ -49,6 +49,7 @@ def compute_weekly_rating(
     supervisor_field: str = "supervisor",
     na_predicate=None,
     tie_break_field: str | None = None,
+    tier_coefficients: list[float] | None = None,
 ) -> list[EmployeeScore]:
     """
     employees: сырые строки за неделю (см. routers/ratings.py:parse_weekly_rating_excel),
@@ -58,6 +59,9 @@ def compute_weekly_rating(
                 LK_TIER_PLACE_FIELDS — иначе тир ЛК посчитать нечем.
     supervisor_field: поле в employees с именем супервайзера (для ЛГ)
     na_predicate/tie_break_field: см. rating_engine.finalize_final_places
+    tier_coefficients: см. ladder_groups.assign_tier_coefficients — 10 чисел
+                по тирам 1..10, обычно результат GET /ladder-tiers. Не
+                передан — ladder_groups сам подставит запасной вариант.
     """
     active = [c for c in categories if c.enabled]
     lk_category = next((c for c in active if c.key == "lk"), None)
@@ -104,7 +108,7 @@ def compute_weekly_rating(
         }
         for r in results
     ]
-    assign_tier_coefficients(ladder_rows)
+    assign_tier_coefficients(ladder_rows, tier_coefficients)
     for r, ladder_row in zip(results, ladder_rows):
         if "tier" in ladder_row:
             r.tier = ladder_row["tier"]
