@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from app.auth import CurrentUser, get_current_user
 from app.services.excel_parsing import is_na_row, parse_weekly_rating_excel
 from app.services.payroll import is_weekly_period_label
+from app.services.periods import find_previous_period
 from app.services.rating_engine import RatingCategory
 from app.services.ratings_repository import save_weekly_rating
 from app.services.salary import assign_salary
@@ -39,25 +40,20 @@ async def _load_supervisor_channels(user: CurrentUser) -> dict[str, str]:
 async def _load_previous_week_coefficients(user: CurrentUser, period_label: str) -> dict[str, float]:
     """Коэффициент ЛГ, который человек заработал НА ПРОШЛОЙ неделе, по fio.
 
-    Ищем только "месяц-(неделя-1)" ВНУТРИ ТОГО ЖЕ МЕСЯЦА: у period_label
-    нет года, а сколько недель было в предыдущем месяце (4 или 5) —
-    неизвестно, поэтому переход через границу месяца (неделя 1) здесь не
-    обрабатывается — просто нет найденной предыдущей недели, и дальше
+    "Предыдущая неделя" — ближайший по period_sort_value (месяц*10+неделя)
+    period_label СРЕДИ ВСЕХ недельных kpi_uploads, без ограничения "тот же
+    месяц" (см. services/periods.py) — неделя 1 августа находит неделю 5
+    июля как предыдущую. Если такой недели нет — пустой словарь, и дальше
     assign_salary естественно даёт всем коэффициент по умолчанию 1.0."""
-    month_str, _, week_str = period_label.partition("-")
-    week = int(week_str)
-    if week <= 1:
-        return {}
-    prev_label = f"{month_str}-{week - 1}"
-
     client = as_user(user.access_token)
-    uploads = await client.get("kpi_uploads", params={"period_label": f"eq.{prev_label}", "select": "id"})
-    if not uploads:
+    all_uploads = await client.get("kpi_uploads", params={"select": "id,period_label"})
+    previous = find_previous_period(all_uploads, period_label, period_type="week")
+    if previous is None:
         return {}
 
     rows = await client.get(
         "kpi_ratings",
-        params={"upload_id": f"eq.{uploads[0]['id']}", "select": "fio,coefficient"},
+        params={"upload_id": f"eq.{previous['id']}", "select": "fio,coefficient"},
     )
     return {row["fio"]: row["coefficient"] for row in rows if row.get("coefficient") is not None}
 
