@@ -3,7 +3,8 @@
 конструктора рейтинга (rating_categories) → тир ЛК → итоговое место →
 распределение по ЛГ. Сам расчёт — в services/weekly_rating.py, разбор
 файла — в services/excel_parsing.py; здесь только HTTP-обвязка (приём
-файла, авторизация, чтение категорий из Supabase).
+файла, авторизация, чтение категорий и соответствия супервайзер→канал
+из Supabase).
 """
 from __future__ import annotations
 
@@ -25,6 +26,12 @@ async def _load_categories(user: CurrentUser) -> list[RatingCategory]:
     return [RatingCategory(**{f: row[f] for f in fields}) for row in rows]
 
 
+async def _load_supervisor_channels(user: CurrentUser) -> dict[str, str]:
+    client = as_user(user.access_token)
+    rows = await client.get("supervisor_channels", params={"select": "supervisor,channel"})
+    return {row["supervisor"]: row["channel"] for row in rows}
+
+
 @router.post("/compute")
 async def compute_weekly_rating_endpoint(file: UploadFile, user: CurrentUser = Depends(get_current_user)):
     """Считает полный недельный рейтинг и возвращает его (без записи в БД —
@@ -34,8 +41,9 @@ async def compute_weekly_rating_endpoint(file: UploadFile, user: CurrentUser = D
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Только admin/manager могут считать недельный рейтинг")
 
     categories = await _load_categories(user)
+    supervisor_channels = await _load_supervisor_channels(user)
     raw = await file.read()
-    employees = parse_weekly_rating_excel(raw)
+    employees = parse_weekly_rating_excel(raw, supervisor_channels)
     if not employees:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Не нашлось ни одной валидной строки в файле")
 
@@ -49,6 +57,7 @@ async def compute_weekly_rating_endpoint(file: UploadFile, user: CurrentUser = D
             "fio": r.fio,
             "supervisor": r.raw.get("supervisor"),
             "channel": r.raw.get("channel"),
+            "channel_is_guessed": r.raw.get("channel_is_guessed"),
             "places": r.places,
             "total_score": r.total_score,
             "final_place": r.final_place,

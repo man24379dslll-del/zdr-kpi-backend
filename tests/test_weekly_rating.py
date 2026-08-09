@@ -143,18 +143,55 @@ def test_group_rows_split_supervisors_and_are_not_employees():
     assert len(petrova_people) == 5
 
 
-def test_channel_picked_by_larger_sum_and_unified_into_ch_fields():
+def test_channel_falls_back_to_heuristic_and_flags_guess_when_supervisor_unknown():
+    # Без записи в supervisor_channels — угадываем по большей сумме и
+    # явно помечаем channel_is_guessed=True (фронтенд должен подсветить).
     raw = _build_excel_bytes(ROWS)
     employees = parse_weekly_rating_excel(raw)
     by_fio = {e["fio"]: e for e in employees}
 
-    komarov = by_fio["Комаров К."]  # группа Иванов -> Радио+ТВ
+    komarov = by_fio["Комаров К."]  # группа Иванов -> Радио+ТВ (сумма больше)
     assert komarov["channel"] == "radio"
+    assert komarov["channel_is_guessed"] is True
     assert komarov["ch_per_contact"] == 250
 
-    volkov = by_fio["Волков В."]  # группа Петрова -> Интернет
+    volkov = by_fio["Волков В."]  # группа Петрова -> Интернет (сумма больше)
     assert volkov["channel"] == "inet"
+    assert volkov["channel_is_guessed"] is True
     assert volkov["ch_per_contact"] == 220
+
+
+def test_supervisor_channel_config_overrides_heuristic():
+    # Реальный случай (проверено на данных): у Лиштвы в интернете физически
+    # больше денег, но настоящий канал — радио. Настройка должна победить
+    # эвристику "больше сумма", а не наоборот.
+    row = _employee_row("Лиштва О.", "", 100, 50, 999, 30, 2, 1, 5, 1000, "inet")
+    row[RADIO_SUM] = 93_410
+    row[INET_SUM] = 204_600
+    row[RADIO_PC] = 111
+    row[INET_PC] = 999
+    raw = _build_excel_bytes([_group_row("Супервайзер - Лиштва Ольга Васильевна"), row])
+
+    supervisor_channels = {"Супервайзер - Лиштва Ольга Васильевна": "radio"}
+    employees = parse_weekly_rating_excel(raw, supervisor_channels)
+
+    assert employees[0]["channel"] == "radio"
+    assert employees[0]["channel_is_guessed"] is False
+    assert employees[0]["ch_sum"] == 93_410
+    assert employees[0]["ch_per_contact"] == 111
+
+
+def test_supervisor_matching_tolerates_punctuation_drift_by_surname():
+    # Название группы в файле отличается по пунктуации/формату от того, что
+    # в supervisor_channels — должны найти по вхождению фамилии.
+    row = _employee_row("Тестов Т.", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
+    raw = _build_excel_bytes([_group_row("Супервайзер: Курбанова З.Р."), row])
+    supervisor_channels = {"Супервайзер - Курбанова Зарина Рахимджановна": "inet"}
+
+    employees = parse_weekly_rating_excel(raw, supervisor_channels)
+
+    assert employees[0]["channel"] == "inet"
+    assert employees[0]["channel_is_guessed"] is False
 
 
 def test_missing_optional_card_columns_do_not_crash():

@@ -44,11 +44,21 @@
 нашли — оставляем None, парсер не падает.
 
 Один сотрудник работает только с одним из двух каналов (Радио+ТВ ИЛИ
-Интернет) — у него реально заполнена сумма только по одному из двух
-блоков колонок, другой стоит нулём. _pick_channel() определяет, какой
-канал использован, по наибольшей сумме, и кладёт его как ch_*/'channel'
-('radio'|'inet') — единая категория "канал" из конструктора рейтинга
-работает с этими унифицированными полями, не зная про радио/интернет.
+Интернет), но КАКОЙ именно — нельзя надёжно определить по суммам в
+файле: проверено на реальных данных, эвристика "больше сумма" ошибается
+примерно в 40% случаев (у части супервайзеров исторически больше денег
+идёт по чужому каналу — например промо по радио, но много случайных
+заходов с интернет-рекламы не их зоны ответственности). Поэтому канал —
+это НАСТРОЙКА (таблица supervisor_channels, админ вводит вручную через
+/supervisor-channels), а не вычисляемое поле.
+
+_pick_channel() сначала ищет супервайзера в supervisor_channels
+(сначала точное совпадение после нормализации, затем — по вхождению
+фамилии, т.к. пунктуация в названии группы может отличаться между
+периодами); если совпадения нет — использует эвристику "больше сумма"
+как временную заглушку и помечает 'channel_is_guessed': True в строке
+сотрудника, чтобы фронтенд мог это подсветить и предложить подтвердить
+(так же было в старой JS-версии).
 
 Группы сотрудников: строка вида "ГРУППА: <название>" в колонке A
 предшествует сотрудникам этой группы (действует до следующей строки
@@ -59,6 +69,7 @@
 from __future__ import annotations
 
 import io
+import re
 
 import pandas as pd
 from fastapi import HTTPException, status
@@ -149,34 +160,80 @@ def _optional_num(row: pd.Series, *column_names: str) -> float | None:
     return None if value is None else _num(value)
 
 
-def _pick_channel(row: pd.Series) -> tuple[str, dict]:
-    """Определяет, каким каналом реально пользовался сотрудник (у него
-    заполнена сумма только по одному из двух блоков колонок); при обоих
-    нулях (Н/О, нет данных) по умолчанию считаем 'radio' — на итоговый
-    счёт это не влияет, т.к. все значения нулевые."""
+def _normalize_supervisor(text: str) -> str:
+    """Убирает "супервайзер"/"супервизор" и пунктуацию, схлопывает пробелы —
+    чтобы "Супервайзер - Иванов И.И." и "Супервизор.Иванов И.И." совпали."""
+    text = text.lower()
+    text = re.sub(r"супервайзер|супервизор", " ", text)
+    text = re.sub(r"[^а-яёa-z\s]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _match_supervisor_channel(supervisor: str | None, supervisor_channels: dict[str, str]) -> str | None:
+    """Ищет канал для супервайзера: сначала точное совпадение после
+    нормализации, потом — по вхождению фамилии (первое слово нормализованной
+    строки в конфиге), т.к. пунктуация в названии группы плывёт между
+    периодами. Возвращает None, если совпадений нет вообще."""
+    if not supervisor:
+        return None
+    normalized_target = _normalize_supervisor(supervisor)
+    if not normalized_target:
+        return None
+
+    normalized_map = {_normalize_supervisor(k): v for k, v in supervisor_channels.items()}
+    if normalized_target in normalized_map:
+        return normalized_map[normalized_target]
+
+    for config_supervisor, channel in supervisor_channels.items():
+        normalized_config = _normalize_supervisor(config_supervisor)
+        surname = normalized_config.split(" ", 1)[0] if normalized_config else ""
+        if surname and surname in normalized_target:
+            return channel
+
+    return None
+
+
+def _pick_channel(row: pd.Series, supervisor: str | None, supervisor_channels: dict[str, str]) -> tuple[str, bool, dict]:
+    """Канал — настройка (supervisor_channels), не вычисляемое поле, см.
+    докстринг модуля. Если для супервайзера ещё нет записи — используем
+    эвристику "больше сумма" как заглушку и возвращаем is_guessed=True."""
     radio_sum = _num(row.get(RADIO_SUM_COLUMN))
     inet_sum = _num(row.get(INET_SUM_COLUMN))
-    if inet_sum > radio_sum:
-        return "inet", {
+
+    matched = _match_supervisor_channel(supervisor, supervisor_channels)
+    if matched is not None:
+        channel, is_guessed = matched, False
+    else:
+        channel, is_guessed = ("inet" if inet_sum > radio_sum else "radio"), True
+
+    if channel == "inet":
+        values = {
             "ch_sum": inet_sum,
             "ch_check": _num(row.get(INET_CHECK_COLUMN)),
             "ch_conv": _num(row.get(INET_CONV_COLUMN)),
             "ch_per_contact": _num(row.get(INET_PER_CONTACT_COLUMN)),
             "ch_cards": _optional_num(row, INET_COUNT_COLUMN),
         }
-    return "radio", {
-        "ch_sum": radio_sum,
-        "ch_check": _num(row.get(RADIO_CHECK_COLUMN)),
-        "ch_conv": _num(row.get(RADIO_CONV_COLUMN)),
-        "ch_per_contact": _num(row.get(RADIO_PER_CONTACT_COLUMN)),
-        "ch_cards": _optional_num(row, RADIO_COUNT_COLUMN),
-    }
+    else:
+        values = {
+            "ch_sum": radio_sum,
+            "ch_check": _num(row.get(RADIO_CHECK_COLUMN)),
+            "ch_conv": _num(row.get(RADIO_CONV_COLUMN)),
+            "ch_per_contact": _num(row.get(RADIO_PER_CONTACT_COLUMN)),
+            "ch_cards": _optional_num(row, RADIO_COUNT_COLUMN),
+        }
+    return channel, is_guessed, values
 
 
-def parse_weekly_rating_excel(raw: bytes) -> list[dict]:
+def parse_weekly_rating_excel(raw: bytes, supervisor_channels: dict[str, str] | None = None) -> list[dict]:
     """Разбирает загруженный xlsx в список сырых строк по сотрудникам,
     разбитым на группы супервайзеров по строкам "ГРУППА: ...".
-    Поднимает HTTPException(400), если не хватает обязательных колонок."""
+    Поднимает HTTPException(400), если не хватает обязательных колонок.
+
+    supervisor_channels: {название супервайзера (как в supervisor_channels) -> 'radio'|'inet'},
+    обычно результат GET /supervisor-channels. Без совпадения канал
+    угадывается по сумме и помечается employee['channel_is_guessed'] = True."""
+    supervisor_channels = supervisor_channels or {}
     df = pd.read_excel(io.BytesIO(raw))
 
     missing = _MANDATORY_COLUMNS - set(df.columns)
@@ -199,7 +256,7 @@ def parse_weekly_rating_excel(raw: bytes) -> list[dict]:
             continue
 
         status_text = _text(row.get(STATUS_COLUMN))
-        channel, channel_values = _pick_channel(row)
+        channel, channel_is_guessed, channel_values = _pick_channel(row, current_supervisor, supervisor_channels)
 
         employees.append({
             "fio": fio,
@@ -222,6 +279,7 @@ def parse_weekly_rating_excel(raw: bytes) -> list[dict]:
             "lk_cards": _optional_num(row, LK_COUNT_COLUMN),
 
             "channel": channel,
+            "channel_is_guessed": channel_is_guessed,
             **channel_values,
 
             "time_per_contact": _num(row.get(TIME_PER_CONTACT_COLUMN)),

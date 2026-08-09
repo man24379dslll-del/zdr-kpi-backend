@@ -41,6 +41,42 @@ values
 on conflict (key) do nothing;
 
 -- ============================================================
+-- Супервайзер → канал (Радио+ТВ / Интернет)
+-- ============================================================
+-- Канал НЕЛЬЗЯ вычислить из сумм в файле (проверено на реальных данных —
+-- эвристика "больше сумма" ошибается примерно в 40% случаев: у части
+-- супервайзеров исторически больше денег идёт по чужому каналу). Поэтому
+-- это настройка, которую вводит админ, а не вычисляемое поле. Если для
+-- супервайзера ещё нет записи, при расчёте недели используется эвристика
+-- как временная заглушка с пометкой в ответе API (channel_is_guessed).
+create table if not exists supervisor_channels (
+  supervisor text primary key,        -- название группы, как в файле (после "ГРУППА:")
+  channel text not null check (channel in ('radio','inet')),
+  updated_at timestamptz not null default now()
+);
+
+alter table supervisor_channels enable row level security;
+
+drop policy if exists "supervisor_channels_select" on supervisor_channels;
+create policy "supervisor_channels_select" on supervisor_channels
+  for select using (auth.role() = 'authenticated');
+
+drop policy if exists "supervisor_channels_write" on supervisor_channels;
+create policy "supervisor_channels_write" on supervisor_channels
+  for all using (is_admin_or_manager()) with check (is_admin_or_manager());
+
+-- Известные на сегодня соответствия (сверено вручную с реальными данными).
+insert into supervisor_channels (supervisor, channel) values
+  ('Супервайзер - Курбанова Зарина Рахимджановна', 'inet'),
+  ('Супервайзер - Пуць Екатерина Григорьевна', 'radio'),
+  ('Супервайзер - Филипский Дмитрий Юрьевич', 'radio'),
+  ('Супервайзер.- Клюйко Анатолий Анатольевич', 'radio'),
+  ('Супервайзер - Гордиенко Виталий Валерьевич', 'radio'),
+  ('Супервайзер - Лиштва Ольга Васильевна', 'radio'),
+  ('Супервизор Галина Элина Альфредовна', 'radio')
+on conflict (supervisor) do nothing;
+
+-- ============================================================
 -- Смены/часы — отдельный файл, привязан к периоду (upload_id)
 -- ============================================================
 create table if not exists shift_records (
