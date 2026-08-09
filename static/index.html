@@ -1,0 +1,3022 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>КПИ · Загрузка и расчёт рейтинга</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#f6f7fb;
+    --bg-2:#eef0f7;
+    --panel:#ffffff;
+    --panel-2:#f7f8fc;
+    --line:#e6e8f0;
+    --text:#161a2e;
+    --muted:#6b7189;
+    --accent:#4f46e5;
+    --accent-2:#7c3aed;
+    --accent-dim:#eef0fe;
+    --accent-text:#4338ca;
+    --good:#16a34a;
+    --warn:#d97706;
+    --err:#dc2626;
+    --mono:"JetBrains Mono","SF Mono",Consolas,monospace;
+    --sans:"Plus Jakarta Sans","Segoe UI",system-ui,sans-serif;
+    --shadow-sm:0 1px 2px rgba(22,26,46,.04), 0 1px 3px rgba(22,26,46,.06);
+    --shadow-md:0 4px 10px -2px rgba(22,26,46,.06), 0 2px 6px -2px rgba(22,26,46,.05);
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(1100px 500px at 12% -8%, #eae6ff 0%, transparent 55%),
+      radial-gradient(900px 500px at 100% 0%, #e3f3ff 0%, transparent 50%),
+      var(--bg);
+    color:var(--text);
+    font-family:var(--sans);
+    min-height:100vh;
+    padding:44px 20px 90px;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1040px;margin:0 auto;}
+  .wrap.wide{max-width:none;padding:0 28px;}
+  .eyebrow{
+    font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--accent);margin-bottom:12px;font-weight:600;
+  }
+  h1{font-size:34px;margin:0 0 10px;letter-spacing:-0.02em;font-weight:800;color:var(--text);}
+  .sub{color:var(--muted);font-size:15.5px;line-height:1.6;max-width:660px;margin-bottom:38px;}
+  .panel{
+    background:var(--panel);border:1px solid var(--line);border-radius:16px;
+    padding:30px;margin-bottom:22px;box-shadow:var(--shadow-sm);
+  }
+  .panel h2{
+    font-size:12.5px;text-transform:uppercase;letter-spacing:.09em;
+    color:var(--accent-text);margin:0 0 18px;font-weight:700;
+  }
+  label.field{display:block;margin-bottom:18px;}
+  label.field span{display:block;font-size:13px;color:var(--muted);margin-bottom:7px;font-weight:500;}
+  input[type=text]{
+    width:100%;background:var(--panel-2);border:1px solid var(--line);color:var(--text);
+    padding:11px 13px;border-radius:9px;font-family:var(--sans);font-size:14px;
+  }
+  input[type=text]:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim);}
+  select.period-select{
+    background:var(--panel-2);border:1px solid var(--line);color:var(--text);
+    padding:11px 13px;border-radius:9px;font-family:var(--sans);font-size:14px;
+  }
+  select.period-select:focus{outline:none;border-color:var(--accent);}
+
+  .drop{
+    border:1.5px dashed var(--line);border-radius:12px;padding:38px 20px;text-align:center;
+    cursor:pointer;transition:border-color .15s, background .15s;background:var(--panel-2);
+  }
+  .drop:hover, .drop.drag{border-color:var(--accent);background:var(--accent-dim);}
+  .drop input{display:none;}
+  .drop .icon{font-family:var(--mono);font-size:22px;color:var(--accent);margin-bottom:8px;}
+  .drop .fname{color:var(--text);font-weight:700;margin-top:6px;}
+  .drop .hint{color:var(--muted);font-size:13px;margin-top:6px;}
+
+  .btn{
+    appearance:none;border:none;border-radius:10px;padding:13px 24px;
+    font-family:var(--sans);font-weight:700;font-size:14.5px;cursor:pointer;
+    transition:transform .1s, opacity .15s, background .15s, box-shadow .15s;
+  }
+  .btn:active{transform:scale(.98);}
+  .btn:disabled{opacity:.4;cursor:not-allowed;}
+  .btn-primary{
+    background:linear-gradient(135deg, var(--accent), var(--accent-2));color:#fff;
+    box-shadow:0 4px 14px -4px rgba(79,70,229,.5);
+  }
+  .btn-primary:hover:not(:disabled){box-shadow:0 6px 18px -4px rgba(79,70,229,.6);}
+  .btn-ghost{background:var(--panel);border:1px solid var(--line);color:var(--text);}
+  .btn-ghost:hover:not(:disabled){border-color:var(--accent);color:var(--accent-text);background:var(--accent-dim);}
+
+  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;}
+
+  .log{
+    font-family:var(--mono);font-size:12.5px;color:var(--muted);margin-top:16px;
+    white-space:pre-wrap;line-height:1.7;
+  }
+  .log .ok{color:var(--good);}
+  .log .warn{color:var(--warn);}
+  .log .err{color:var(--err);}
+
+  .stats{display:flex;gap:14px;flex-wrap:wrap;margin-top:20px;}
+  .stat{
+    background:var(--panel-2);border:1px solid var(--line);border-radius:12px;
+    padding:14px 20px;min-width:120px;
+  }
+  .stat .n{font-family:var(--mono);font-size:25px;background:linear-gradient(135deg,var(--accent),var(--accent-2));
+    -webkit-background-clip:text;background-clip:text;color:transparent;font-weight:700;}
+  .stat .l{font-size:12px;color:var(--muted);margin-top:2px;font-weight:500;}
+
+  .assumptions{font-size:13px;color:var(--muted);line-height:1.75;}
+  .assumptions b{color:var(--text);}
+
+  /* ---- channel settings ---- */
+  .chan-row{
+    display:flex;align-items:center;gap:14px;padding:13px 0;
+    border-bottom:1px solid var(--line);
+  }
+  .chan-row:last-child{border-bottom:none;}
+  .chan-name{flex:1;font-size:14px;font-weight:500;}
+  .chan-hint{font-family:var(--mono);font-size:11px;color:var(--muted);}
+  .chan-toggle{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;}
+  .chan-toggle button{
+    background:var(--panel-2);border:none;color:var(--muted);padding:8px 16px;
+    font-family:var(--sans);font-size:13px;font-weight:600;cursor:pointer;transition:all .12s;
+  }
+  .chan-toggle button.active{background:var(--accent);color:#fff;}
+  .chan-toggle button:not(.active):hover{color:var(--text);}
+
+  /* ---- group filter / search ---- */
+  .filters-bar{
+    display:flex;gap:14px;align-items:center;flex-wrap:wrap;
+    margin:18px 0 20px;padding-bottom:18px;border-bottom:1px solid var(--line);
+  }
+  .group-buttons{display:flex;gap:8px;flex-wrap:wrap;flex:1;}
+  .gbtn{
+    background:var(--panel-2);border:1px solid var(--line);color:var(--muted);
+    padding:8px 15px;border-radius:20px;font-size:12.5px;font-weight:600;cursor:pointer;
+    font-family:var(--sans);transition:all .12s;white-space:nowrap;
+  }
+  .gbtn:hover{border-color:var(--accent);color:var(--accent-text);}
+  .gbtn.active{background:var(--accent);border-color:var(--accent);color:#fff;}
+  #searchBox{
+    background:var(--panel-2);border:1px solid var(--line);color:var(--text);
+    padding:9px 15px;border-radius:20px;font-size:13.5px;min-width:220px;font-family:var(--sans);
+  }
+  #searchBox:focus{outline:none;border-color:var(--accent);}
+
+  .tab-bar{display:flex;gap:4px;margin-bottom:22px;border-bottom:1px solid var(--line);}
+  .tab-btn{
+    background:none;border:none;color:var(--muted);padding:11px 18px;font-size:13.5px;
+    font-family:var(--sans);font-weight:600;cursor:pointer;border-bottom:2.5px solid transparent;margin-bottom:-1px;
+  }
+  .tab-btn.active{color:var(--accent-text);border-bottom-color:var(--accent);}
+  .tab-btn:hover:not(.active){color:var(--text);}
+  .tab-panel{display:none;}
+  .tab-panel.active{display:block;}
+
+  .dash-tab-btn{
+    background:none;border:none;color:var(--muted);padding:11px 18px;font-size:13.5px;
+    font-family:var(--sans);font-weight:600;cursor:pointer;border-bottom:2.5px solid transparent;margin-bottom:-1px;
+  }
+  .dash-tab-btn.active{color:var(--accent-text);border-bottom-color:var(--accent);}
+  .dash-tab-btn:hover:not(.active){color:var(--text);}
+
+  .group-block{margin-bottom:36px;}
+  .group-title{font-size:16.5px;font-weight:800;color:var(--text);margin:0 0 6px;letter-spacing:-.01em;}
+  .group-title .count{color:var(--muted);font-weight:500;font-size:13px;margin-left:9px;}
+  .group-title .chan-tag{
+    font-family:var(--mono);font-size:10.5px;color:var(--accent-text);font-weight:700;
+    background:var(--accent-dim);padding:3px 8px;border-radius:5px;margin-left:9px;
+  }
+  .sub-title{
+    font-family:var(--mono);font-size:11px;letter-spacing:.07em;text-transform:uppercase;
+    color:var(--accent-text);margin:20px 0 9px;font-weight:700;
+  }
+  .subtable-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-sm);}
+  table.detail{border-collapse:collapse;width:100%;min-width:1020px;font-size:12.5px;}
+  table.detail th, table.detail td{padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap;}
+  table.detail th.block-end, table.detail td.block-end{border-right:3px solid #a7aecb;}
+  table.detail thead tr.cat th.block-end{border-right:3px solid #a7aecb;}
+  table.detail thead tr.cat th{
+    background:var(--accent-dim);color:var(--accent-text);font-family:var(--mono);font-size:10.5px;
+    text-transform:uppercase;letter-spacing:.04em;text-align:center;border-bottom:1px solid var(--line);
+    position:sticky;top:0;font-weight:700;
+  }
+  table.detail thead tr.sub th{
+    background:var(--panel-2);color:var(--muted);font-weight:700;font-size:11px;
+    text-align:right;position:sticky;top:25px;
+  }
+  table.detail .col-fio, table.detail .col-status{text-align:left;position:sticky;z-index:2;}
+  table.detail .col-fio{left:0;min-width:190px;max-width:190px;width:190px;font-weight:600;}
+  table.detail .col-status{left:190px;min-width:150px;max-width:150px;width:150px;box-shadow:2px 0 6px -2px rgba(22,26,46,.08);}
+  table.detail td.col-fio, table.detail td.col-status{background:var(--panel);}
+  table.detail thead th.col-fio, table.detail thead th.col-status{background:var(--panel-2);z-index:4;top:0;}
+  table.detail .col-group{text-align:left;min-width:170px;}
+  table.detail td{text-align:right;font-family:var(--mono);color:var(--text);}
+  table.detail tbody tr:hover td{background:var(--accent-dim);}
+  table.detail tbody tr.na td{color:var(--muted);}
+  table.detail td.place-cell{font-weight:800;}
+  table.detail tr.na td.place-cell{color:var(--muted);font-weight:400;}
+  .rank-badge{
+    display:inline-block;min-width:26px;padding:3px 7px;border-radius:6px;
+    font-weight:800;text-align:center;
+  }
+
+  footer{text-align:center;color:var(--muted);font-size:12px;margin-top:32px;font-family:var(--mono);}
+
+  .clickable-fio{cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-decoration-color:var(--line);}
+  .clickable-fio:hover{color:var(--accent-text);text-decoration-color:var(--accent);}
+
+  .history-overlay{
+    position:fixed;inset:0;background:rgba(16,20,40,.45);backdrop-filter:blur(2px);
+    display:flex;align-items:center;justify-content:center;z-index:100;padding:20px;
+  }
+  .history-modal{
+    background:var(--panel);border-radius:16px;box-shadow:var(--shadow-md);
+    max-width:640px;width:100%;max-height:85vh;overflow-y:auto;padding:26px 28px;
+  }
+  .history-modal-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:18px;gap:16px;}
+  .history-modal-title{font-size:19px;font-weight:800;}
+  .history-modal-sub{font-size:13px;color:var(--muted);margin-top:3px;}
+  .history-empty{color:var(--muted);font-size:14px;padding:20px 0;}
+  #dashFunnelContainer summary{outline:none;}
+  #dashFunnelContainer summary::-webkit-details-marker{display:none;}
+  #dashFunnelContainer summary:hover{background:var(--accent-dim);}
+  #dashFunnelContainer details[open] summary{border-bottom:1px solid var(--line);}
+  .history-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:14px;}
+  .history-table th{text-align:left;color:var(--muted);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line);font-size:11.5px;text-transform:uppercase;}
+  .history-table td{padding:6px 8px;border-bottom:1px solid var(--line);font-family:var(--mono);}
+
+  .dyn-table{width:100%;border-collapse:collapse;font-size:13px;}
+  .dyn-table th{text-align:left;color:var(--muted);font-weight:700;padding:9px 12px;border-bottom:1px solid var(--line);font-size:11.5px;text-transform:uppercase;position:sticky;top:0;background:var(--panel);}
+  .dyn-table td{padding:9px 12px;border-bottom:1px solid var(--line);font-family:var(--mono);}
+  .dyn-table tr:hover td{background:var(--accent-dim);}
+</style>
+</head>
+<body>
+
+<div class="wrap" id="loginWrap" style="max-width:420px;padding-top:14vh;">
+  <div class="eyebrow">Внутренний инструмент · KPI</div>
+  <h1 style="font-size:26px;">Вход</h1>
+  <div class="sub">Доступ по логину и паролю. Обратитесь к администратору или руководителю, если аккаунта ещё нет.</div>
+  <div class="panel">
+    <label class="field">
+      <span>Email</span>
+      <input type="text" id="loginEmail" autocomplete="username">
+    </label>
+    <label class="field">
+      <span>Пароль</span>
+      <input type="password" id="loginPassword" autocomplete="current-password">
+    </label>
+    <div class="row">
+      <button class="btn btn-primary" id="loginBtn">Войти</button>
+    </div>
+    <div class="log" id="loginLog"></div>
+  </div>
+</div>
+
+<div class="wrap" id="wrap" style="display:none;">
+
+  <div class="row" style="justify-content:space-between;align-items:flex-start;">
+    <div>
+      <div class="eyebrow">Внутренний инструмент · KPI</div>
+      <h1 id="pageTitle">Рейтинг ЗДР из Excel</h1>
+    </div>
+    <div style="text-align:right;">
+      <div style="font-size:13px;color:var(--muted);" id="whoAmI"></div>
+      <div class="row" style="margin-top:6px;justify-content:flex-end;">
+        <button class="btn btn-ghost" id="openRequisitesBtn" style="padding:7px 14px;font-size:12.5px;">💳 Реквизиты</button>
+        <button class="btn btn-ghost" id="openPayrollBtn" style="padding:7px 14px;font-size:12.5px;">💰 Ведомость ЗП</button>
+        <button class="btn btn-ghost" id="openDashboardsBtn" style="padding:7px 14px;font-size:12.5px;">📊 Дашборды</button>
+        <button class="btn btn-ghost" id="openDynamicsBtn" style="padding:7px 14px;font-size:12.5px;">📈 Динамика</button>
+        <button class="btn btn-ghost" id="logoutBtn" style="padding:7px 14px;font-size:12.5px;">Выйти</button>
+      </div>
+    </div>
+  </div>
+  <div class="sub" id="pageSub">Загружаете типовой файл со сводкой по сотрудникам — страница считает места по каждой категории, сумму баллов и итоговый рейтинг по каждой группе супервайзера, общий рейтинг новичков по компании и рейтинг супервайзеров, и записывает всё в Supabase.</div>
+
+  <div class="panel" id="requisitesPanel" style="display:none;">
+    <div class="row" style="justify-content:space-between;align-items:flex-start;">
+      <h2 style="margin:0;">Справочник платёжных реквизитов</h2>
+      <button class="btn btn-ghost" id="closeRequisitesBtn" style="padding:7px 14px;font-size:12.5px;">Закрыть ✕</button>
+    </div>
+    <div class="sub" style="margin:10px 0 16px;">Отдельная таблица, не привязана к периоду — обновляйте её, когда меняются реквизиты сотрудников. При загрузке новый файл полностью заменяет текущий справочник. Видно только admin/manager.</div>
+    <div class="drop" id="reqDrop" style="margin-bottom:16px;">
+      <input type="file" id="reqFileInput" accept=".xlsx,.xls">
+      <div class="icon">⇪</div>
+      <div>Перетащите файл реквизитов сюда или нажмите, чтобы выбрать</div>
+      <div class="fname" id="reqFname"></div>
+      <div class="hint">.xlsx: ФИО (в формате "ЗДР Фамилия И. О."), полное имя, должность, страна, тип оплаты, реквизиты</div>
+    </div>
+    <div class="row">
+      <button class="btn btn-primary" id="reqUploadBtn" disabled>Загрузить и заменить справочник</button>
+    </div>
+    <div id="reqLog" class="log"></div>
+    <div id="reqPreview" style="margin-top:16px;"></div>
+  </div>
+
+  <div class="panel" id="dashboardsPanel" style="display:none;">
+    <div class="row" style="justify-content:space-between;align-items:flex-start;">
+      <h2 style="margin:0;">Дашборды</h2>
+      <button class="btn btn-ghost" id="closeDashboardsBtn" style="padding:7px 14px;font-size:12.5px;">Закрыть ✕</button>
+    </div>
+    <div class="chan-toggle" id="dashTypeToggle" style="display:inline-flex;margin:14px 0;">
+      <button type="button" data-type="week" class="active">Недельный</button>
+      <button type="button" data-type="day">Ежедневный</button>
+    </div>
+    <div class="row" style="gap:8px;margin-bottom:14px;">
+      <span style="font-size:13px;color:var(--muted);align-self:center;">Период:</span>
+      <select id="dashPeriodSelect" class="period-select"></select>
+    </div>
+    <div class="tab-bar" style="margin-top:6px;">
+      <button class="dash-tab-btn active" data-dashtab="summary">Сводка</button>
+      <button class="dash-tab-btn" data-dashtab="funnel">Воронка новичков</button>
+      <button class="dash-tab-btn" data-dashtab="channels">Каналы</button>
+      <button class="dash-tab-btn" data-dashtab="anomalies">Аномалии</button>
+    </div>
+    <div id="dashLog" class="log"></div>
+    <div class="tab-panel active" id="dashtab-summary"><div id="dashSummaryContainer"></div></div>
+    <div class="tab-panel" id="dashtab-funnel"><div id="dashFunnelContainer"></div></div>
+    <div class="tab-panel" id="dashtab-channels"><div id="dashChannelsContainer"></div></div>
+    <div class="tab-panel" id="dashtab-anomalies"><div id="dashAnomaliesContainer"></div></div>
+  </div>
+
+  <div class="panel" id="payrollPanel" style="display:none;">
+    <div class="row" style="justify-content:space-between;align-items:flex-start;">
+      <h2 style="margin:0;">Ведомость ЗП</h2>
+      <button class="btn btn-ghost" id="closePayrollBtn" style="padding:7px 14px;font-size:12.5px;">Закрыть ✕</button>
+    </div>
+    <div class="sub" style="margin:10px 0 16px;">Двухэтапный расчёт: аванс — недели 1-2 месяца, окончательный расчёт — недели 3-5. Берётся напрямую из Supabase, файл загружать не нужно.</div>
+    <div class="panel" style="background:var(--panel-2);padding:18px 20px;margin-bottom:16px;">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">
+        <label class="field" style="margin:0;">
+          <span>Месяц начисления</span>
+          <select id="payrollMonth" class="period-select"></select>
+        </label>
+        <label class="field" style="margin:0;">
+          <span>Этап выплаты</span>
+          <div class="chan-toggle" id="payrollStageToggle" style="display:inline-flex;">
+            <button type="button" data-stage="1" class="active">Аванс (нед. 1-2)</button>
+            <button type="button" data-stage="2">Расчёт (нед. 3-5)</button>
+          </div>
+        </label>
+        <label class="field" style="margin:0;">
+          <span>Дата подачи ведомости</span>
+          <input type="date" id="payrollSubmitDate" class="period-select">
+        </label>
+        <label class="field" style="margin:0;">
+          <span>Крайняя дата выплаты</span>
+          <input type="date" id="payrollDueDate" class="period-select">
+        </label>
+        <label class="field" style="margin:0;">
+          <span>Отдел</span>
+          <input type="text" id="payrollDept" value="КПИ">
+        </label>
+        <label class="field" style="margin:0;">
+          <span>Руководитель (ответственный)</span>
+          <input type="text" id="payrollManager" value="Олефир Вадим">
+        </label>
+      </div>
+      <div class="row" style="margin-top:14px;">
+        <button class="btn btn-primary" id="buildPayrollBtn">Сформировать ведомость</button>
+      </div>
+    </div>
+    <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <div id="dashPayrollSub" style="font-size:13px;color:var(--muted);"></div>
+      <button class="btn btn-ghost" id="downloadPayrollBtn" style="padding:7px 14px;font-size:12.5px;">Скачать ведомость (Excel)</button>
+    </div>
+    <div class="filters-bar" style="margin:0 0 16px;">
+      <input type="text" id="payrollSearchBox" placeholder="Поиск по ФИО…" style="max-width:280px;">
+    </div>
+    <div id="dashPayrollContainer"></div>
+  </div>
+
+  <div class="panel" id="standaloneDynamicsPanel" style="display:none;">
+    <div class="row" style="justify-content:space-between;align-items:flex-start;">
+      <h2 style="margin:0;">Динамика (независимо от загрузки файла)</h2>
+      <button class="btn btn-ghost" id="closeDynamicsBtn" style="padding:7px 14px;font-size:12.5px;">Закрыть ✕</button>
+    </div>
+    <div class="sub" style="margin:10px 0 16px;">Сравнение двух последних периодов того же типа, взятых напрямую из Supabase. Клик по ФИО открывает персональный график.</div>
+    <div class="chan-toggle" id="dynTypeToggle" style="display:inline-flex;margin-bottom:16px;">
+      <button type="button" data-type="week" class="active">Недельный</button>
+      <button type="button" data-type="day">Ежедневный</button>
+    </div>
+    <div class="filters-bar">
+      <div class="group-buttons" id="dynGroupButtons"></div>
+      <input type="text" id="dynSearchBox" placeholder="Поиск по ФИО…">
+    </div>
+    <div id="standaloneDynLog" class="log"></div>
+    <div id="standaloneDynContainer"></div>
+  </div>
+
+  <div class="panel" id="adminOnlyPanel1">
+    <h2>1 · Файл и период</h2>
+
+    <label class="field">
+      <span>Тип отчёта</span>
+      <div class="chan-toggle" id="periodTypeToggle" style="display:inline-flex;">
+        <button type="button" data-type="week" class="active">Недельный</button>
+        <button type="button" data-type="day">Ежедневный</button>
+      </div>
+    </label>
+
+    <label class="field" id="weekPeriodField">
+      <span>Период отчёта (месяц – неделя месяца)</span>
+      <div class="row" style="gap:8px;">
+        <select id="periodMonth" class="period-select"></select>
+        <span style="color:var(--muted);font-family:var(--mono);">–</span>
+        <select id="periodWeek" class="period-select"></select>
+        <span id="periodPreview" style="font-family:var(--mono);color:var(--accent);"></span>
+      </div>
+      <div class="row" style="gap:8px;margin-top:10px;">
+        <span style="font-size:13px;color:var(--muted);align-self:center;">Недель в этом месяце (для деления оклада):</span>
+        <select id="weeksInMonth" class="period-select">
+          <option value="4" selected>4</option>
+          <option value="5">5</option>
+        </select>
+      </div>
+    </label>
+
+    <label class="field" id="dayPeriodField" style="display:none;">
+      <span>Дата отчёта</span>
+      <input type="date" id="periodDate" class="period-select" style="width:auto;">
+    </label>
+
+    <div id="existingPeriodNotice" style="display:none;background:var(--accent-dim);border:1px solid var(--accent);border-radius:10px;padding:12px 16px;margin-bottom:18px;font-size:13.5px;"></div>
+
+    <div class="drop" id="drop">
+      <input type="file" id="fileInput" accept=".xlsx,.xls">
+      <div class="icon">⇪</div>
+      <div>Перетащите файл сюда или нажмите, чтобы выбрать</div>
+      <div class="fname" id="fname"></div>
+      <div class="hint">.xlsx, структура: ФИО / Статус / показатели по каналам, группы отмечены строкой "ГРУППА: ..."</div>
+    </div>
+
+    <div class="row" style="margin-top:20px;">
+      <button class="btn btn-primary" id="parseBtn" disabled>Разобрать файл</button>
+    </div>
+    <div class="log" id="log"></div>
+  </div>
+
+  <div class="panel" id="channelPanel" style="display:none;">
+    <h2>2 · Какой канал считать группе: Радио или Интернет</h2>
+    <div class="sub" style="margin-bottom:16px;">По каждой группе супервайзера в категории "Радио/Интернет" учитывается только один из каналов. Угадать по сумме продаж нельзя — у части групп основной канал не совпадает с тем, где больше денег. Проверьте/поправьте вручную.</div>
+    <div id="channelList"></div>
+    <div class="row" style="margin-top:20px;">
+      <button class="btn btn-primary" id="calcBtn">Посчитать рейтинг</button>
+    </div>
+  </div>
+
+  <div class="panel" id="resultsPanel" style="display:none;">
+    <div class="row" style="justify-content:space-between;align-items:baseline;">
+      <h2 style="margin:0;">3 · Результат <span id="periodBadge" class="group-title chan-tag" style="font-size:12px;margin-left:6px;"></span></h2>
+    </div>
+    <div class="row" style="justify-content:space-between;">
+      <div class="stats" id="stats"></div>
+      <button class="btn btn-ghost" id="editChannelsBtn" style="padding:8px 14px;font-size:12.5px;">Изменить каналы</button>
+    </div>
+
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="byGroup">По группам</button>
+      <button class="tab-btn" data-tab="novices">Новички (общий рейтинг)</button>
+      <button class="tab-btn" data-tab="supervisors">Рейтинг супервайзеров</button>
+      <button class="tab-btn" data-tab="dynamics">Динамика</button>
+    </div>
+
+    <div class="tab-panel active" id="tab-byGroup">
+      <div class="filters-bar">
+        <div class="group-buttons" id="groupButtons"></div>
+        <input type="text" id="searchBox" placeholder="Поиск по ФИО…">
+      </div>
+      <div id="groupsContainer"></div>
+    </div>
+
+    <div class="tab-panel" id="tab-novices">
+      <div id="noviceContainer"></div>
+    </div>
+
+    <div class="tab-panel" id="tab-supervisors">
+      <div id="supervisorContainer"></div>
+    </div>
+
+    <div class="tab-panel" id="tab-dynamics">
+      <div class="sub" style="margin-bottom:16px;">Сравнение с предыдущим периодом того же типа (неделя ↔ неделя, день ↔ день), загруженным ранее в Supabase. Клик по ФИО в любой таблице открывает персональный график.</div>
+      <div class="filters-bar">
+        <div class="group-buttons" id="dynResultGroupButtons"></div>
+        <input type="text" id="dynResultSearchBox" placeholder="Поиск по ФИО…">
+      </div>
+      <div id="dynamicsContainer"></div>
+    </div>
+
+    <div class="row" style="margin-top:26px;">
+      <button class="btn btn-ghost" id="exportBtn">Скачать Excel</button>
+      <button class="btn btn-ghost" id="uploadBtn">Записать в Supabase</button>
+    </div>
+    <div class="log" id="uploadLog"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Логика расчёта</h2>
+    <div class="assumptions">
+      Внутри группы по каждой категории (1 обращение, ЛК, радио/интернет, время/контакт, % ошибок) считается <b>место</b> (чем больше продажи / меньше время и ошибок — тем выше), балл = место × вес (×3 / ×1.5 / ×2.5 / ×1 / ×1), из суммы баллов — итоговое место.<br>
+      <b>Н/О</b> — статус Новичок/Тренер/руководитель/Отпуск/Больничный или нулевые продажи — в основной таблице группы не участвуют в месте.<br>
+      <b>Новички</b> ранжируются одним общим списком по всей компании, а не внутри группы.<br>
+      <b>Рейтинг супервайзеров</b> — карточки и сумма считаются как <b>сумма по группе</b>, остальные показатели (ср.чек, конверсия, сумма с контакта, время, ошибки) — как среднее среди "оценённых" (не Н/О) сотрудников группы, дальше та же логика мест и весов.
+    </div>
+  </div>
+
+  <footer>vnqmlknaiyfjbbjpikfg.supabase.co · kpi_uploads / kpi_ratings</footer>
+</div>
+
+<div id="historyOverlay" class="history-overlay" style="display:none;">
+  <div class="history-modal">
+    <div class="history-modal-head">
+      <div>
+        <div class="history-modal-title" id="historyFio"></div>
+        <div class="history-modal-sub" id="historySub"></div>
+      </div>
+      <button class="btn btn-ghost" id="historyClose" style="padding:8px 14px;font-size:13px;">Закрыть ✕</button>
+    </div>
+    <div id="historyBody"></div>
+  </div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://vnqmlknaiyfjbbjpikfg.supabase.co";
+const SUPABASE_KEY = "sb_publishable_quhEohvl7S6LP3mp5_WWDg_mf55fuZt";
+
+// ---------- авторизация ----------
+let session = null; // { access_token, user_id, email }
+let profile = null; // { role, supervisor_name, display_name }
+
+function sbHeaders(extra){
+  const token = session ? session.access_token : SUPABASE_KEY;
+  return { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}`, ...(extra || {}) };
+}
+
+async function signIn(email, password){
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json();
+  if(!res.ok) throw new Error(data.error_description || data.msg || "Неверный email или пароль");
+  session = { access_token: data.access_token, user_id: data.user.id, email: data.user.email };
+
+  const profRes = await fetch(`${SUPABASE_URL}/rest/v1/user_profiles?id=eq.${session.user_id}&select=role,supervisor_name,display_name`, {
+    headers: sbHeaders(),
+  });
+  const profRows = await profRes.json();
+  if(!profRes.ok || !profRows.length){
+    throw new Error("Аккаунт есть, но для него не настроен профиль (роль). Обратитесь к администратору.");
+  }
+  profile = profRows[0];
+}
+
+function signOut(){
+  session = null;
+  profile = null;
+  $("loginWrap").style.display = "block";
+  $("wrap").style.display = "none";
+  $("loginEmail").value = ""; $("loginPassword").value = "";
+  clearLog($("loginLog"));
+}
+
+function onLoggedIn(){
+  $("loginWrap").style.display = "none";
+  $("wrap").style.display = "block";
+  const roleLabel = { admin: "Администратор", manager: "Руководитель", supervisor: "Супервайзер" }[profile.role] || profile.role;
+  $("whoAmI").textContent = `${profile.display_name || session.email} · ${roleLabel}`;
+
+  if(profile.role === "supervisor"){
+    // супервайзер: только просмотр своей группы, без загрузки файлов
+    $("adminOnlyPanel1").style.display = "none";
+    $("pageTitle").textContent = "Моя группа — рейтинг и ЗП";
+    $("pageSub").textContent = "Здесь показаны только сотрудники вашей группы. Данные обновляет администратор/руководитель после загрузки очередного отчёта.";
+    buildSupervisorViewer();
+  } else {
+    $("adminOnlyPanel1").style.display = "block";
+    checkExistingPeriod();
+  }
+}
+
+// ---------- упрощённый режим просмотра для супервайзера ----------
+function dbRowToDisplayRow(r){
+  return {
+    fio: r.fio, status: r.status, supervisor: r.supervisor, is_na: r.is_na, is_novice: r.is_novice,
+    c1_sum: r.c1_sum, c1_check: r.c1_check, c1_conv: r.c1_conv, c1_pc: r.c1_per_contact, c1_cards: r.c1_cards, c1_place: r.c1_place,
+    lk_sum: r.lk_sum, lk_check: r.lk_check, lk_conv: r.lk_conv, lk_pc: r.lk_per_contact, lk_cards: r.lk_cards, lk_place: r.lk_place,
+    ch_sum: r.ch_sum, ch_check: r.ch_check, ch_conv: r.ch_conv, ch_pc: r.ch_per_contact, ch_cards: r.ch_cards, ch_place: r.ch_place,
+    time: r.time_per_contact, time_place: r.time_place,
+    errors_pct: r.errors_pct, errors_place: r.errors_place,
+    total_score: r.total_score, final_place: r.final_place,
+    tier: r.tier, coefficient: r.coefficient, bonus075: r.bonus075, bonus2: r.bonus2, salary: r.salary,
+    salaryCoeffUsed: r.coefficient, salaryCoeffFromPrev: true, channel: r.channel,
+  };
+}
+
+async function buildSupervisorViewer(){
+  const panel = document.createElement("div");
+  panel.className = "panel";
+  panel.innerHTML = `
+    <h2>Моя группа</h2>
+    <div class="chan-toggle" id="viewerTypeToggle" style="display:inline-flex;margin-bottom:16px;">
+      <button type="button" data-type="week" class="active">Недельный</button>
+      <button type="button" data-type="day">Ежедневный</button>
+    </div>
+    <div id="viewerLog" class="log"></div>
+    <div id="viewerContainer"></div>
+  `;
+  $("wrap").insertBefore(panel, $("channelPanel"));
+  $("channelPanel").style.display = "none";
+  $("resultsPanel").style.display = "none";
+
+  async function load(){
+    const vType = panel.querySelector("#viewerTypeToggle .active").dataset.type;
+    periodType = vType;
+    const logEl2 = panel.querySelector("#viewerLog");
+    const containerEl = panel.querySelector("#viewerContainer");
+    clearLog(logEl2);
+    containerEl.innerHTML = "";
+    log("Загружаю данные вашей группы…", null, logEl2);
+    try{
+      const latest = await fetchLatestUpload(vType);
+      if(!latest){
+        log("Пока нет ни одной загрузки такого типа.", "warn", logEl2);
+        return;
+      }
+      const rowsRaw = await sbGet(`kpi_ratings?upload_id=eq.${latest.id}&select=*`);
+      const rows = rowsRaw.map(dbRowToDisplayRow);
+
+      const prevUpload = await fetchLatestUpload(vType, latest.id);
+      let prevMap = null;
+      if(prevUpload){
+        const prevRaw = await sbGet(`kpi_ratings?upload_id=eq.${prevUpload.id}&select=fio,final_place,total_score,is_na`);
+        prevMap = {};
+        for(const r of prevRaw) prevMap[r.fio] = r;
+      }
+      assignDeltas(rows, prevMap);
+
+      currentRows = rows.filter(r => !r.is_novice);
+      currentNoviceRows = rows.filter(r => r.is_novice);
+
+      clearLog(logEl2);
+      log(`Период: ${latest.period_label} · сотрудников: ${currentRows.length}`, "ok", logEl2);
+      containerEl.appendChild(buildDetailTable(currentRows, false, vType === "week", null, false, true));
+    } catch(err){
+      log("Ошибка: " + err.message, "err", logEl2);
+    }
+  }
+
+  panel.querySelector("#viewerTypeToggle").querySelectorAll("button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      panel.querySelector("#viewerTypeToggle").querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
+      load();
+    });
+  });
+
+  load();
+}
+
+const NOVICE_STATUSES = ["Новичок","Новичок, 1-й уровень","Новичок, 2-й уровень","Новичок, 3-й уровень"];
+const EXCLUDED_STATUSES = [...NOVICE_STATUSES, "Тренер","руководитель","Отпуск","Больничный"];
+
+const CHANNEL_HINTS = [
+  { match: "Курбанова", channel: "inet" },
+  { match: "Пуць",       channel: "radio" },
+  { match: "Филипский",  channel: "radio" },
+  { match: "Клюйко",     channel: "radio" },
+  { match: "Гордиенко",  channel: "radio" },
+  { match: "Лиштва",     channel: "radio" },
+  { match: "Галина",     channel: "radio" },
+];
+
+const $ = (id) => document.getElementById(id);
+const logEl = $("log");
+const uploadLogEl = $("uploadLog");
+
+function log(msg, cls, target){
+  const el = target || logEl;
+  const span = document.createElement("div");
+  if(cls) span.className = cls;
+  span.textContent = msg;
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+function clearLog(target){ (target||logEl).innerHTML = ""; }
+
+// ---------- period selects ----------
+const MONTHS = ["январь","февраль","март","апрель","май","июнь","июль","август","сентябрь","октябрь","ноябрь","декабрь"];
+let periodType = "week"; // "week" | "day"
+
+(function initPeriodSelects(){
+  const mSel = $("periodMonth"), wSel = $("periodWeek");
+  const now = new Date();
+  MONTHS.forEach((name, i) => {
+    const opt = document.createElement("option");
+    opt.value = i + 1;
+    opt.textContent = `${i+1} — ${name}`;
+    if(i + 1 === now.getMonth() + 1) opt.selected = true;
+    mSel.appendChild(opt);
+  });
+  for(let w = 1; w <= 5; w++){
+    const opt = document.createElement("option");
+    opt.value = w;
+    opt.textContent = `неделя ${w}`;
+    wSel.appendChild(opt);
+  }
+  function updatePreview(){ $("periodPreview").textContent = `→ ${mSel.value}-${wSel.value}`; }
+  mSel.addEventListener("change", () => { updatePreview(); checkExistingPeriod(); });
+  wSel.addEventListener("change", () => { updatePreview(); checkExistingPeriod(); });
+  updatePreview();
+
+  // date field defaults to today
+  const pad = n => String(n).padStart(2, "0");
+  $("periodDate").value = `${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
+  $("periodDate").addEventListener("change", checkExistingPeriod);
+})();
+
+$("periodTypeToggle").querySelectorAll("button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    periodType = btn.dataset.type;
+    $("periodTypeToggle").querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
+    $("weekPeriodField").style.display = periodType === "week" ? "block" : "none";
+    $("dayPeriodField").style.display = periodType === "day" ? "block" : "none";
+    checkExistingPeriod();
+  });
+});
+function currentPeriodValue(){
+  if(periodType === "day") return $("periodDate").value;
+  return `${$("periodMonth").value}-${$("periodWeek").value}`;
+}
+
+// ---------- проверка: не загружен ли уже этот период ----------
+async function checkExistingPeriod(){
+  const box = $("existingPeriodNotice");
+  box.style.display = "none";
+  box.innerHTML = "";
+  const label = currentPeriodValue();
+  if(!label) return;
+  try{
+    const rows = await sbGet(`kpi_uploads?period_label=eq.${encodeURIComponent(label)}&select=id,period_label,uploaded_at,source_filename&order=uploaded_at.desc&limit=1`);
+    if(!rows.length) return;
+    const u = rows[0];
+    const when = new Date(u.uploaded_at).toLocaleString("ru");
+    box.style.display = "block";
+    box.innerHTML = `За период <b>${u.period_label}</b> уже есть сохранённый отчёт (загружен ${when}${u.source_filename ? `, файл "${u.source_filename}"` : ""}). <button class="btn btn-primary" id="showExistingBtn" style="padding:7px 14px;font-size:12.5px;margin-left:6px;">Показать без повторной загрузки</button>`;
+    $("showExistingBtn").addEventListener("click", () => loadSavedPeriod(u));
+  } catch(err){
+    // не критично, просто не показываем подсказку
+  }
+}
+
+async function loadSavedPeriod(upload){
+  clearLog(uploadLogEl);
+  log(`Загружаю сохранённый период ${upload.period_label} из Supabase…`, null, uploadLogEl);
+  try{
+    const rawRows = await sbGet(`kpi_ratings?upload_id=eq.${upload.id}&select=*`);
+    const display = rawRows.map(dbRowToDisplayRow);
+    const main = display.filter(r => !r.is_novice);
+    const novices = display.filter(r => r.is_novice);
+
+    const prevUpload = await fetchLatestUpload(periodType, upload.id);
+    let prevMap = null;
+    if(prevUpload){
+      const prevRaw = await sbGet(`kpi_ratings?upload_id=eq.${prevUpload.id}&select=fio,final_place,total_score,is_na`);
+      prevMap = {};
+      for(const r of prevRaw) prevMap[r.fio] = r;
+    }
+    assignDeltas(main, prevMap);
+    assignDeltas(novices, prevMap);
+
+    currentRows = main;
+    currentNoviceRows = novices;
+    currentSupervisorRows = computeSupervisorRatingFromRows(main);
+    currentFilename = upload.source_filename || "(сохранённый период)";
+
+    $("channelPanel").style.display = "none";
+    $("uploadBtn").style.display = "none"; // уже в базе, повторно писать не даём
+    renderResults();
+    log(`Показан сохранённый период ${upload.period_label}.`, "ok", uploadLogEl);
+  } catch(err){
+    log("Ошибка загрузки сохранённого периода: " + err.message, "err", uploadLogEl);
+  }
+}
+
+// ---------- drag & drop / file select ----------
+const drop = $("drop");
+const fileInput = $("fileInput");
+drop.addEventListener("click", () => fileInput.click());
+["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("drag"); }));
+["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("drag"); }));
+drop.addEventListener("drop", e => {
+  if(e.dataTransfer.files.length){ fileInput.files = e.dataTransfer.files; onFileChosen(); }
+});
+fileInput.addEventListener("change", onFileChosen);
+
+let selectedFile = null;
+let parsedGroups = null;
+let groupChannels = {};
+let currentRows = null;
+let currentNoviceRows = null;
+let currentSupervisorRows = null;
+let currentFilename = "";
+
+function onFileChosen(){
+  selectedFile = fileInput.files[0];
+  if(!selectedFile) return;
+  $("fname").textContent = selectedFile.name;
+  $("parseBtn").disabled = false;
+  $("channelPanel").style.display = "none";
+  $("resultsPanel").style.display = "none";
+  $("uploadBtn").style.display = "";
+  $("wrap").classList.remove("wide");
+  clearLog();
+}
+
+// ---------- parsing ----------
+function findCol(headers, name){
+  return headers.findIndex(h => (h||"").toString().trim() === name);
+}
+function num(v){
+  if(v === undefined || v === null || v === "") return 0;
+  const n = Number(v);
+  return isNaN(n) ? 0 : n;
+}
+
+function parseWorkbook(arrayBuffer){
+  const wb = XLSX.read(arrayBuffer, { type: "array" });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+  const headers = rows[0].map(h => (h||"").toString());
+
+  const need = (name) => {
+    const i = findCol(headers, name);
+    if(i === -1) throw new Error("Не найдена колонка: " + name);
+    return i;
+  };
+  const needAny = (...names) => {
+    for(const n of names){ const i = findCol(headers, n); if(i !== -1) return i; }
+    throw new Error("Не найдена колонка: " + names[0]);
+  };
+  const optional = (name) => findCol(headers, name); // -1, если колонки нет
+
+  const optionalAny = (...names) => {
+    for(const n of names){ const i = findCol(headers, n); if(i !== -1) return i; }
+    return -1;
+  };
+
+  const col = {
+    status: need("Статус (уровень)"),
+    c1_sum: need("Первый контакт: сумма"), c1_check: need("Первый контакт: ср.чек"),
+    c1_conv: need("Первый контакт: конверсия, %"), c1_pc: need("Первый контакт: сумма с контакта"),
+    lk_sum: need("ЛК: сумма"), lk_check: need("ЛК: ср.чек"),
+    lk_conv: need("ЛК: конверсия, %"), lk_pc: need("ЛК: сумма с контакта"),
+    radio_sum: needAny("Радио + ТВ: сумма", "Радио: сумма"),
+    radio_check: needAny("Радио + ТВ: ср.чек", "Радио: ср.чек"),
+    radio_conv: needAny("Радио + ТВ: конверсия, %", "Радио: конверсия, %"),
+    radio_pc: needAny("Радио + ТВ: сумма с контакта", "Радио: сумма с контакта"),
+    inet_sum: need("Интернет: сумма"), inet_check: need("Интернет: ср.чек"),
+    inet_conv: need("Интернет: конверсия, %"), inet_pc: need("Интернет: сумма с контакта"),
+    time: need("Время/контакт, мин"),
+    c1_cards: optionalAny("Первый контакт: кол-во", "Карточек (Первый контакт)"),
+    lk_cards: optionalAny("ЛК: кол-во", "Карточек (ЛК)"),
+    radio_cards: optionalAny("Радио + ТВ: кол-во", "Карточек (Радио + ТВ)"),
+    inet_cards: optionalAny("Интернет: кол-во", "Карточек (Интернет)"),
+    bonus075: optional("0.75% за офор."),
+    bonus2: optional("2% за дост."),
+  };
+  const cardsMissing = [];
+  if(col.c1_cards === -1) cardsMissing.push("Первый контакт");
+  if(col.lk_cards === -1) cardsMissing.push("ЛК");
+  if(col.radio_cards === -1) cardsMissing.push("Радио + ТВ");
+  if(col.inet_cards === -1) cardsMissing.push("Интернет");
+  const salaryMissing = (col.bonus075 === -1 || col.bonus2 === -1);
+
+  let errorsCol = findCol(headers, "Ошибок, %");
+  let errorsIsFallback = false;
+  if(errorsCol === -1){
+    errorsCol = findCol(headers, "% Постобработки (ПО)");
+    errorsIsFallback = true;
+  }
+  if(errorsCol === -1) throw new Error("Не найдена колонка ошибок ('Ошибок, %' или '% Постобработки (ПО)')");
+
+  const groups = [];
+  let current = null;
+  let currentPeaks = null; // "родная" пара для операторов без супервизора: не-ЗДР идут сюда
+  const REGION_UK_RE = /операторы\s+без\s+супервизора/i;
+
+  for(let r = 1; r < rows.length; r++){
+    const row = rows[r];
+    if(!row || row[0] === null || row[0] === undefined || row[0] === "") continue;
+    const fio = row[0].toString();
+    if(fio.startsWith("ГРУППА")){
+      const rawName = fio.replace("ГРУППА:","").trim();
+      const isSpecial = REGION_UK_RE.test(rawName);
+      current = { supervisor: rawName, employees: [], isRegionUK: isSpecial };
+      groups.push(current);
+      if(isSpecial){
+        currentPeaks = { supervisor: rawName + " [Пики]", employees: [], isPeaks: true };
+        groups.push(currentPeaks);
+      } else {
+        currentPeaks = null;
+      }
+      continue;
+    }
+    if(!current) continue;
+    // "Регион УК" / "Выходы на Пики" — сборная группа из разных ролей (ПП, ЗДР, Увеличители):
+    // ЗДР идёт в "Регион УК", остальные (ПП, Увеличители и т.д.) — в "Выходы на Пики"
+    let target = current;
+    if(current.isRegionUK){
+      target = fio.trim().toUpperCase().startsWith("ЗДР") ? current : currentPeaks;
+    }
+    if(!target) continue;
+
+    target.employees.push({
+      fio,
+      status: (row[col.status]||"").toString(),
+      c1_sum: num(row[col.c1_sum]), c1_check: num(row[col.c1_check]),
+      c1_conv: num(row[col.c1_conv]), c1_pc: num(row[col.c1_pc]),
+      c1_cards: col.c1_cards !== -1 ? num(row[col.c1_cards]) : null,
+      lk_sum: num(row[col.lk_sum]), lk_check: num(row[col.lk_check]),
+      lk_conv: num(row[col.lk_conv]), lk_pc: num(row[col.lk_pc]),
+      lk_cards: col.lk_cards !== -1 ? num(row[col.lk_cards]) : null,
+      radio_sum: num(row[col.radio_sum]), radio_check: num(row[col.radio_check]),
+      radio_conv: num(row[col.radio_conv]), radio_pc: num(row[col.radio_pc]),
+      radio_cards: col.radio_cards !== -1 ? num(row[col.radio_cards]) : null,
+      inet_sum: num(row[col.inet_sum]), inet_check: num(row[col.inet_check]),
+      inet_conv: num(row[col.inet_conv]), inet_pc: num(row[col.inet_pc]),
+      inet_cards: col.inet_cards !== -1 ? num(row[col.inet_cards]) : null,
+      time: num(row[col.time]),
+      bonus075: col.bonus075 !== -1 ? num(row[col.bonus075]) : null,
+      bonus2: col.bonus2 !== -1 ? num(row[col.bonus2]) : null,
+      errors_pct: num(row[errorsCol]),
+    });
+  }
+  return { groups, errorsIsFallback, cardsMissing, salaryMissing };
+}
+
+// ---------- step 1: parse & show channel settings ----------
+$("parseBtn").addEventListener("click", async () => {
+  if(!selectedFile) return;
+  clearLog();
+  $("parseBtn").disabled = true;
+  log("Читаю файл…");
+  try{
+    const buf = await selectedFile.arrayBuffer();
+    const { groups, errorsIsFallback, cardsMissing, salaryMissing } = parseWorkbook(buf);
+    parsedGroups = groups;
+    currentFilename = selectedFile.name;
+
+    log(`Групп найдено: ${groups.length}`, "ok");
+    log(`Сотрудников в файле: ${groups.reduce((s,g)=>s+g.employees.length,0)}`, "ok");
+    if(errorsIsFallback){
+      log(`Внимание: колонки "Ошибок, %" нет в файле — временно взял "% Постобработки (ПО)".`, "warn");
+    } else {
+      log(`% ошибок беру из колонки "Ошибок, %".`, "ok");
+    }
+    if(cardsMissing.length){
+      log(`Внимание: нет колонки "Карточек" для блока(ов): ${cardsMissing.join(", ")} — там будет прочерк.`, "warn");
+    }
+    if(salaryMissing){
+      log(`Внимание: нет колонок "0.75% за офор." / "2% за дост." — ЗП посчитается только по ставке, без бонуса.`, "warn");
+    } else {
+      log(`Нашёл колонки бонусов — ЗП будет посчитана для недельного отчёта.`, "ok");
+    }
+
+    buildChannelSettings(groups);
+    $("channelPanel").style.display = "block";
+    $("channelPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch(err){
+    log("Ошибка: " + err.message, "err");
+  } finally {
+    $("parseBtn").disabled = false;
+  }
+});
+
+function guessChannel(group){
+  for(const hint of CHANNEL_HINTS){
+    if(group.supervisor.includes(hint.match)) return hint.channel;
+  }
+  const rtot = group.employees.reduce((s,e)=>s+e.radio_sum,0);
+  const itot = group.employees.reduce((s,e)=>s+e.inet_sum,0);
+  return itot > rtot ? "inet" : "radio";
+}
+
+function buildChannelSettings(groups){
+  groupChannels = {};
+  const box = $("channelList");
+  box.innerHTML = "";
+  for(const g of groups){
+    const guess = guessChannel(g);
+    groupChannels[g.supervisor] = guess;
+
+    const rtot = g.employees.reduce((s,e)=>s+e.radio_sum,0);
+    const itot = g.employees.reduce((s,e)=>s+e.inet_sum,0);
+
+    const row = document.createElement("div");
+    row.className = "chan-row";
+    row.innerHTML = `
+      <div class="chan-name">${g.supervisor}<br><span class="chan-hint">радио: ${rtot.toLocaleString("ru")} · интернет: ${itot.toLocaleString("ru")}</span></div>
+      <div class="chan-toggle" data-supervisor="${encodeURIComponent(g.supervisor)}">
+        <button type="button" data-ch="radio" class="${guess==='radio'?'active':''}">Радио+ТВ</button>
+        <button type="button" data-ch="inet" class="${guess==='inet'?'active':''}">Интернет</button>
+      </div>
+    `;
+    box.appendChild(row);
+  }
+  box.querySelectorAll(".chan-toggle").forEach(toggle => {
+    const supervisor = decodeURIComponent(toggle.dataset.supervisor);
+    toggle.querySelectorAll("button").forEach(btn => {
+      btn.addEventListener("click", () => {
+        groupChannels[supervisor] = btn.dataset.ch;
+        toggle.querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
+      });
+    });
+  });
+}
+
+// ---------- ranking helpers ----------
+function rankDesc(arr, v){ return arr.filter(x => x > v).length + 1; }
+function rankAsc(arr, v){ return arr.filter(x => x < v).length + 1; }
+// Плотный ранг (без пропусков): все с одинаковым значением получают одно место,
+// следующее по величине значение получает следующее место (не место+кол-во дублей).
+// Нужен для % ошибок, где часто много людей с 0% и обычный RANK давал бы разрыв в местах.
+function rankAscDense(arr, v){
+  const uniq = [...new Set(arr)].sort((a, b) => a - b);
+  return uniq.indexOf(v) + 1;
+}
+
+function channelFields(e, channel){
+  return channel === "inet"
+    ? { sum: e.inet_sum, check: e.inet_check, conv: e.inet_conv, pc: e.inet_pc, cards: e.inet_cards }
+    : { sum: e.radio_sum, check: e.radio_check, conv: e.radio_conv, pc: e.radio_pc, cards: e.radio_cards };
+}
+function isNaMain(e){ return EXCLUDED_STATUSES.includes(e.status) || e.c1_sum === 0; }
+function isNaNovice(e){ return e.c1_sum === 0; }
+
+// Тиры для места ЛК:
+//  A (лучшие) — карточки>0 и конверсия>0: ранжируются по "сумма с контакта" как раньше
+//  B (среднее) — карточки=0, либо карточки 1-9 при конверсии 0%: место = среднее мест
+//                (1 обращение, канал, время, ошибки), но всегда хуже любого места из A
+//  C (худшие) — карточки ≥10 при конверсии 0%: тоже среднее по остальным категориям
+//                для взаимного порядка, но всегда хуже любого места из B
+function rankByKeys(idxList, keyFns){
+  const sorted = [...idxList].sort((a, b) => {
+    for(const kf of keyFns){
+      const diff = kf(a) - kf(b);
+      if(diff !== 0) return diff;
+    }
+    return 0;
+  });
+  const ranks = {};
+  let rank = 1;
+  sorted.forEach((idx, pos) => {
+    if(pos > 0){
+      const sameAsPrev = keyFns.every(kf => kf(sorted[pos]) === kf(sorted[pos-1]));
+      if(!sameAsPrev) rank = pos + 1;
+    }
+    ranks[idx] = rank;
+  });
+  return ranks;
+}
+
+function computeTieredLkPlaces(items){
+  const idxA = [], idxB = [], idxC = [];
+  items.forEach((e, i) => {
+    const cards = e.lk_cards ?? 0;
+    const conv = e.lk_conv ?? 0;
+    if(cards > 0 && conv > 0) idxA.push(i);
+    else if(cards >= 10 && conv === 0) idxC.push(i);
+    else idxB.push(i); // cards===0, или 1..9 карточек при конверсии 0%
+  });
+
+  const places = new Array(items.length).fill(1);
+  const avgOthers = (i) => (items[i].c1_place + items[i].ch_place + items[i].time_place + items[i].errors_place) / 4;
+
+  const pcA = idxA.map(i => items[i].lk_pc);
+  idxA.forEach(i => { places[i] = rankDesc(pcA, items[i].lk_pc); });
+
+  // Тиры Б и В: место = среднее место по остальным категориям (1 обращение, канал, время, ошибки),
+  // без дополнительного ранжирования внутри тира — просто это число, сдвинутое за пределы тира A/Б,
+  // чтобы тир A всегда был лучше тира Б, а тир Б всегда лучше тира В.
+  idxB.forEach(i => { places[i] = idxA.length + avgOthers(i); });
+  idxC.forEach(i => { places[i] = idxA.length + idxB.length + avgOthers(i); });
+
+  return places;
+}
+
+function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategories){
+  if(items.length === 0) return [];
+  const active = activeCategories || { c1:true, lk:true, ch:true, time:true, errors:true };
+  const c1pc = items.map(e=>e.c1_pc);
+  const chpc = items.map(e=>channelOf(e).pc);
+  const time = items.map(e=>e.time);
+  const err  = items.map(e=>e.errors_pct);
+
+  // первый проход: места, не зависящие от ЛК (нужны заранее для тиров B/C)
+  const pass1 = items.map(e => {
+    const ch = channelOf(e);
+    const c1_place = rankDesc(c1pc, e.c1_pc);
+    const ch_place = rankDesc(chpc, ch.pc);
+    const time_place = rankAscDense(time, e.time);
+    const errors_place = rankAscDense(err, e.errors_pct);
+    return {...e, ch_sum: ch.sum, ch_check: ch.check, ch_conv: ch.conv, ch_pc: ch.pc, ch_cards: ch.cards,
+                  c1_place, ch_place, time_place, errors_place};
+  });
+
+  let lkPlaces;
+  if(specialLK){
+    lkPlaces = computeTieredLkPlaces(pass1);
+  } else {
+    const lkpc = pass1.map(e => e.lk_pc);
+    lkPlaces = pass1.map(e => rankDesc(lkpc, e.lk_pc));
+  }
+
+  const scored = pass1.map((e, i) => {
+    const lk_place = lkPlaces[i];
+    const c1_score = e.c1_place*3, lk_score = lk_place*1.5, ch_score = e.ch_place*2.5;
+    const time_score = e.time_place*1, errors_score = e.errors_place*1;
+    const total_score = (active.c1?c1_score:0)+(active.lk?lk_score:0)+(active.ch?ch_score:0)+(active.time?time_score:0)+(active.errors?errors_score:0);
+    return {...e, lk_place, c1_score, lk_score, ch_score, time_score, errors_score, total_score};
+  });
+
+  return scored.map(e => {
+    const na = naFn(e);
+    if(na) return {...e, is_na: true, final_place: null};
+    let place = 1;
+    for(const o of scored){
+      if(naFn(o)) continue;
+      if(o.total_score < e.total_score) place++;
+      else if(o.total_score === e.total_score && o[tieField] > e[tieField]) place++;
+    }
+    return {...e, is_na: false, final_place: place};
+  });
+}
+
+function computeMainRating(groups, prevCoeffMap){
+  const out = [];
+  for(const g of groups){
+    const channel = groupChannels[g.supervisor] || "radio";
+    const active = g.isRegionUK ? { c1:true, lk:true, ch:false, time:true, errors:false } : undefined;
+    const scored = scoreSlice(g.employees, e => channelFields(e, channel), isNaMain, "c1_sum", true, active);
+    out.push(...scored.map(e => ({...e, supervisor: g.supervisor, channel, isRegionUK: !!g.isRegionUK, isPeaks: !!g.isPeaks})));
+  }
+  if(periodType === "week"){ assignTierCoefficients(out); assignSalary(out, prevCoeffMap); }
+  return out;
+}
+
+// ---------- ЛГ: распределение по группам-тирам с коэффициентом (только недельный отчёт) ----------
+const TIER_COEFFICIENTS = [1.4, 1.3, 1.2, 1.1, 1.05, 1, 0.9, 0.75, 0.5, 0.25];
+function tierSizes(n){
+  const base = Math.floor(n / 10), rem = n % 10;
+  return Array.from({length: 10}, (_, i) => base + (i < rem ? 1 : 0));
+}
+function assignTierCoefficients(rows){
+  const bySupervisor = {};
+  for(const r of rows){
+    (bySupervisor[r.supervisor] ||= []).push(r);
+  }
+  for(const supervisor in bySupervisor){
+    const evaluated = bySupervisor[supervisor]
+      .filter(r => !r.is_na)
+      .sort((a, b) => a.final_place - b.final_place);
+    const sizes = tierSizes(evaluated.length);
+    let idx = 0;
+    sizes.forEach((size, tierIdx) => {
+      for(let k = 0; k < size; k++){
+        if(!evaluated[idx]) return;
+        evaluated[idx].tier = tierIdx + 1;
+        evaluated[idx].coefficient = TIER_COEFFICIENTS[tierIdx];
+        idx++;
+      }
+    });
+  }
+}
+
+// ---------- ЗП (только недельный отчёт) ----------
+// ЗП = (Ставка + бонус075 + бонус2) × коэффициент ЛГ (или ×1, если коэффициента нет)
+const MONTHLY_BASE_RATE = 20000;
+function currentWeeksInMonth(){
+  return parseInt($("weeksInMonth").value, 10) || 4;
+}
+function assignSalary(rows, prevCoeffMap){
+  const weekBase = MONTHLY_BASE_RATE / currentWeeksInMonth();
+  for(const r of rows){
+    const bonus075 = r.bonus075 ?? 0;
+    const bonus2 = r.bonus2 ?? 0;
+    const prev = prevCoeffMap ? prevCoeffMap[r.fio] : null;
+    const coeff = (prev && prev.coefficient != null) ? prev.coefficient : 1.0;
+    r.salary = (weekBase + bonus075 + bonus2) * coeff;
+    r.salaryBaseUsed = weekBase;
+    r.salaryCoeffUsed = coeff;
+    r.salaryCoeffFromPrev = !!(prev && prev.coefficient != null);
+  }
+}
+
+function computeGlobalNovices(groups){
+  const all = [];
+  for(const g of groups){
+    const channel = groupChannels[g.supervisor] || "radio";
+    for(const e of g.employees){
+      if(NOVICE_STATUSES.includes(e.status)) all.push({...e, supervisor: g.supervisor, channel});
+    }
+  }
+  return scoreSlice(all, e => channelFields(e, e.channel), isNaNovice, "c1_sum", true);
+}
+
+function computeSupervisorRating(groups){
+  const groupStats = groups
+    .filter(g => !g.isRegionUK && !g.isPeaks)
+    .map(g => {
+    const channel = groupChannels[g.supervisor] || "radio";
+    const evaluated = g.employees.filter(e => !isNaMain(e));
+    const n = evaluated.length;
+    const avg = (field) => n ? evaluated.reduce((s,e)=>s+e[field],0)/n : 0;
+    const avgCh = (getter) => n ? evaluated.reduce((s,e)=>s+getter(channelFields(e,channel)),0)/n : 0;
+    const sumSafe = (field) => {
+      const vals = evaluated.map(e => e[field]).filter(v => v !== null && v !== undefined);
+      return vals.length ? vals.reduce((s,v)=>s+v,0) : null;
+    };
+    const sumChSafe = (getter) => {
+      const vals = evaluated.map(e => getter(channelFields(e,channel))).filter(v => v !== null && v !== undefined);
+      return vals.length ? vals.reduce((s,v)=>s+v,0) : null;
+    };
+    return {
+      supervisor: g.supervisor, channel, n_evaluated: n, n_total: g.employees.length,
+      c1_sum: sumSafe("c1_sum"), c1_check: avg("c1_check"), c1_conv: avg("c1_conv"), c1_pc: avg("c1_pc"),
+      c1_cards: sumSafe("c1_cards"),
+      lk_sum: sumSafe("lk_sum"), lk_check: avg("lk_check"), lk_conv: avg("lk_conv"), lk_pc: avg("lk_pc"),
+      lk_cards: sumSafe("lk_cards"),
+      ch_sum: sumChSafe(c=>c.sum), ch_check: avgCh(c=>c.check), ch_conv: avgCh(c=>c.conv), ch_pc: avgCh(c=>c.pc),
+      ch_cards: sumChSafe(c=>c.cards),
+      time: avg("time"), errors_pct: avg("errors_pct"),
+    };
+  }).filter(s => s.n_evaluated > 0);
+
+  return scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc}), () => false, "c1_sum");
+}
+
+// Пересборка "Рейтинга супервайзеров" из уже сохранённых в Supabase строк
+// (используется при просмотре ранее загруженного периода без повторного парсинга Excel)
+function computeSupervisorRatingFromRows(mainRows){
+  const bySupervisor = {};
+  for(const r of mainRows){
+    if(/операторы\s+без\s+супервизора/i.test(r.supervisor)) continue;
+    (bySupervisor[r.supervisor] ||= []).push(r);
+  }
+  const groupStats = Object.keys(bySupervisor).map(sup => {
+    const rows = bySupervisor[sup];
+    const evaluated = rows.filter(r => !r.is_na);
+    const n = evaluated.length;
+    if(!n) return null;
+    const avg = (f) => evaluated.reduce((s,r)=>s+(r[f]||0),0)/n;
+    const sum = (f) => evaluated.reduce((s,r)=>s+(r[f]||0),0);
+    return {
+      supervisor: sup, channel: evaluated[0].channel || "radio", n_evaluated: n, n_total: rows.length,
+      c1_sum: sum("c1_sum"), c1_check: avg("c1_check"), c1_conv: avg("c1_conv"), c1_pc: avg("c1_pc"), c1_cards: sum("c1_cards"),
+      lk_sum: sum("lk_sum"), lk_check: avg("lk_check"), lk_conv: avg("lk_conv"), lk_pc: avg("lk_pc"), lk_cards: sum("lk_cards"),
+      ch_sum: sum("ch_sum"), ch_check: avg("ch_check"), ch_conv: avg("ch_conv"), ch_pc: avg("ch_pc"), ch_cards: sum("ch_cards"),
+      time: avg("time"), errors_pct: avg("errors_pct"),
+    };
+  }).filter(Boolean);
+  return scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc}), () => false, "c1_sum");
+}
+
+function toDbRow(e, isNovice){
+  return {
+    supervisor: e.supervisor, fio: e.fio, status: e.status, is_novice: !!isNovice,
+    c1_sum: e.c1_sum, c1_check: e.c1_check, c1_conv: e.c1_conv, c1_per_contact: e.c1_pc,
+    c1_cards: e.c1_cards ?? null,
+    c1_place: e.c1_place, c1_score: e.c1_score,
+    lk_sum: e.lk_sum, lk_check: e.lk_check, lk_conv: e.lk_conv, lk_per_contact: e.lk_pc,
+    lk_cards: e.lk_cards ?? null,
+    lk_place: e.lk_place, lk_score: e.lk_score,
+    ch_sum: e.ch_sum, ch_check: e.ch_check, ch_conv: e.ch_conv, ch_per_contact: e.ch_pc,
+    ch_cards: e.ch_cards ?? null,
+    ch_place: e.ch_place, ch_score: e.ch_score,
+    time_per_contact: e.time, time_place: e.time_place, time_score: e.time_score,
+    errors_pct: e.errors_pct, errors_place: e.errors_place, errors_score: e.errors_score,
+    total_score: e.total_score, final_place: e.final_place, is_na: e.is_na,
+    tier: e.tier !== undefined ? e.tier : null,
+    coefficient: e.coefficient !== undefined ? e.coefficient : null,
+    bonus075: e.bonus075 ?? null,
+    bonus2: e.bonus2 ?? null,
+    salary: e.salary !== undefined ? e.salary : null,
+    channel: e.channel ?? null,
+  };
+}
+
+// ---------- Supabase: чтение истории для коэффициента и дельт ----------
+const PERIOD_PATTERN = {
+  week: /^\d+-\d+$/,
+  day: /^\d{4}-\d{2}-\d{2}$/,
+};
+async function sbGet(path){
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    headers: sbHeaders(),
+  });
+  if(!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+// Находит самую последнюю загруженную выгрузку того же типа (неделя/день), кроме текущей по имени файла
+// Превращает period_label в сравнимое число, чтобы сортировать по КАЛЕНДАРНОМУ
+// смыслу периода, а не по тому, когда файл фактически загрузили в базу.
+function periodSortValue(type, label){
+  if(type === "day") return label; // 'YYYY-MM-DD' — сортируется как строка корректно
+  const m = /^(\d+)-(\d+)$/.exec(label || "");
+  if(!m) return "";
+  return parseInt(m[1], 10) * 10 + parseInt(m[2], 10); // месяц*10 + неделя
+}
+function sortByCalendarDesc(uploads, type){
+  return [...uploads].sort((a, b) => {
+    const av = periodSortValue(type, a.period_label), bv = periodSortValue(type, b.period_label);
+    if(av !== bv) return av < bv ? 1 : -1; // сначала более поздний период
+    return new Date(b.uploaded_at) - new Date(a.uploaded_at); // при совпадении периода — свежая загрузка побеждает
+  });
+}
+
+async function fetchLatestUpload(type, excludeId){
+  const uploads = await sbGet(`kpi_uploads?select=id,period_label,uploaded_at&limit=500`);
+  const pattern = PERIOD_PATTERN[type];
+  const filtered = uploads.filter(u => pattern.test(u.period_label) && u.id !== excludeId);
+  const sorted = sortByCalendarDesc(filtered, type);
+  return sorted[0] || null;
+}
+// Все загрузки того же типа, по возрастанию календарного периода — для персональной истории
+async function fetchAllUploads(type){
+  const uploads = await sbGet(`kpi_uploads?select=id,period_label,uploaded_at&limit=500`);
+  const pattern = PERIOD_PATTERN[type];
+  const filtered = uploads.filter(u => pattern.test(u.period_label));
+  return sortByCalendarDesc(filtered, type).reverse(); // по возрастанию
+}
+async function fetchRatingsMap(uploadId){
+  const rows = await sbGet(`kpi_ratings?upload_id=eq.${uploadId}&select=fio,final_place,total_score,coefficient,is_na,is_novice`);
+  const map = {};
+  for(const r of rows){
+    // если человек встречается и в основном списке, и в новичках — предпочитаем основную (не новичков) запись
+    if(!map[r.fio] || map[r.fio].is_novice) map[r.fio] = r;
+  }
+  return map;
+}
+async function fetchFioHistory(fio, type, limit){
+  const uploads = await fetchAllUploads(type);
+  const recent = uploads.slice(-(limit || 12));
+  if(!recent.length) return [];
+  const ids = recent.map(u => u.id).join(",");
+  const rows = await sbGet(`kpi_ratings?fio=eq.${encodeURIComponent(fio)}&upload_id=in.(${ids})&select=upload_id,final_place,total_score,is_na,is_novice`);
+  const byUpload = {};
+  for(const r of rows){
+    if(!byUpload[r.upload_id] || byUpload[r.upload_id].is_novice) byUpload[r.upload_id] = r;
+  }
+  return recent
+    .map(u => ({ period_label: u.period_label, uploaded_at: u.uploaded_at, ...byUpload[u.id] }))
+    .filter(x => x.final_place !== undefined || x.is_na !== undefined);
+}
+function escapeHtml(s){
+  return (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// ---------- дельты между периодами ----------
+function assignDeltas(rows, prevMap){
+  for(const r of rows){
+    const prev = prevMap ? prevMap[r.fio] : null;
+    if(!prev || prev.is_na || r.is_na || prev.final_place == null){
+      r.deltaPlace = null; r.deltaScore = null;
+      continue;
+    }
+    r.deltaPlace = prev.final_place - r.final_place; // + значит стало лучше (место меньше)
+    r.deltaScore = (r.total_score != null && prev.total_score != null) ? (prev.total_score - r.total_score) : null;
+  }
+}
+function deltaBadge(delta){
+  if(delta === null || delta === undefined) return `<span style="color:var(--muted);">—</span>`;
+  if(delta === 0) return `<span style="color:var(--muted);">±0</span>`;
+  const up = delta > 0;
+  return `<span style="color:${up ? 'var(--good)' : 'var(--err)'};font-weight:700;">${up ? '▲' : '▼'} ${Math.abs(delta)}</span>`;
+}
+
+// ---------- step 2: compute & render ----------
+$("calcBtn").addEventListener("click", async () => {
+  if(!parsedGroups) return;
+  clearLog(uploadLogEl);
+  $("calcBtn").disabled = true;
+  try{
+    // 1) подтягиваем предыдущий период того же типа (для коэффициента ЗП и дельт)
+    let prevUpload = null, prevCoeffMap = null, prevMainMap = null, prevNoviceMap = null;
+    log("Ищу предыдущий период в Supabase…", null, uploadLogEl);
+    try{
+      prevUpload = await fetchLatestUpload(periodType);
+      if(prevUpload){
+        log(`Нашёл предыдущий период: ${prevUpload.period_label}`, "ok", uploadLogEl);
+        const map = await fetchRatingsMap(prevUpload.id);
+        prevCoeffMap = map; prevMainMap = map; prevNoviceMap = map;
+      } else {
+        log("Предыдущих периодов в базе не нашлось — коэффициент будет 1.0, дельты не покажутся.", "warn", uploadLogEl);
+      }
+    } catch(err){
+      log("Не удалось загрузить предыдущий период (" + err.message + ") — считаю без него.", "warn", uploadLogEl);
+    }
+
+    const mainRated = computeMainRating(parsedGroups, prevCoeffMap);
+    const noviceRated = computeGlobalNovices(parsedGroups);
+    const supervisorRated = computeSupervisorRating(parsedGroups);
+
+    assignDeltas(mainRated, prevMainMap);
+    assignDeltas(noviceRated, prevNoviceMap);
+
+    currentRows = mainRated;
+    currentNoviceRows = noviceRated;
+    currentSupervisorRows = supervisorRated;
+
+    $("channelPanel").style.display = "none";
+    renderResults();
+  } catch(err){
+    log("Ошибка расчёта: " + err.message, "err", uploadLogEl);
+  } finally {
+    $("calcBtn").disabled = false;
+  }
+});
+
+function fmt(v){
+  if(v === null || v === undefined) return "";
+  if(typeof v === "number") return Number.isInteger(v) ? v : v.toFixed(2).replace(/\.00$/,"");
+  return v;
+}
+function fmtPct(v){
+  const s = fmt(v);
+  return s === "" ? "" : s + "%";
+}
+function fmtCards(v){
+  return (v === null || v === undefined) ? "—" : fmt(v);
+}
+function fmtTime(minutes){
+  if(minutes === null || minutes === undefined) return "";
+  const totalSeconds = Math.round(minutes * 60);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(h)}:${pad(m)}:${pad(s)}`;
+}
+// Градация по "сумма с контакта" (1 обращение) для новичков
+const CONV_BANDS = [
+  { max: 1608, label: "Прекращение сотрудничества", color: "e11d48" },
+  { max: 2144, label: "Предупреждение + 1 неделя",   color: "f59e0b" },
+  { max: 2680, label: "Норма 1-й недели",              color: "eab308" },
+  { max: 3860, label: "Сверх нормы",                    color: "22c55e" },
+  { max: Infinity, label: "Мы искали Вас!",             color: "16a34a" },
+];
+function convBand(pc){
+  const v = pc ?? 0;
+  return CONV_BANDS.find(b => v < b.max) || CONV_BANDS[CONV_BANDS.length - 1];
+}
+function convBadge(pc){
+  const b = convBand(pc);
+  const fg = textColorFor(b.color);
+  return `<span class="rank-badge" style="background:#${b.color};color:${fg};white-space:normal;">${b.label}</span>`;
+}
+function cleanSupervisorName(name){
+  return (name || "").replace(/^Супервайзер[.\-–\s]+/i, "").replace(/^Супервизор\s*/i, "").trim();
+}
+function displayGroupName(supervisor){
+  if(/операторы\s+без\s+супервизора\s*\[Пики\]/i.test(supervisor)) return "Выходы на Пики";
+  if(/операторы\s+без\s+супервизора/i.test(supervisor)) return "Регион УК";
+  return cleanSupervisorName(supervisor);
+}
+function isSpecialGroup(supervisor){
+  return /операторы\s+без\s+супервизора/i.test(supervisor || "");
+}
+// Обычные группы по алфавиту, "Регион УК" и "Выходы на Пики" — всегда в самом конце
+function compareGroupNames(a, b){
+  const aSpecial = isSpecialGroup(a), bSpecial = isSpecialGroup(b);
+  if(aSpecial !== bSpecial) return aSpecial ? 1 : -1;
+  return displayGroupName(a).localeCompare(displayGroupName(b), "ru");
+}
+function sortByPlace(rows){
+  return [...rows].sort((a,b)=>{
+    if(a.is_na !== b.is_na) return a.is_na ? 1 : -1;
+    return (a.final_place||999) - (b.final_place||999);
+  });
+}
+
+// ---------- rank color gradient (green = best place, red = worst) ----------
+function hslToHex(h, s, l){
+  s /= 100; l /= 100;
+  const k = n => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  const toHex = x => Math.round(255 * x).toString(16).padStart(2, "0");
+  return `${toHex(f(0))}${toHex(f(8))}${toHex(f(4))}`;
+}
+function rankColorHex(value, min, max){
+  if(value === null || value === undefined || min === max) return null;
+  const t = (value - min) / (max - min); // 0 = best(min), 1 = worst(max)
+  const hue = 142 - 142 * t; // 142=green -> 0=red
+  return hslToHex(hue, 72, 46);
+}
+function textColorFor(hex){
+  if(!hex) return "var(--text)";
+  const r = parseInt(hex.slice(0,2),16), g = parseInt(hex.slice(2,4),16), b = parseInt(hex.slice(4,6),16);
+  const lum = (0.299*r + 0.587*g + 0.114*b) / 255;
+  return lum > 0.6 ? "#161a2e" : "#ffffff";
+}
+function gradientMap(rows, field){
+  const vals = rows.map(r => r[field]).filter(v => v !== null && v !== undefined);
+  if(!vals.length) return () => null;
+  const min = Math.min(...vals), max = Math.max(...vals);
+  return (v) => rankColorHex(v, min, max);
+}
+function rankBadge(value, hex, extraText){
+  if(value === null || value === undefined) return extraText || "";
+  const bg = hex ? `#${hex}` : "var(--panel-2)";
+  const fg = hex ? textColorFor(hex) : "var(--muted)";
+  return `<span class="rank-badge" style="background:${bg};color:${fg};">${value}</span>`;
+}
+
+function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showDelta){
+  return `
+    <thead>
+      <tr class="cat">
+        <th class="col-fio" rowspan="2">ФИО</th>
+        <th class="col-status block-end" rowspan="2">Статус</th>
+        ${extraCol ? `<th class="col-group block-end" rowspan="2">Группа</th>` : ``}
+        <th colspan="6" class="block-end">1 обращение</th>
+        <th colspan="6" class="block-end">ЛК</th>
+        <th colspan="6" class="block-end">${channelLabel || "Радио+ТВ / Интернет"}</th>
+        <th colspan="2" class="block-end">Время/контакт</th>
+        <th colspan="2" class="block-end">% ошибок</th>
+        <th rowspan="2">Сумма баллов</th>
+        <th rowspan="2">Место</th>
+        ${showDelta ? `<th rowspan="2" class="${showTier ? '' : 'block-end'}">Δ к пред. периоду</th>` : ``}
+        ${showTier ? `<th rowspan="2">ЛГ</th><th rowspan="2">Коэфф. (эта неделя)</th><th rowspan="2">Коэфф. пред. недели (в ЗП)</th><th rowspan="2">0.75% за офор.</th><th rowspan="2">2% за дост.</th><th rowspan="2">ЗП</th>` : ``}
+        ${showConvStatus ? `<th rowspan="2">Статус по сумме с контакта</th>` : ``}
+      </tr>
+      <tr class="sub">
+        <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
+        <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
+        <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
+        <th>чч:мм:сс</th><th class="block-end">место</th>
+        <th>%</th><th class="block-end">место</th>
+      </tr>
+    </thead>`;
+}
+
+function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvStatus, showDelta){
+  const sorted = sortByPlace(rows);
+  const wrap = document.createElement("div");
+  wrap.className = "subtable-wrap";
+  const table = document.createElement("table");
+  table.className = "detail";
+  table.innerHTML = detailTableHead(showGroupCol, showTier, channelLabel, showConvStatus, showDelta) + `<tbody></tbody>`;
+  const tbody = table.querySelector("tbody");
+
+  const c1Map = gradientMap(rows, "c1_place");
+  const lkMap = gradientMap(rows, "lk_place");
+  const chMap = gradientMap(rows, "ch_place");
+  const timeMap = gradientMap(rows, "time_place");
+  const errMap = gradientMap(rows, "errors_place");
+  const finalRows = rows.filter(r => !r.is_na);
+  const finalMap = gradientMap(finalRows, "final_place");
+
+  for(const r of sorted){
+    const tr = document.createElement("tr");
+    if(r.is_na) tr.className = "na";
+    tr.innerHTML = `
+      <td class="col-fio clickable-fio" data-fio="${escapeHtml(r.fio)}" data-period-type="${periodType}">${r.fio}</td>
+      <td class="col-status block-end">${r.status}</td>
+      ${showGroupCol ? `<td class="col-group block-end">${displayGroupName(r.supervisor)}</td>` : ``}
+      <td>${fmtCards(r.c1_cards)}</td><td>${fmt(r.c1_sum)}</td><td>${fmt(r.c1_check)}</td><td>${fmtPct(r.c1_conv)}</td><td>${fmt(r.c1_pc)}</td><td class="block-end">${rankBadge(r.c1_place, c1Map(r.c1_place))}</td>
+      <td>${fmtCards(r.lk_cards)}</td><td>${fmt(r.lk_sum)}</td><td>${fmt(r.lk_check)}</td><td>${fmtPct(r.lk_conv)}</td><td>${fmt(r.lk_pc)}</td><td class="block-end">${rankBadge(r.lk_place, lkMap(r.lk_place))}</td>
+      <td>${fmtCards(r.ch_cards)}</td><td>${fmt(r.ch_sum)}</td><td>${fmt(r.ch_check)}</td><td>${fmtPct(r.ch_conv)}</td><td>${fmt(r.ch_pc)}</td><td class="block-end">${rankBadge(r.ch_place, chMap(r.ch_place))}</td>
+      <td>${fmtTime(r.time)}</td><td class="block-end">${rankBadge(r.time_place, timeMap(r.time_place))}</td>
+      <td>${fmtPct(r.errors_pct)}</td><td class="block-end">${rankBadge(r.errors_place, errMap(r.errors_place))}</td>
+      <td>${fmt(r.total_score)}</td>
+      <td class="place-cell">${r.is_na ? "Н/О" : rankBadge(r.final_place, finalMap(r.final_place))}</td>
+      ${showDelta ? `<td class="${showTier ? '' : 'block-end'}">${deltaBadge(r.deltaPlace)}</td>` : ``}
+      ${showTier ? `<td>${r.tier ?? ""}</td><td style="font-weight:700;">${r.coefficient ?? ""}</td><td>${r.salaryCoeffUsed ?? ""}${r.salaryCoeffFromPrev ? "" : " (по умолч.)"}</td><td>${fmtCards(r.bonus075)}</td><td>${fmtCards(r.bonus2)}</td><td style="font-weight:800;color:var(--good);">${fmt(r.salary)}</td>` : ``}
+      ${showConvStatus ? `<td>${convBadge(r.c1_pc)}</td>` : ``}
+    `;
+    tbody.appendChild(tr);
+  }
+  wrap.appendChild(table);
+  return wrap;
+}
+
+let allGroupNames = [];
+let selectedGroup = null;
+let searchTerm = "";
+
+function periodDisplayLabel(){
+  if(periodType === "day"){
+    const v = $("periodDate").value; // YYYY-MM-DD
+    if(!v) return "";
+    const [y, m, d] = v.split("-");
+    return `${d}.${m}.${y}`;
+  }
+  const m = parseInt($("periodMonth").value, 10);
+  const w = $("periodWeek").value;
+  return `${MONTHS[m-1]}, неделя ${w}`;
+}
+
+function renderResults(){
+  $("resultsPanel").style.display = "block";
+  $("wrap").classList.add("wide");
+  allGroupNames = [...new Set(currentRows.map(r=>r.supervisor))].sort(compareGroupNames);
+  selectedGroup = null; searchTerm = ""; $("searchBox").value = "";
+
+  $("periodBadge").textContent = periodDisplayLabel();
+
+  $("stats").innerHTML = `
+    <div class="stat"><div class="n">${currentRows.length}</div><div class="l">строк в группах</div></div>
+    <div class="stat"><div class="n">${allGroupNames.length}</div><div class="l">групп</div></div>
+    <div class="stat"><div class="n">${currentNoviceRows.length}</div><div class="l">новичков</div></div>
+    <div class="stat"><div class="n">${currentSupervisorRows.length}</div><div class="l">супервайзеров в рейтинге</div></div>
+  `;
+
+  renderGroupButtons();
+  renderGroups();
+  renderNovices();
+  renderSupervisors();
+  renderDynamicsTab();
+  $("resultsPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function renderGroupButtons(){
+  const box = $("groupButtons");
+  box.innerHTML = "";
+  const allBtn = document.createElement("button");
+  allBtn.className = "gbtn" + (selectedGroup === null ? " active" : "");
+  allBtn.textContent = "Все группы";
+  allBtn.onclick = () => { selectedGroup = null; renderGroupButtons(); renderGroups(); };
+  box.appendChild(allBtn);
+  for(const gname of allGroupNames){
+    const btn = document.createElement("button");
+    btn.className = "gbtn" + (selectedGroup === gname ? " active" : "");
+    btn.textContent = displayGroupName(gname);
+    btn.onclick = () => { selectedGroup = (selectedGroup === gname ? null : gname); renderGroupButtons(); renderGroups(); };
+    box.appendChild(btn);
+  }
+}
+
+$("searchBox").addEventListener("input", (e) => {
+  searchTerm = e.target.value.trim().toLowerCase();
+  renderGroups();
+});
+
+function renderGroups(){
+  const container = $("groupsContainer");
+  container.innerHTML = "";
+  const groupsToShow = selectedGroup ? [selectedGroup] : allGroupNames;
+  for(const gname of groupsToShow){
+    let rows = currentRows.filter(r => r.supervisor === gname);
+    if(searchTerm) rows = rows.filter(r => r.fio.toLowerCase().includes(searchTerm));
+    if(!rows.length) continue;
+    const channel = groupChannels[gname];
+    const isRegionUK = rows[0] && rows[0].isRegionUK;
+    const block = document.createElement("div");
+    block.className = "group-block";
+    block.innerHTML = `<div class="group-title">${displayGroupName(gname)}<span class="count">${rows.length} чел.</span>${isRegionUK ? '<span class="chan-tag">только 1 обращение + ЛК + время</span>' : `<span class="chan-tag">${channel==='inet'?'ИНТЕРНЕТ':'РАДИО+ТВ'}</span>`}</div>`;
+    block.appendChild(buildDetailTable(rows, false, periodType === "week", channel === "inet" ? "Интернет" : "ТВ+Радио", false, true));
+    container.appendChild(block);
+  }
+  if(!container.children.length){
+    container.innerHTML = `<div style="color:var(--muted);padding:20px 0;">Ничего не найдено.</div>`;
+  }
+}
+
+function renderNovices(){
+  const container = $("noviceContainer");
+  container.innerHTML = "";
+  if(!currentNoviceRows.length){
+    container.innerHTML = `<div style="color:var(--muted);padding:10px 0;">Новичков в файле нет.</div>`;
+    return;
+  }
+  container.appendChild(buildDetailTable(currentNoviceRows, true, false, null, true, true));
+}
+
+function renderSupervisors(){
+  const container = $("supervisorContainer");
+  container.innerHTML = "";
+  const sorted = sortByPlace(currentSupervisorRows);
+  const wrap = document.createElement("div");
+  wrap.className = "subtable-wrap";
+  const table = document.createElement("table");
+  table.className = "detail";
+  table.innerHTML = `
+    <thead>
+      <tr class="cat">
+        <th class="col-fio" rowspan="2" style="min-width:260px;width:260px;">Супервайзер</th>
+        <th rowspan="2">Канал</th>
+        <th rowspan="2" class="block-end">Оценено</th>
+        <th colspan="6" class="block-end">1 обращение</th>
+        <th colspan="6" class="block-end">ЛК</th>
+        <th colspan="6" class="block-end">Радио+ТВ / Интернет</th>
+        <th colspan="2" class="block-end">Время/контакт</th>
+        <th colspan="2" class="block-end">% ошибок</th>
+        <th rowspan="2">Сумма баллов</th>
+        <th rowspan="2">Место</th>
+      </tr>
+      <tr class="sub">
+        <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
+        <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
+        <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
+        <th>чч:мм:сс</th><th class="block-end">место</th>
+        <th>%</th><th class="block-end">место</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  `;
+  const tbody = table.querySelector("tbody");
+  const c1Map = gradientMap(currentSupervisorRows, "c1_place");
+  const lkMap = gradientMap(currentSupervisorRows, "lk_place");
+  const chMap = gradientMap(currentSupervisorRows, "ch_place");
+  const timeMap = gradientMap(currentSupervisorRows, "time_place");
+  const errMap = gradientMap(currentSupervisorRows, "errors_place");
+  const finalMap = gradientMap(currentSupervisorRows, "final_place");
+  for(const r of sorted){
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="col-fio">${cleanSupervisorName(r.supervisor)}</td>
+      <td>${r.channel === "inet" ? "Интернет" : "Радио+ТВ"}</td>
+      <td class="block-end">${r.n_evaluated}/${r.n_total}</td>
+      <td>${fmtCards(r.c1_cards)}</td><td>${fmt(r.c1_sum)}</td><td>${fmt(r.c1_check)}</td><td>${fmtPct(r.c1_conv)}</td><td>${fmt(r.c1_pc)}</td><td class="block-end">${rankBadge(r.c1_place, c1Map(r.c1_place))}</td>
+      <td>${fmtCards(r.lk_cards)}</td><td>${fmt(r.lk_sum)}</td><td>${fmt(r.lk_check)}</td><td>${fmtPct(r.lk_conv)}</td><td>${fmt(r.lk_pc)}</td><td class="block-end">${rankBadge(r.lk_place, lkMap(r.lk_place))}</td>
+      <td>${fmtCards(r.ch_cards)}</td><td>${fmt(r.ch_sum)}</td><td>${fmt(r.ch_check)}</td><td>${fmtPct(r.ch_conv)}</td><td>${fmt(r.ch_pc)}</td><td class="block-end">${rankBadge(r.ch_place, chMap(r.ch_place))}</td>
+      <td>${fmtTime(r.time)}</td><td class="block-end">${rankBadge(r.time_place, timeMap(r.time_place))}</td>
+      <td>${fmtPct(r.errors_pct)}</td><td class="block-end">${rankBadge(r.errors_place, errMap(r.errors_place))}</td>
+      <td>${fmt(r.total_score)}</td>
+      <td class="place-cell">${rankBadge(r.final_place, finalMap(r.final_place))}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+  wrap.appendChild(table);
+  container.appendChild(wrap);
+}
+
+// ---------- вкладка "Динамика" ----------
+let dynResultAll = [];
+let dynResultGroup = null;
+let dynResultSearch = "";
+
+function renderDynamicsTab(){
+  dynResultAll = [...currentRows, ...currentNoviceRows].filter(r => r.deltaPlace !== null && r.deltaPlace !== undefined);
+  dynResultGroup = null; dynResultSearch = "";
+  $("dynResultSearchBox").value = "";
+  renderDynGroupButtons();
+  renderDynResultTable();
+}
+
+function renderDynGroupButtons(){
+  const box = $("dynResultGroupButtons");
+  box.innerHTML = "";
+  const groups = [...new Set(dynResultAll.map(r => r.supervisor))];
+  const allBtn = document.createElement("button");
+  allBtn.className = "gbtn" + (dynResultGroup === null ? " active" : "");
+  allBtn.textContent = "Все группы";
+  allBtn.onclick = () => { dynResultGroup = null; renderDynGroupButtons(); renderDynResultTable(); };
+  box.appendChild(allBtn);
+  for(const g of groups){
+    const btn = document.createElement("button");
+    btn.className = "gbtn" + (dynResultGroup === g ? " active" : "");
+    btn.textContent = displayGroupName(g);
+    btn.onclick = () => { dynResultGroup = (dynResultGroup === g ? null : g); renderDynGroupButtons(); renderDynResultTable(); };
+    box.appendChild(btn);
+  }
+}
+
+function renderDynResultTable(){
+  const container = $("dynamicsContainer");
+  container.innerHTML = "";
+
+  if(!dynResultAll.length){
+    container.innerHTML = `<div class="history-empty">Нет данных для сравнения — либо это первый период в базе, либо предыдущий период не найден. Как только будет как минимум два периода одного типа (неделя/неделя или день/день), здесь появится динамика.</div>`;
+    return;
+  }
+  let rows = dynResultAll;
+  if(dynResultGroup) rows = rows.filter(r => r.supervisor === dynResultGroup);
+  if(dynResultSearch) rows = rows.filter(r => r.fio.toLowerCase().includes(dynResultSearch));
+  if(!rows.length){
+    container.innerHTML = `<div class="history-empty">Ничего не найдено по этому фильтру.</div>`;
+    return;
+  }
+  const sorted = [...rows].sort((a, b) => Math.abs(b.deltaPlace) - Math.abs(a.deltaPlace));
+
+  const table = document.createElement("table");
+  table.className = "dyn-table";
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th>ФИО</th><th>Группа</th><th>Место сейчас</th><th>Место было</th><th>Δ место</th><th>Балл сейчас</th><th>Δ балл</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  `;
+  const tbody = table.querySelector("tbody");
+  for(const r of sorted){
+    const tr = document.createElement("tr");
+    const prevPlace = r.final_place + r.deltaPlace;
+    tr.innerHTML = `
+      <td class="clickable-fio" data-fio="${escapeHtml(r.fio)}" data-period-type="${periodType}" style="font-family:var(--sans);font-weight:600;">${r.fio}</td>
+      <td style="font-family:var(--sans);">${displayGroupName(r.supervisor)}</td>
+      <td>${r.final_place}</td>
+      <td>${prevPlace}</td>
+      <td>${deltaBadge(r.deltaPlace)}</td>
+      <td>${fmt(r.total_score)}</td>
+      <td>${deltaBadge(r.deltaScore)}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+  const wrap = document.createElement("div");
+  wrap.className = "subtable-wrap";
+  wrap.appendChild(table);
+  container.appendChild(wrap);
+}
+$("dynResultSearchBox").addEventListener("input", (e) => {
+  dynResultSearch = e.target.value.trim().toLowerCase();
+  renderDynResultTable();
+});
+
+// ---------- персональная история (клик по ФИО) ----------
+function buildSparklineSVG(history){
+  const pts = history.filter(h => h.final_place != null && !h.is_na);
+  if(pts.length < 2){
+    return `<div class="history-empty">Недостаточно данных для графика (нужно минимум 2 периода с реальным местом).</div>`;
+  }
+  const W = 560, H = 160, PAD = 28;
+  const places = pts.map(p => p.final_place);
+  const minP = Math.min(...places), maxP = Math.max(...places, minP + 1);
+  const x = (i) => PAD + (i * (W - 2*PAD)) / (pts.length - 1);
+  const y = (v) => PAD + ((v - minP) / (maxP - minP)) * (H - 2*PAD); // меньше место (лучше) -> выше по Y? инвертируем ниже
+  const yInv = (v) => H - PAD - ((v - minP) / (maxP - minP)) * (H - 2*PAD); // место меньше = выше на графике (лучше)
+
+  const linePoints = pts.map((p, i) => `${x(i)},${yInv(p.final_place)}`).join(" ");
+  const dots = pts.map((p, i) => `<circle cx="${x(i)}" cy="${yInv(p.final_place)}" r="4" fill="#4f46e5" stroke="#fff" stroke-width="1.5"/>`).join("");
+  const labels = pts.map((p, i) => `<text x="${x(i)}" y="${H-6}" font-size="10" fill="#6b7189" text-anchor="middle" font-family="JetBrains Mono, monospace">${p.period_label}</text>`).join("");
+  const valueLabels = pts.map((p, i) => `<text x="${x(i)}" y="${yInv(p.final_place)-10}" font-size="11" fill="#161a2e" text-anchor="middle" font-weight="700" font-family="JetBrains Mono, monospace">${p.final_place}</text>`).join("");
+
+  return `
+    <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" style="overflow:visible;">
+      <polyline points="${linePoints}" fill="none" stroke="#4f46e5" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+      ${dots}
+      ${valueLabels}
+      ${labels}
+    </svg>
+    <div style="text-align:center;color:var(--muted);font-size:11.5px;margin-top:2px;">чем выше точка — тем лучше место (меньше число)</div>
+  `;
+}
+
+async function openHistoryModal(fio, typeOverride){
+  const type = typeOverride || periodType;
+  $("historyFio").textContent = fio;
+  $("historySub").textContent = `История по типу периода: ${type === "week" ? "недели" : "дни"}`;
+  $("historyBody").innerHTML = `<div class="history-empty">Загружаю историю из Supabase…</div>`;
+  $("historyOverlay").style.display = "flex";
+  try{
+    const history = await fetchFioHistory(fio, type, 16);
+    if(!history.length){
+      $("historyBody").innerHTML = `<div class="history-empty">История не найдена — либо это первое появление в базе, либо ФИО отличается от прошлых периодов.</div>`;
+      return;
+    }
+    const chart = buildSparklineSVG(history);
+    const rows = history.map(h => `
+      <tr>
+        <td>${h.period_label}</td>
+        <td>${h.is_na ? "Н/О" : (h.final_place ?? "—")}</td>
+        <td>${h.total_score ?? "—"}</td>
+      </tr>
+    `).join("");
+    $("historyBody").innerHTML = `
+      ${chart}
+      <table class="history-table">
+        <thead><tr><th>Период</th><th>Место</th><th>Баллы</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  } catch(err){
+    $("historyBody").innerHTML = `<div class="history-empty">Ошибка загрузки: ${err.message}</div>`;
+  }
+}
+
+document.addEventListener("click", (e) => {
+  const el = e.target.closest(".clickable-fio");
+  if(el) openHistoryModal(el.dataset.fio, el.dataset.periodType || periodType);
+});
+$("historyClose").addEventListener("click", () => { $("historyOverlay").style.display = "none"; });
+$("historyOverlay").addEventListener("click", (e) => {
+  if(e.target.id === "historyOverlay") $("historyOverlay").style.display = "none";
+});
+
+// ---------- вход/выход ----------
+$("loginBtn").addEventListener("click", async () => {
+  const email = $("loginEmail").value.trim();
+  const password = $("loginPassword").value;
+  clearLog($("loginLog"));
+  if(!email || !password){ log("Введите email и пароль.", "warn", $("loginLog")); return; }
+  $("loginBtn").disabled = true;
+  log("Вхожу…", null, $("loginLog"));
+  try{
+    await signIn(email, password);
+    log("Успешно.", "ok", $("loginLog"));
+    onLoggedIn();
+  } catch(err){
+    log(err.message, "err", $("loginLog"));
+  } finally {
+    $("loginBtn").disabled = false;
+  }
+});
+$("logoutBtn").addEventListener("click", signOut);
+
+// ---------- отдельная панель "Динамика" (не требует загрузки файла) ----------
+let dynStandaloneAll = [];
+let dynStandaloneType = "week";
+let dynStandaloneGroup = null;
+let dynStandaloneSearch = "";
+
+async function loadStandaloneDynamics(){
+  const vType = $("dynTypeToggle").querySelector(".active").dataset.type;
+  dynStandaloneType = vType;
+  const logEl3 = $("standaloneDynLog");
+  const container = $("standaloneDynContainer");
+  clearLog(logEl3);
+  container.innerHTML = "";
+  log("Ищу последние два периода в Supabase…", null, logEl3);
+  try{
+    const latest = await fetchLatestUpload(vType);
+    if(!latest){
+      log("Периодов такого типа в базе ещё нет.", "warn", logEl3);
+      return;
+    }
+    const prev = await fetchLatestUpload(vType, latest.id);
+    if(!prev){
+      log(`Есть только один период (${latest.period_label}) — сравнивать не с чем.`, "warn", logEl3);
+      return;
+    }
+    log(`Сравниваю ${prev.period_label} → ${latest.period_label}`, "ok", logEl3);
+
+    const [latestRaw, prevRaw] = await Promise.all([
+      sbGet(`kpi_ratings?upload_id=eq.${latest.id}&select=*`),
+      sbGet(`kpi_ratings?upload_id=eq.${prev.id}&select=fio,final_place,total_score,is_na`),
+    ]);
+    const rows = latestRaw.map(dbRowToDisplayRow);
+    const prevMap = {};
+    for(const r of prevRaw) prevMap[r.fio] = r;
+    assignDeltas(rows, prevMap);
+
+    dynStandaloneAll = rows.filter(r => r.deltaPlace !== null && r.deltaPlace !== undefined);
+    dynStandaloneGroup = null; dynStandaloneSearch = "";
+    $("dynSearchBox").value = "";
+    if(!dynStandaloneAll.length){
+      log("Нет ни одного совпадения по ФИО между периодами — нечего сравнивать.", "warn", logEl3);
+      return;
+    }
+    clearLog(logEl3);
+    renderDynGroupButtonsStandalone();
+    renderDynStandaloneTable();
+  } catch(err){
+    log("Ошибка: " + err.message, "err", logEl3);
+  }
+}
+
+function renderDynGroupButtonsStandalone(){
+  const box = $("dynGroupButtons");
+  box.innerHTML = "";
+  const groups = [...new Set(dynStandaloneAll.map(r => r.supervisor))];
+  const allBtn = document.createElement("button");
+  allBtn.className = "gbtn" + (dynStandaloneGroup === null ? " active" : "");
+  allBtn.textContent = "Все группы";
+  allBtn.onclick = () => { dynStandaloneGroup = null; renderDynGroupButtonsStandalone(); renderDynStandaloneTable(); };
+  box.appendChild(allBtn);
+  for(const g of groups){
+    const btn = document.createElement("button");
+    btn.className = "gbtn" + (dynStandaloneGroup === g ? " active" : "");
+    btn.textContent = displayGroupName(g);
+    btn.onclick = () => { dynStandaloneGroup = (dynStandaloneGroup === g ? null : g); renderDynGroupButtonsStandalone(); renderDynStandaloneTable(); };
+    box.appendChild(btn);
+  }
+}
+
+function renderDynStandaloneTable(){
+  const container = $("standaloneDynContainer");
+  container.innerHTML = "";
+  let rows = dynStandaloneAll;
+  if(dynStandaloneGroup) rows = rows.filter(r => r.supervisor === dynStandaloneGroup);
+  if(dynStandaloneSearch) rows = rows.filter(r => r.fio.toLowerCase().includes(dynStandaloneSearch));
+  if(!rows.length){
+    container.innerHTML = `<div class="history-empty">Ничего не найдено по этому фильтру.</div>`;
+    return;
+  }
+  const sorted = [...rows].sort((a, b) => Math.abs(b.deltaPlace) - Math.abs(a.deltaPlace));
+  const table = document.createElement("table");
+  table.className = "dyn-table";
+  table.innerHTML = `
+    <thead>
+      <tr><th>ФИО</th><th>Группа</th><th>Место сейчас</th><th>Место было</th><th>Δ место</th><th>Балл сейчас</th><th>Δ балл</th></tr>
+    </thead>
+    <tbody></tbody>
+  `;
+  const tbody = table.querySelector("tbody");
+  for(const r of sorted){
+    const prevPlace = r.final_place + r.deltaPlace;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="clickable-fio" data-fio="${escapeHtml(r.fio)}" data-period-type="${dynStandaloneType}" style="font-family:var(--sans);font-weight:600;">${r.fio}</td>
+      <td style="font-family:var(--sans);">${displayGroupName(r.supervisor)}</td>
+      <td>${r.final_place ?? "Н/О"}</td>
+      <td>${prevPlace}</td>
+      <td>${deltaBadge(r.deltaPlace)}</td>
+      <td>${fmt(r.total_score)}</td>
+      <td>${deltaBadge(r.deltaScore)}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+  const wrap = document.createElement("div");
+  wrap.className = "subtable-wrap";
+  wrap.appendChild(table);
+  container.appendChild(wrap);
+}
+$("dynSearchBox").addEventListener("input", (e) => {
+  dynStandaloneSearch = e.target.value.trim().toLowerCase();
+  renderDynStandaloneTable();
+});
+
+function closeAllTopPanels(){
+  $("requisitesPanel").style.display = "none";
+  $("payrollPanel").style.display = "none";
+  $("dashboardsPanel").style.display = "none";
+  $("standaloneDynamicsPanel").style.display = "none";
+}
+
+$("openDynamicsBtn").addEventListener("click", () => {
+  closeAllTopPanels();
+  $("standaloneDynamicsPanel").style.display = "block";
+  $("standaloneDynamicsPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+  loadStandaloneDynamics();
+});
+$("closeDynamicsBtn").addEventListener("click", () => {
+  $("standaloneDynamicsPanel").style.display = "none";
+});
+$("dynTypeToggle").querySelectorAll("button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    $("dynTypeToggle").querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
+    loadStandaloneDynamics();
+  });
+});
+
+// ---------- Дашборды ----------
+function statCard(n, l){ return `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`; }
+function trendNote(delta, unit, lowerIsBetter){
+  if(delta === null || delta === undefined || isNaN(delta)) return "";
+  if(Math.abs(delta) < 0.005) return `<span style="color:var(--muted);">±0${unit||""} к пред. периоду</span>`;
+  const increased = delta > 0;
+  const isGood = lowerIsBetter ? !increased : increased;
+  return `<span style="color:${isGood?'var(--good)':'var(--err)'};font-weight:600;">${increased?'▲':'▼'} ${Math.abs(delta).toFixed(2)}${unit||""} к пред. периоду</span>`;
+}
+function trendCell(delta, unit, lowerIsBetter){
+  if(delta === null || delta === undefined || isNaN(delta)) return `<span style="color:var(--muted);">—</span>`;
+  if(Math.abs(delta) < 0.005) return `<span style="color:var(--muted);">±0</span>`;
+  const increased = delta > 0;
+  const isGood = lowerIsBetter ? !increased : increased;
+  return `<span style="color:${isGood?'var(--good)':'var(--err)'};font-weight:700;">${increased?'▲':'▼'}${Math.abs(delta).toFixed(0)}${unit||""}</span>`;
+}
+
+let dashUploadsDesc = []; // кэш периодов текущего типа, от новых к старым
+
+async function populateDashPeriodSelect(){
+  const vType = $("dashTypeToggle").querySelector(".active").dataset.type;
+  const uploads = await fetchAllUploads(vType); // по возрастанию
+  dashUploadsDesc = [...uploads].reverse(); // от новых к старым
+  const sel = $("dashPeriodSelect");
+  sel.innerHTML = "";
+  dashUploadsDesc.forEach(u => {
+    const opt = document.createElement("option");
+    opt.value = u.id;
+    const when = u.uploaded_at ? new Date(u.uploaded_at).toLocaleDateString("ru") : "";
+    opt.textContent = `${u.period_label}${when ? " · загружен " + when : ""}`;
+    sel.appendChild(opt);
+  });
+  return dashUploadsDesc;
+}
+
+async function loadDashboardData(){
+  const vType = $("dashTypeToggle").querySelector(".active").dataset.type;
+  if(!dashUploadsDesc.length) return null;
+  const selectedId = $("dashPeriodSelect").value;
+  const idx = dashUploadsDesc.findIndex(u => u.id === selectedId);
+  const latest = dashUploadsDesc[idx] || dashUploadsDesc[0];
+  const prev = dashUploadsDesc[idx + 1] || null;
+  const latestRows = await sbGet(`kpi_ratings?upload_id=eq.${latest.id}&select=*`);
+  let prevRows = [];
+  if(prev){
+    prevRows = await sbGet(`kpi_ratings?upload_id=eq.${prev.id}&select=*`);
+  }
+  return { vType, latest, prev, latestRows, prevRows };
+}
+
+async function renderDashSummary(){
+  const c = $("dashSummaryContainer");
+  c.innerHTML = "";
+  const data = await loadDashboardData();
+  if(!data){ c.innerHTML = `<div class="history-empty">Периодов ещё нет в базе.</div>`; return; }
+  const { vType, latest, prev, latestRows, prevRows } = data;
+  const main = latestRows.filter(r => !r.is_novice);
+  const evaluated = main.filter(r => !r.is_na);
+  const avgScore = evaluated.length ? evaluated.reduce((s,r)=>s+(r.total_score||0),0)/evaluated.length : 0;
+  const totalSalary = vType === "week" ? main.reduce((s,r)=>s+(r.salary||0),0) : null;
+
+  const prevMain = prevRows.filter(r => !r.is_novice);
+  const prevEvaluated = prevMain.filter(r => !r.is_na);
+  const prevAvgScore = prevEvaluated.length ? prevEvaluated.reduce((s,r)=>s+(r.total_score||0),0)/prevEvaluated.length : null;
+  const prevTotalSalary = vType === "week" ? prevMain.reduce((s,r)=>s+(r.salary||0),0) : null;
+
+  let html = `<div style="margin-bottom:14px;color:var(--muted);font-size:13px;">Период: <b style="color:var(--text);">${latest.period_label}</b>${prev ? ` (сравнение с ${prev.period_label})` : ""}</div>`;
+  const REGION_PIKI_RE = /операторы\s+без\s+супервизора/i;
+  const mainNoSpecial = main.filter(r => !REGION_PIKI_RE.test(r.supervisor));
+  html += `<div class="stats">`;
+  html += statCard(main.length, "всего в рейтинге");
+  html += statCard(mainNoSpecial.length, "без Регион УК / Пиков");
+  html += statCard(evaluated.length, "оценено (не Н/О)");
+  html += statCard(avgScore.toFixed(1), "средний балл");
+  if(vType === "week") html += statCard(fmt(Math.round(totalSalary)), "фонд ЗП, ₽");
+  html += `</div>`;
+  if(prev){
+    html += `<div style="margin-top:14px;font-size:13px;">`;
+    html += `Средний балл (меньше — лучше): ${trendNote(prevAvgScore!=null ? avgScore-prevAvgScore : null, "", true)}<br>`;
+    if(vType === "week") html += `Фонд ЗП: ${trendNote(prevTotalSalary!=null ? totalSalary-prevTotalSalary : null, "₽")}`;
+    html += `</div>`;
+  }
+
+  if(vType === "week"){
+    const tierCounts = new Array(11).fill(0);
+    evaluated.forEach(r => { if(r.tier) tierCounts[r.tier]++; });
+    const maxCount = Math.max(...tierCounts, 1);
+    html += `<div class="sub-title" style="margin-top:22px;">Распределение по тирам ЛГ</div>`;
+    html += `<div style="display:flex;gap:6px;align-items:flex-end;height:120px;margin-top:10px;">`;
+    for(let t = 1; t <= 10; t++){
+      const h = Math.round((tierCounts[t]/maxCount)*100);
+      html += `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;">
+        <div style="font-size:11px;font-family:var(--mono);margin-bottom:4px;">${tierCounts[t]}</div>
+        <div style="width:100%;background:linear-gradient(180deg,var(--accent),var(--accent-2));border-radius:4px 4px 0 0;height:${h}%;min-height:2px;"></div>
+        <div style="font-size:10px;color:var(--muted);margin-top:4px;">${TIER_COEFFICIENTS[t-1]}</div>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
+  // ---- 3) средние показатели по каждому статусу (с сравнением к пред. периоду) ----
+  const statuses = [...new Set(evaluated.map(r => r.status).filter(Boolean))];
+  if(statuses.length){
+    const prevEvalForStatus = prevEvaluated; // уже отфильтровано выше (не новички, не Н/О)
+    html += `<div class="sub-title" style="margin-top:26px;">Средние показатели по статусу</div>`;
+    html += `<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">Стрелка — изменение к предыдущему периоду. Зелёный всегда означает "стало лучше" (для времени и % ошибок — меньше лучше).</div>`;
+    html += `<div class="subtable-wrap" style="margin-top:10px;"><table class="dyn-table"><thead><tr>
+      <th>Статус</th><th>чел.</th>
+      <th>1 обращение (сумма/конт.)</th><th>Δ</th>
+      <th>ЛК (сумма/конт.)</th><th>Δ</th>
+      <th>Радио+ТВ/Инт. (сумма/конт.)</th><th>Δ</th>
+      <th>Время</th><th>Δ</th>
+      <th>% ошибок</th><th>Δ</th>
+    </tr></thead><tbody>`;
+    statuses.forEach(st => {
+      const rows = evaluated.filter(r => r.status === st);
+      const n = rows.length;
+      const avg = (f) => rows.reduce((s,r)=>s+(r[f]||0),0)/n;
+
+      const prevRowsSt = prevEvalForStatus.filter(r => r.status === st);
+      const pAvg = (f) => prevRowsSt.length ? prevRowsSt.reduce((s,r)=>s+(r[f]||0),0)/prevRowsSt.length : null;
+      const delta = (f) => { const p = pAvg(f); return p != null ? avg(f)-p : null; };
+
+      html += `<tr>
+        <td style="font-family:var(--sans);">${st}</td>
+        <td>${n}</td>
+        <td>${avg("c1_per_contact").toFixed(0)} ₽</td><td>${trendCell(delta("c1_per_contact"))}</td>
+        <td>${avg("lk_per_contact").toFixed(0)} ₽</td><td>${trendCell(delta("lk_per_contact"))}</td>
+        <td>${avg("ch_per_contact").toFixed(0)} ₽</td><td>${trendCell(delta("ch_per_contact"))}</td>
+        <td>${fmtTime(avg("time_per_contact"))}</td><td>${trendCell(delta("time_per_contact"), "", true)}</td>
+        <td>${avg("errors_pct").toFixed(1)}%</td><td>${trendCell(delta("errors_pct"), "%", true)}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div>`;
+  }
+
+  // ---- 4) количество людей по уровню (статусу) ----
+  const statusCounts = {};
+  main.forEach(r => { statusCounts[r.status || "—"] = (statusCounts[r.status || "—"] || 0) + 1; });
+  const statusEntries = Object.entries(statusCounts).sort((a,b) => b[1]-a[1]);
+  const maxStatusCount = Math.max(...statusEntries.map(e=>e[1]), 1);
+  html += `<div class="sub-title" style="margin-top:26px;">Количество людей по уровню</div>`;
+  html += `<div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">`;
+  statusEntries.forEach(([st, cnt]) => {
+    const w = Math.round((cnt/maxStatusCount)*100);
+    html += `<div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;">
+        <span style="font-family:var(--sans);">${st}</span><span style="font-family:var(--mono);">${cnt} чел.</span>
+      </div>
+      <div style="background:var(--panel-2);border-radius:6px;height:12px;overflow:hidden;">
+        <div style="width:${w}%;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent-2));"></div>
+      </div>
+    </div>`;
+  });
+  html += `</div>`;
+
+  // ---- 5) новички по супервизорам: сколько не подходят ----
+  const novices = latestRows.filter(r => r.is_novice);
+  if(novices.length){
+    const bySup = {};
+    novices.forEach(r => { (bySup[r.supervisor] ||= []).push(r); });
+    const badBandLabel = CONV_BANDS[0].label; // "Прекращение сотрудничества"
+    const supRows = Object.keys(bySup)
+      .filter(sup => !REGION_PIKI_RE.test(sup))
+      .map(sup => {
+        const list = bySup[sup];
+        const bad = list.filter(r => convBand(r.c1_per_contact).label === badBandLabel).length;
+        const pct = list.length ? Math.round((bad/list.length)*100) : 0;
+        return { sup, total: list.length, bad, pct };
+      })
+      .sort((a,b) => b.pct - a.pct);
+    html += `<div class="sub-title" style="margin-top:26px;">Новички по супервизорам — % неэффективности работы с новичками</div>`;
+    html += `<div style="font-size:12.5px;color:var(--muted);margin:4px 0 10px;">% = доля новичков супервизора, попавших в категорию "${badBandLabel}" (0% конверсии), от всех его новичков</div>`;
+    html += `<div class="subtable-wrap"><table class="dyn-table"><thead><tr>
+      <th>Супервайзер</th><th>Новичков всего</th><th>Не подходят</th><th>% неэффективности</th>
+    </tr></thead><tbody>`;
+    supRows.forEach(r => {
+      const color = r.pct >= 50 ? "var(--err)" : r.pct >= 25 ? "var(--warn)" : "var(--good)";
+      html += `<tr>
+        <td style="font-family:var(--sans);">${displayGroupName(r.sup)}</td>
+        <td>${r.total}</td>
+        <td>${r.bad}</td>
+        <td style="color:${color};font-weight:700;">${r.pct}%</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div>`;
+  }
+
+  c.innerHTML = html;
+}
+
+async function renderDashFunnel(){
+  const c = $("dashFunnelContainer");
+  c.innerHTML = "";
+  const data = await loadDashboardData();
+  if(!data){ c.innerHTML = `<div class="history-empty">Периодов ещё нет в базе.</div>`; return; }
+  const { vType, latest, prev, latestRows, prevRows } = data;
+  const novices = latestRows.filter(r => r.is_novice);
+  if(!novices.length){ c.innerHTML = `<div class="history-empty">В этом периоде новичков нет.</div>`; return; }
+  const prevNovices = prevRows.filter(r => r.is_novice);
+
+  const groupByBand = (rows) => {
+    const groups = CONV_BANDS.map(() => []);
+    rows.forEach(r => {
+      const b = convBand(r.c1_per_contact);
+      const idx = CONV_BANDS.indexOf(b);
+      groups[idx].push(r);
+    });
+    return groups;
+  };
+  const bandGroups = groupByBand(novices);
+  const counts = bandGroups.map(g => g.length);
+  const prevCounts = prev ? groupByBand(prevNovices).map(g => g.length) : null;
+  const maxCount = Math.max(...counts, 1);
+
+  let html = `<div style="margin-bottom:14px;color:var(--muted);font-size:13px;">Период: <b style="color:var(--text);">${latest.period_label}</b> · новичков: <b style="color:var(--text);">${novices.length}</b> · клик по строке раскрывает список ФИО</div>`;
+  html += `<div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">`;
+  CONV_BANDS.forEach((b, i) => {
+    const w = Math.round((counts[i]/maxCount)*100);
+    const d = prevCounts ? counts[i]-prevCounts[i] : null;
+    const names = [...bandGroups[i]].sort((r1,r2) => (r2.c1_per_contact||0)-(r1.c1_per_contact||0));
+    const namesHtml = names.length ? names.map(r => `
+      <div style="display:flex;justify-content:space-between;padding:6px 10px;border-bottom:1px solid var(--line);font-size:13px;">
+        <span class="clickable-fio" data-fio="${escapeHtml(r.fio)}" data-period-type="${vType}" style="font-weight:600;">${r.fio}</span>
+        <span style="color:var(--muted);font-family:var(--sans);">${displayGroupName(r.supervisor)}</span>
+        <span style="font-family:var(--mono);">${fmt(r.c1_per_contact)} ₽</span>
+      </div>`).join("") : `<div style="padding:8px 10px;color:var(--muted);font-size:13px;">Никого нет в этой группе.</div>`;
+    html += `
+      <details style="background:var(--panel-2);border-radius:8px;overflow:hidden;">
+        <summary style="cursor:pointer;padding:10px 12px;list-style:none;">
+          <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;">
+            <span>${b.label}</span>
+            <span style="font-family:var(--mono);">${counts[i]} чел. ${d!==null ? trendNote(d,'', i===0) : ''}</span>
+          </div>
+          <div style="background:var(--panel);border-radius:6px;height:14px;overflow:hidden;">
+            <div style="width:${w}%;height:100%;background:#${b.color};"></div>
+          </div>
+        </summary>
+        <div style="background:var(--panel);border-top:1px solid var(--line);">${namesHtml}</div>
+      </details>`;
+  });
+  html += `</div>`;
+  c.innerHTML = html;
+}
+
+async function renderDashChannels(){
+  const c = $("dashChannelsContainer");
+  c.innerHTML = "";
+  const data = await loadDashboardData();
+  if(!data){ c.innerHTML = `<div class="history-empty">Периодов ещё нет в базе.</div>`; return; }
+  const { latest, latestRows } = data;
+  const main = latestRows.filter(r => !r.is_novice && !r.is_na && r.channel);
+  if(!main.length){
+    c.innerHTML = `<div class="history-empty">Нет данных о канале в этом периоде (колонка добавлена недавно — попробуйте на следующей загрузке).</div>`;
+    return;
+  }
+  const byChannel = { radio: main.filter(r=>r.channel==="radio"), inet: main.filter(r=>r.channel==="inet") };
+  let html = `<div style="margin-bottom:14px;color:var(--muted);font-size:13px;">Период: <b style="color:var(--text);">${latest.period_label}</b></div>`;
+  html += `<div class="stats">`;
+  for(const key of ["radio","inet"]){
+    const rows = byChannel[key];
+    const label = key === "radio" ? "Радио+ТВ" : "Интернет";
+    const avgPc = rows.length ? rows.reduce((s,r)=>s+(r.ch_per_contact||0),0)/rows.length : 0;
+    const avgConv = rows.length ? rows.reduce((s,r)=>s+(r.ch_conv||0),0)/rows.length : 0;
+    const totalSum = rows.reduce((s,r)=>s+(r.ch_sum||0),0);
+    html += `<div class="stat" style="min-width:180px;">
+      <div class="l" style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:6px;">${label} · ${rows.length} чел.</div>
+      <div class="n" style="font-size:19px;">${avgPc.toFixed(0)} ₽</div>
+      <div class="l">сред. сумма с контакта</div>
+      <div style="margin-top:6px;font-size:12.5px;color:var(--muted);">конв. ${avgConv.toFixed(1)}% · сумма всего ${fmt(totalSum)} ₽</div>
+    </div>`;
+  }
+  html += `</div>`;
+  c.innerHTML = html;
+}
+
+async function renderDashAnomalies(){
+  const c = $("dashAnomaliesContainer");
+  c.innerHTML = "";
+  const data = await loadDashboardData();
+  if(!data){ c.innerHTML = `<div class="history-empty">Периодов ещё нет в базе.</div>`; return; }
+  const { latest, prev, latestRows, prevRows } = data;
+  const prevMap = {};
+  for(const r of prevRows) prevMap[r.fio] = r;
+
+  const anomalies = [];
+  for(const r of latestRows){
+    if(r.is_novice) continue;
+    const p = prevMap[r.fio];
+    if(p && !p.is_na && !r.is_na && p.final_place != null && r.final_place != null){
+      const drop = r.final_place - p.final_place;
+      if(drop >= 10) anomalies.push({ fio: r.fio, group: r.supervisor, reason: `Резкое падение: было место ${p.final_place}, стало ${r.final_place} (−${drop})`, severity: "err" });
+    }
+    if((r.c1_sum||0) === 0 && p && (p.c1_sum||0) === 0){
+      anomalies.push({ fio: r.fio, group: r.supervisor, reason: `0 продаж по 1 обращению два периода подряд (${prev.period_label} и ${latest.period_label})`, severity: "warn" });
+    }
+    if((r.errors_pct||0) >= 10){
+      anomalies.push({ fio: r.fio, group: r.supervisor, reason: `Высокий % ошибок: ${r.errors_pct}%`, severity: "err" });
+    }
+  }
+
+  let html = `<div style="margin-bottom:14px;color:var(--muted);font-size:13px;">Период: <b style="color:var(--text);">${latest.period_label}</b> · найдено: <b style="color:var(--text);">${anomalies.length}</b></div>`;
+  if(!anomalies.length){
+    html += `<div class="history-empty">Ничего подозрительного не найдено 🎉</div>`;
+  } else {
+    html += `<div style="display:flex;flex-direction:column;gap:8px;">`;
+    for(const a of anomalies){
+      const color = a.severity === "err" ? "var(--err)" : "var(--warn)";
+      html += `<div style="border-left:3px solid ${color};padding:8px 14px;background:var(--panel-2);border-radius:0 8px 8px 0;">
+        <div style="font-weight:700;">${a.fio} <span style="font-weight:400;color:var(--muted);font-size:12.5px;">· ${displayGroupName(a.group)}</span></div>
+        <div style="font-size:13px;color:${color};margin-top:2px;">${a.reason}</div>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+  c.innerHTML = html;
+}
+
+// ---------- Ведомость ЗП (двухэтапная: аванс нед.1-2, расчёт нед.3-5) ----------
+let currentPayrollRows = null;
+let currentPayrollMeta = null;
+
+(function initPayrollMonthSelect(){
+  const sel = $("payrollMonth");
+  MONTHS.forEach((name, i) => {
+    const opt = document.createElement("option");
+    opt.value = i + 1;
+    opt.textContent = `${i+1} — ${name}`;
+    if(i + 1 === new Date().getMonth() + 1) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  const today = new Date();
+  const pad = n => String(n).padStart(2, "0");
+  $("payrollSubmitDate").value = `${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
+})();
+$("payrollStageToggle").querySelectorAll("button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    $("payrollStageToggle").querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
+  });
+});
+
+function daysInMonth(monthNum, year){ return new Date(year, monthNum, 0).getDate(); }
+function periodRangeLabel(monthNum, stage, year){
+  const monthName = MONTHS[monthNum-1];
+  if(stage === "1") return `01-15 ${monthName.charAt(0).toUpperCase()+monthName.slice(1)} ${year}`;
+  const last = daysInMonth(monthNum, year);
+  return `16-${last} ${monthName.charAt(0).toUpperCase()+monthName.slice(1)} ${year}`;
+}
+
+async function buildTwoStagePayroll(){
+  const month = parseInt($("payrollMonth").value, 10);
+  const stage = $("payrollStageToggle").querySelector(".active").dataset.stage;
+  const weeks = stage === "1" ? [1,2] : [3,4,5];
+  const year = new Date().getFullYear();
+
+  const allUploads = await sbGet(`kpi_uploads?select=id,period_label`);
+  const matchingUploads = allUploads.filter(u => {
+    const m = /^(\d+)-(\d+)$/.exec(u.period_label || "");
+    if(!m) return false;
+    return parseInt(m[1],10) === month && weeks.includes(parseInt(m[2],10));
+  });
+
+  const acc = {}; // fio -> {fio, supervisor, status, sum, penaltySum, weeksFound}
+  const reqMap = await fetchRequisitesMap();
+
+  for(const u of matchingUploads){
+    const rows = await sbGet(`kpi_ratings?upload_id=eq.${u.id}&select=fio,supervisor,status,is_novice,salary&salary=not.is.null`);
+    let penaltyMap = {};
+    try{
+      const penRows = await sbGet(`payroll_penalties?upload_id=eq.${u.id}&select=fio,penalty`);
+      for(const p of penRows) penaltyMap[p.fio] = p.penalty;
+    } catch(err){}
+    for(const r of rows){
+      if(r.is_novice) continue; // новички считаем отдельно, в основную ведомость не включаем
+      const net = (r.salary || 0) - (penaltyMap[r.fio] || 0);
+      if(!acc[r.fio]) acc[r.fio] = { fio: r.fio, supervisor: r.supervisor, status: r.status, sum: 0, penaltySum: 0, weeksFound: 0 };
+      acc[r.fio].sum += net;
+      acc[r.fio].penaltySum += (penaltyMap[r.fio] || 0);
+      acc[r.fio].weeksFound += 1;
+      acc[r.fio].supervisor = r.supervisor;
+      acc[r.fio].status = r.status;
+    }
+  }
+
+  const rows = Object.values(acc).sort((a,b) => displayGroupName(a.supervisor).localeCompare(displayGroupName(b.supervisor)) || a.fio.localeCompare(b.fio));
+  rows.forEach(r => {
+    const req = reqMap[r.fio];
+    r.position = (req && req[0] && req[0].position) || r.status || "";
+    r.paymentType = (req && req[0] && req[0].payment_type) || "";
+    r.requisitesText = formatRequisites(req);
+    r.comment = r.penaltySum ? `Штраф удержан: ${fmt(Math.round(r.penaltySum))} ₽` : "";
+  });
+
+  return {
+    rows, month, stage, weeks, year,
+    periodLabel: periodRangeLabel(month, stage, year),
+    matchedUploads: matchingUploads.length,
+  };
+}
+
+async function renderDashPayroll(){
+  const c = $("dashPayrollContainer");
+  const sub = $("dashPayrollSub");
+  c.innerHTML = `<div class="history-empty">Настройте месяц и этап выше, затем нажмите "Сформировать ведомость".</div>`;
+  sub.textContent = "";
+}
+
+function renderPayrollTable(){
+  const c = $("dashPayrollContainer");
+  const result = currentPayrollMeta;
+  if(!result || !currentPayrollRows) return;
+  const search = ($("payrollSearchBox").value || "").trim().toLowerCase();
+  const visibleRows = search ? currentPayrollRows.filter(r => r.fio.toLowerCase().includes(search)) : currentPayrollRows;
+
+  if(!visibleRows.length){
+    c.innerHTML = `<div class="history-empty">${search ? "Никого не найдено по этому имени." : "Не нашлось данных за эти недели — проверьте, что нужные недели загружены в Supabase."}</div>`;
+    return;
+  }
+
+  const byGroup = {};
+  visibleRows.forEach(r => { (byGroup[r.supervisor] ||= []).push(r); });
+  const groupNames = Object.keys(byGroup).sort(compareGroupNames);
+
+  let globalIdx = 0;
+  let html = "";
+  groupNames.forEach(gname => {
+    const groupRows = byGroup[gname];
+    const groupTotal = groupRows.reduce((s, r) => s + r.sum, 0);
+    html += `<div class="group-block">`;
+    html += `<div class="group-title">${displayGroupName(gname)}<span class="count">${groupRows.length} чел. · ${fmt(Math.round(groupTotal))} ₽</span></div>`;
+    html += `<div class="subtable-wrap"><table class="dyn-table"><thead><tr>
+      <th>№</th><th>ФИО</th><th>Должность</th><th>Комментарий</th><th>Способ оплаты</th><th>Реквизиты</th><th>Период начисления</th><th>Ставка</th><th>Аванс</th><th>Сумма начисления</th>
+    </tr></thead><tbody>`;
+    groupRows.forEach(r => {
+      globalIdx++;
+      html += `<tr>
+        <td>${globalIdx}</td>
+        <td style="font-family:var(--sans);font-weight:600;">${r.fio}</td>
+        <td style="font-family:var(--sans);">${r.position}</td>
+        <td style="font-family:var(--sans);color:var(--err);">${r.comment}</td>
+        <td style="font-family:var(--sans);">${r.paymentType}</td>
+        <td style="font-family:var(--sans);white-space:normal;max-width:220px;${r.requisitesText ? "" : "color:var(--err);"}">${r.requisitesText || "нет реквизитов"}</td>
+        <td style="font-family:var(--sans);">${result.periodLabel}</td>
+        <td style="font-family:var(--sans);">${result.stage === "2" ? "ставка" : ""}</td>
+        <td style="font-family:var(--sans);">${result.stage === "1" ? "Аванс" : ""}</td>
+        <td style="font-weight:800;color:var(--good);">${fmt(Math.round(r.sum))}</td>
+      </tr>`;
+    });
+    html += `<tr style="font-weight:800;background:var(--panel-2);">
+      <td colspan="9" style="text-align:right;font-family:var(--sans);">Итого по группе:</td>
+      <td style="color:var(--good);">${fmt(Math.round(groupTotal))} ₽</td>
+    </tr>`;
+    html += `</tbody></table></div></div>`;
+  });
+
+  const grandTotal = visibleRows.reduce((s, r) => s + r.sum, 0);
+  html += `<div class="stats" style="margin-top:10px;">
+    <div class="stat"><div class="n">${fmt(Math.round(grandTotal))} ₽</div><div class="l">${search ? "итого по найденным" : "итого к выплате по всем группам"}</div></div>
+  </div>`;
+  c.innerHTML = html;
+}
+$("payrollSearchBox").addEventListener("input", renderPayrollTable);
+
+$("buildPayrollBtn").addEventListener("click", async () => {
+  const c = $("dashPayrollContainer");
+  const sub = $("dashPayrollSub");
+  c.innerHTML = `<div class="history-empty">Считаю…</div>`;
+  try{
+    const result = await buildTwoStagePayroll();
+    currentPayrollRows = result.rows;
+    currentPayrollMeta = result;
+    const stageLabel = result.stage === "1" ? "Аванс (недели 1-2)" : "Расчёт (недели 3-5)";
+    sub.textContent = `${stageLabel} · период "${result.periodLabel}" · найдено загрузок: ${result.matchedUploads} · сотрудников: ${result.rows.length}`;
+    $("payrollSearchBox").value = "";
+    $("wrap").classList.add("wide");
+    renderPayrollTable();
+  } catch(err){
+    c.innerHTML = `<div class="history-empty">Ошибка: ${err.message}</div>`;
+  }
+});
+
+$("downloadPayrollBtn").addEventListener("click", () => {
+  if(!currentPayrollRows || !currentPayrollRows.length){ return; }
+  const meta = currentPayrollMeta;
+  const submitDate = $("payrollSubmitDate").value;
+  const dueDate = $("payrollDueDate").value;
+  const dept = $("payrollDept").value || "";
+  const manager = $("payrollManager").value || "";
+
+  const aoa = [
+    ["", "Если есть изменения - выделить красным цветом текст"],
+    [],
+    ["", "Дата подачи ведомости", submitDate ? new Date(submitDate) : ""],
+    ["", "Отдел", dept],
+    ["", "Руководитель (ответсвенный)", manager],
+    [],
+    ["№ п/п","ФИО","Должность","Комментарий","Способ оплаты","Реквизиты","Период начисления","Ставка","Аванс","Сумма начисления","Валюта начисления","Валюта выплаты","Крайняя дата выплаты","Доп, примечание"],
+  ];
+  currentPayrollRows.forEach((r, i) => {
+    aoa.push([
+      i+1, r.fio, r.position, r.comment, r.paymentType, r.requisitesText,
+      meta.periodLabel,
+      meta.stage === "2" ? "ставка" : "",
+      meta.stage === "1" ? "Аванс" : "",
+      Math.round(r.sum),
+      "руб", "",
+      dueDate ? new Date(dueDate) : "",
+      "",
+    ]);
+  });
+  const total = currentPayrollRows.reduce((s, r) => s + r.sum, 0);
+  aoa.push(["","","","","","","","","ИТОГО:",Math.round(total),"","","",""]);
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{wch:5},{wch:26},{wch:16},{wch:22},{wch:14},{wch:34},{wch:20},{wch:8},{wch:8},{wch:16},{wch:12},{wch:12},{wch:16},{wch:16}];
+  const headerRowIdx = 6;
+  for(let c = 0; c < 14; c++){
+    const addr = XLSX.utils.encode_cell({ r: headerRowIdx, c });
+    if(ws[addr]) ws[addr].s = { fill:{patternType:"solid", fgColor:{rgb:"FFEEF0FE"}}, font:{bold:true, color:{rgb:"FF4338CA"}} };
+  }
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Ведомость ЗП");
+  const stageWord = meta.stage === "1" ? "Аванс" : "Расчет";
+  XLSX.writeFile(wb, `Ведомость_ЗП_${MONTHS[meta.month-1]}_${stageWord}.xlsx`);
+});
+const DASH_RENDERERS = { summary: renderDashSummary, funnel: renderDashFunnel, channels: renderDashChannels, anomalies: renderDashAnomalies };
+async function loadActiveDashboard(){
+  const activeTab = $("dashboardsPanel").querySelector(".dash-tab-btn.active").dataset.dashtab;
+  clearLog($("dashLog"));
+  log("Загружаю…", null, $("dashLog"));
+  try{
+    await DASH_RENDERERS[activeTab]();
+    clearLog($("dashLog"));
+  } catch(err){
+    log("Ошибка: " + err.message, "err", $("dashLog"));
+  }
+}
+
+// ---------- справочник платёжных реквизитов ----------
+let selectedReqFile = null;
+let parsedRequisites = null;
+
+const reqDrop = $("reqDrop");
+const reqFileInput = $("reqFileInput");
+reqDrop.addEventListener("click", () => reqFileInput.click());
+["dragenter","dragover"].forEach(ev => reqDrop.addEventListener(ev, e => { e.preventDefault(); reqDrop.classList.add("drag"); }));
+["dragleave","drop"].forEach(ev => reqDrop.addEventListener(ev, e => { e.preventDefault(); reqDrop.classList.remove("drag"); }));
+reqDrop.addEventListener("drop", e => {
+  if(e.dataTransfer.files.length){ reqFileInput.files = e.dataTransfer.files; onReqFileChosen(); }
+});
+reqFileInput.addEventListener("change", onReqFileChosen);
+
+function onReqFileChosen(){
+  selectedReqFile = reqFileInput.files[0];
+  if(!selectedReqFile) return;
+  $("reqFname").textContent = selectedReqFile.name;
+  clearLog($("reqLog"));
+  $("reqPreview").innerHTML = "";
+  parseAndPreviewRequisites();
+}
+
+async function parseAndPreviewRequisites(){
+  const buf = await selectedReqFile.arrayBuffer();
+  const wb = XLSX.read(buf, { type: "array" });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+  const parsed = [];
+  for(let r = 1; r < rows.length; r++){
+    const row = rows[r];
+    if(!row || !row[0]) continue;
+    const fio = row[0].toString().trim();
+    const phone = row[5] ? row[5].toString().trim() : "";
+    let requisites = row[6] ? row[6].toString().trim() : "";
+    if(phone && !requisites.includes(phone)) requisites = requisites ? `${requisites} (тел: ${phone})` : `тел: ${phone}`;
+    parsed.push({
+      fio,
+      full_name: row[1] ? row[1].toString().trim() : null,
+      position: row[2] ? row[2].toString().trim() : null,
+      country: row[3] ? row[3].toString().trim() : null,
+      payment_type: row[4] ? row[4].toString().trim() : null,
+      requisites: requisites || null,
+    });
+  }
+  parsedRequisites = parsed;
+  log(`Разобрано строк: ${parsed.length}`, "ok", $("reqLog"));
+  $("reqUploadBtn").disabled = parsed.length === 0;
+  $("reqPreview").innerHTML = `
+    <div class="subtable-wrap"><table class="dyn-table"><thead><tr>
+      <th>ФИО</th><th>Полное имя</th><th>Должность</th><th>Страна</th><th>Тип оплаты</th><th>Реквизиты</th>
+    </tr></thead><tbody>
+      ${parsed.slice(0,15).map(r => `<tr>
+        <td style="font-family:var(--sans);">${escapeHtml(r.fio)}</td>
+        <td style="font-family:var(--sans);">${escapeHtml(r.full_name||"")}</td>
+        <td style="font-family:var(--sans);">${escapeHtml(r.position||"")}</td>
+        <td style="font-family:var(--sans);">${escapeHtml(r.country||"")}</td>
+        <td style="font-family:var(--sans);">${escapeHtml(r.payment_type||"")}</td>
+        <td style="font-family:var(--sans);max-width:280px;white-space:normal;">${escapeHtml(r.requisites||"")}</td>
+      </tr>`).join("")}
+    </tbody></table></div>
+    ${parsed.length > 15 ? `<div style="color:var(--muted);font-size:12.5px;margin-top:8px;">…и ещё ${parsed.length-15} строк</div>` : ""}
+  `;
+}
+
+$("reqUploadBtn").addEventListener("click", async () => {
+  if(!parsedRequisites || !parsedRequisites.length) return;
+  $("reqUploadBtn").disabled = true;
+  clearLog($("reqLog"));
+  log("Удаляю старый справочник…", null, $("reqLog"));
+  try{
+    const delRes = await fetch(`${SUPABASE_URL}/rest/v1/payment_requisites?id=not.is.null`, {
+      method: "DELETE", headers: sbHeaders(),
+    });
+    if(!delRes.ok) throw new Error(await delRes.text());
+    log("Старый справочник удалён.", "ok", $("reqLog"));
+
+    const chunkSize = 200;
+    for(let i = 0; i < parsedRequisites.length; i += chunkSize){
+      const chunk = parsedRequisites.slice(i, i + chunkSize);
+      log(`Записываю строки ${i+1}–${i+chunk.length} из ${parsedRequisites.length}…`, null, $("reqLog"));
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/payment_requisites`, {
+        method: "POST",
+        headers: sbHeaders({ "Content-Type": "application/json", "Prefer": "return=minimal" }),
+        body: JSON.stringify(chunk),
+      });
+      if(!res.ok) throw new Error(await res.text());
+    }
+    log(`Готово: справочник обновлён, ${parsedRequisites.length} строк.`, "ok", $("reqLog"));
+  } catch(err){
+    log("Ошибка: " + err.message, "err", $("reqLog"));
+  } finally {
+    $("reqUploadBtn").disabled = false;
+  }
+});
+
+$("openRequisitesBtn").addEventListener("click", () => {
+  closeAllTopPanels();
+  $("requisitesPanel").style.display = "block";
+  $("requisitesPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+});
+$("closeRequisitesBtn").addEventListener("click", () => { $("requisitesPanel").style.display = "none"; });
+
+// Возвращает Map: fio -> [{payment_type, requisites}, ...] (может быть несколько на одного человека)
+async function fetchRequisitesMap(){
+  try{
+    const rows = await sbGet(`payment_requisites?select=fio,payment_type,requisites`);
+    const map = {};
+    for(const r of rows){ (map[r.fio] ||= []).push(r); }
+    return map;
+  } catch(err){
+    return {}; // нет доступа/пусто — не критично, просто не покажем реквизиты
+  }
+}
+function formatRequisites(entries){
+  if(!entries || !entries.length) return "";
+  return entries.map(e => `${e.payment_type || "?"}${e.requisites ? ": " + e.requisites : ""}`).join(" | ");
+}
+
+$("openPayrollBtn").addEventListener("click", () => {
+  closeAllTopPanels();
+  $("payrollPanel").style.display = "block";
+  $("payrollPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+  renderDashPayroll();
+});
+$("closePayrollBtn").addEventListener("click", () => { $("payrollPanel").style.display = "none"; });
+
+$("openDashboardsBtn").addEventListener("click", async () => {
+  closeAllTopPanels();
+  $("dashboardsPanel").style.display = "block";
+  $("dashboardsPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+  await populateDashPeriodSelect();
+  loadActiveDashboard();
+});
+$("closeDashboardsBtn").addEventListener("click", () => { $("dashboardsPanel").style.display = "none"; });
+$("dashTypeToggle").querySelectorAll("button").forEach(btn => {
+  btn.addEventListener("click", async () => {
+    $("dashTypeToggle").querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
+    await populateDashPeriodSelect();
+    loadActiveDashboard();
+  });
+});
+$("dashPeriodSelect").addEventListener("change", loadActiveDashboard);
+$("dashboardsPanel").querySelectorAll(".dash-tab-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    $("dashboardsPanel").querySelectorAll(".dash-tab-btn").forEach(b => b.classList.toggle("active", b === btn));
+    $("dashboardsPanel").querySelectorAll(".tab-panel").forEach(p => p.classList.toggle("active", p.id === "dashtab-" + btn.dataset.dashtab));
+    loadActiveDashboard();
+  });
+});
+
+$("loginPassword").addEventListener("keydown", (e) => { if(e.key === "Enter") $("loginBtn").click(); });
+
+// ---------- tabs ----------
+document.querySelectorAll(".tab-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b === btn));
+    document.querySelectorAll(".tab-panel").forEach(p => p.classList.toggle("active", p.id === "tab-" + btn.dataset.tab));
+  });
+});
+
+$("editChannelsBtn").addEventListener("click", () => {
+  $("channelPanel").style.display = "block";
+  $("channelPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+});
+
+// ---------- export to Excel (for Google Sheets: Файл → Импорт) ----------
+const EXPORT_HEADERS = [
+  "ФИО","Статус","Группа",
+  "1обращение_карточек","1обращение_сумма","1обращение_срчек","1обращение_конв%","1обращение_сумма_с_контакта","1обращение_место",
+  "ЛК_карточек","ЛК_сумма","ЛК_срчек","ЛК_конв%","ЛК_сумма_с_контакта","ЛК_место",
+  "РадиоТВ_Интернет_карточек","РадиоТВ_Интернет_сумма","РадиоТВ_Интернет_срчек","РадиоТВ_Интернет_конв%","РадиоТВ_Интернет_сумма_с_контакта","РадиоТВ_Интернет_место",
+  "Время_мин","Время_место",
+  "Ошибок_%","Ошибок_место",
+  "Сумма_баллов","Место",
+];
+function rowToArray(r){
+  return [
+    r.fio, r.status, displayGroupName(r.supervisor),
+    r.c1_cards ?? "", r.c1_sum, r.c1_check, r.c1_conv, r.c1_pc, r.c1_place,
+    r.lk_cards ?? "", r.lk_sum, r.lk_check, r.lk_conv, r.lk_pc, r.lk_place,
+    r.ch_cards ?? "", r.ch_sum, r.ch_check, r.ch_conv, r.ch_pc, r.ch_place,
+    fmtTime(r.time), r.time_place,
+    r.errors_pct, r.errors_place,
+    r.total_score, r.is_na ? "Н/О" : r.final_place,
+  ];
+}
+function rgbToArgb(hex){ return "FF" + hex.toUpperCase(); }
+
+function applyPlaceGradients(ws, sortedRows, colsConfig, dataStartRow){
+  const offset = dataStartRow === undefined ? 1 : dataStartRow;
+  colsConfig.forEach(({idx, field, filterFn}) => {
+    const scaleRows = filterFn ? sortedRows.filter(filterFn) : sortedRows;
+    const vals = scaleRows.map(r => r[field]).filter(v => v !== null && v !== undefined);
+    if(!vals.length) return;
+    const min = Math.min(...vals), max = Math.max(...vals);
+    sortedRows.forEach((r, i) => {
+      const v = r[field];
+      if(v === null || v === undefined) return;
+      const hex = rankColorHex(v, min, max);
+      if(!hex) return;
+      const addr = XLSX.utils.encode_cell({ r: offset + i, c: idx });
+      if(!ws[addr]) return;
+      const fontColor = textColorFor(hex) === "#ffffff" ? "FFFFFFFF" : "FF161A2E";
+      ws[addr].s = {
+        fill: { patternType: "solid", fgColor: { rgb: rgbToArgb(hex) } },
+        font: { bold: true, color: { rgb: fontColor } },
+        alignment: { horizontal: "center" },
+      };
+    });
+  });
+}
+const PLACE_COLS = [
+  { idx: 8,  field: "c1_place" },
+  { idx: 14, field: "lk_place" },
+  { idx: 20, field: "ch_place" },
+  { idx: 22, field: "time_place" },
+  { idx: 24, field: "errors_place" },
+];
+const PLACE_COLS_MAIN = [...PLACE_COLS, { idx: 26, field: "final_place", filterFn: r => !r.is_na }];
+const PLACE_COLS_SUP  = [...PLACE_COLS, { idx: 26, field: "final_place" }];
+
+
+function styleHeaderRow(ws, colCount, rowIdx, variant){
+  const r = rowIdx === undefined ? 0 : rowIdx;
+  const isCat = variant !== "sub";
+  for(let c = 0; c < colCount; c++){
+    const addr = XLSX.utils.encode_cell({ r, c });
+    if(!ws[addr]) continue;
+    ws[addr].s = isCat
+      ? { fill: { patternType: "solid", fgColor: { rgb: "FFEEF0FE" } }, font: { bold: true, color: { rgb: "FF4338CA" } }, alignment: { horizontal: "center" } }
+      : { fill: { patternType: "solid", fgColor: { rgb: "FFF7F8FC" } }, font: { bold: true, color: { rgb: "FF6B7189" }, sz: 10 }, alignment: { horizontal: "center" } };
+  }
+}
+function styleTitleRow(ws, rowIdx, colCount){
+  const addr = XLSX.utils.encode_cell({ r: rowIdx, c: 0 });
+  if(!ws[addr]) return;
+  ws[addr].s = {
+    fill: { patternType: "solid", fgColor: { rgb: "FF161A2E" } },
+    font: { bold: true, color: { rgb: "FFFFFFFF" }, sz: 12 },
+  };
+  if(!ws["!merges"]) ws["!merges"] = [];
+  ws["!merges"].push({ s: { r: rowIdx, c: 0 }, e: { r: rowIdx, c: colCount - 1 } });
+}
+
+// Двухстрочная шапка: сверху названия блоков (объединённые ячейки), снизу подписи колонок —
+// как на экране (строки "cat" и "sub").
+function categoryHeaderRows(leadLabels, withTier){
+  const totalCols = withTier ? 32 : 27;
+  const rowA = new Array(totalCols).fill("");
+  const rowB = new Array(totalCols).fill("");
+  rowA[0] = leadLabels[0]; rowA[1] = leadLabels[1]; rowA[2] = leadLabels[2];
+  rowA[3] = "1 ОБРАЩЕНИЕ";
+  rowA[9] = "ЛК";
+  rowA[15] = "РАДИО+ТВ / ИНТЕРНЕТ";
+  rowA[21] = "ВРЕМЯ/КОНТАКТ";
+  rowA[23] = "% ОШИБОК";
+  rowA[25] = "Сумма баллов";
+  rowA[26] = "Место";
+  if(withTier){
+    rowA[27] = "ЛГ"; rowA[28] = "Коэффициент";
+    rowA[29] = "0.75% за офор."; rowA[30] = "2% за дост."; rowA[31] = "ЗП";
+  }
+
+  const subLabels = ["карточек","сумма","ср.чек","конв.,%","с контакта","место"];
+  [3, 9, 15].forEach(start => subLabels.forEach((s, i) => rowB[start + i] = s));
+  rowB[21] = "чч:мм:сс"; rowB[22] = "место";
+  rowB[23] = "%";   rowB[24] = "место";
+
+  return { rowA, rowB, totalCols };
+}
+function categoryHeaderMerges(baseRow, totalCols){
+  const vertCols = [0, 1, 2, 25, 26, ...(totalCols > 27 ? [27, 28, 29, 30, 31] : [])];
+  const merges = vertCols.map(c => ({ s: { r: baseRow, c }, e: { r: baseRow + 1, c } }));
+  merges.push({ s: { r: baseRow, c: 3 },  e: { r: baseRow, c: 8 } });
+  merges.push({ s: { r: baseRow, c: 9 },  e: { r: baseRow, c: 14 } });
+  merges.push({ s: { r: baseRow, c: 15 }, e: { r: baseRow, c: 20 } });
+  merges.push({ s: { r: baseRow, c: 21 }, e: { r: baseRow, c: 22 } });
+  merges.push({ s: { r: baseRow, c: 23 }, e: { r: baseRow, c: 24 } });
+  return merges;
+}
+
+function buildExportSheet(rows, withConvStatus){
+  const sorted = sortByPlace(rows);
+  const { rowA, rowB, totalCols } = categoryHeaderRows(["ФИО","Статус","Группа"], false);
+  const finalCols = withConvStatus ? totalCols + 1 : totalCols;
+  if(withConvStatus){
+    rowA.push("Статус по сумме с контакта");
+    rowB.push("");
+  }
+  const dataRows = sorted.map(r => {
+    const arr = rowToArray(r);
+    if(withConvStatus) arr.push(convBand(r.c1_pc).label);
+    return arr;
+  });
+  const ws = XLSX.utils.aoa_to_sheet([rowA, rowB, ...dataRows]);
+  ws["!merges"] = categoryHeaderMerges(0, totalCols);
+  if(withConvStatus) ws["!merges"].push({ s: { r: 0, c: finalCols - 1 }, e: { r: 1, c: finalCols - 1 } });
+  applyPlaceGradients(ws, sorted, PLACE_COLS_MAIN, 2);
+  styleHeaderRow(ws, finalCols, 0, "cat");
+  styleHeaderRow(ws, finalCols, 1, "sub");
+  if(withConvStatus){
+    sorted.forEach((r, i) => {
+      const b = convBand(r.c1_pc);
+      const addr = XLSX.utils.encode_cell({ r: 2 + i, c: finalCols - 1 });
+      if(!ws[addr]) return;
+      const fontColor = textColorFor(b.color) === "#ffffff" ? "FFFFFFFF" : "FF161A2E";
+      ws[addr].s = {
+        fill: { patternType: "solid", fgColor: { rgb: rgbToArgb(b.color) } },
+        font: { bold: true, color: { rgb: fontColor } },
+        alignment: { horizontal: "center" },
+      };
+    });
+  }
+  return ws;
+}
+
+function buildGroupedMainSheet(){
+  const withTier = periodType === "week";
+  const rowFn = r => withTier
+    ? [...rowToArray(r), r.tier ?? "", r.coefficient ?? "", r.bonus075 ?? "", r.bonus2 ?? "", r.salary ?? ""]
+    : rowToArray(r);
+  const { rowA, rowB, totalCols } = categoryHeaderRows(["ФИО","Статус","Группа"], withTier);
+
+  const groupNames = [...new Set(currentRows.map(r => r.supervisor))].sort(compareGroupNames);
+  const aoa = [];
+  const blocks = []; // {titleRow, headerRowA, dataStart, rows}
+  let allMerges = [];
+  for(const gname of groupNames){
+    const rows = sortByPlace(currentRows.filter(r => r.supervisor === gname));
+    if(!rows.length) continue;
+    const isRegionUK = rows[0] && rows[0].isRegionUK;
+    const channel = groupChannels[gname] === "inet" ? "ИНТЕРНЕТ" : "РАДИО+ТВ";
+    const titleRow = aoa.length;
+    aoa.push([`${displayGroupName(gname)}   ${isRegionUK ? "[только 1 обращение + ЛК + время]" : `[${channel}]`}   ${rows.length} чел.`]);
+    const headerRowA = aoa.length;
+    aoa.push(rowA);
+    aoa.push(rowB);
+    const dataStart = aoa.length;
+    rows.forEach(r => aoa.push(rowFn(r)));
+    blocks.push({ titleRow, headerRowA, dataStart, rows });
+    allMerges = allMerges.concat(categoryHeaderMerges(headerRowA, totalCols));
+    aoa.push([]); // blank separator
+  }
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!merges"] = allMerges;
+  blocks.forEach(({ titleRow, headerRowA, dataStart, rows }) => {
+    styleTitleRow(ws, titleRow, totalCols);
+    styleHeaderRow(ws, totalCols, headerRowA, "cat");
+    styleHeaderRow(ws, totalCols, headerRowA + 1, "sub");
+    applyPlaceGradients(ws, rows, PLACE_COLS_MAIN, dataStart);
+  });
+  ws["!cols"] = [{ wch: 24 }, { wch: 18 }];
+  return ws;
+}
+
+function buildSupervisorExportSheet(rows){
+  const { rowA, rowB, totalCols } = categoryHeaderRows(["Супервайзер","Канал","Оценено/Всего"], false);
+  const sorted = sortByPlace(rows);
+  const arr = sorted.map(r => [
+    cleanSupervisorName(r.supervisor), r.channel === "inet" ? "Интернет" : "Радио+ТВ", `${r.n_evaluated}/${r.n_total}`,
+    r.c1_cards ?? "", r.c1_sum, r.c1_check, r.c1_conv, r.c1_pc, r.c1_place,
+    r.lk_cards ?? "", r.lk_sum, r.lk_check, r.lk_conv, r.lk_pc, r.lk_place,
+    r.ch_cards ?? "", r.ch_sum, r.ch_check, r.ch_conv, r.ch_pc, r.ch_place,
+    fmtTime(r.time), r.time_place,
+    r.errors_pct, r.errors_place,
+    r.total_score, r.final_place,
+  ]);
+  const ws = XLSX.utils.aoa_to_sheet([rowA, rowB, ...arr]);
+  ws["!merges"] = categoryHeaderMerges(0, totalCols);
+  applyPlaceGradients(ws, sorted, PLACE_COLS_SUP, 2);
+  styleHeaderRow(ws, totalCols, 0, "cat");
+  styleHeaderRow(ws, totalCols, 1, "sub");
+  return ws;
+}
+
+$("exportBtn").addEventListener("click", () => {
+  if(!currentRows) return;
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, buildGroupedMainSheet(), "Рейтинг");
+  XLSX.utils.book_append_sheet(wb, buildExportSheet(currentNoviceRows, true), "Новички");
+  XLSX.utils.book_append_sheet(wb, buildSupervisorExportSheet(currentSupervisorRows), "Супервайзеры");
+  const period = currentPeriodValue();
+  XLSX.writeFile(wb, `Рейтинг_${period}.xlsx`);
+});
+
+// ---------- upload to supabase ----------
+$("uploadBtn").addEventListener("click", async () => {
+  if(!currentRows) return;
+  $("uploadBtn").disabled = true;
+  clearLog(uploadLogEl);
+  const periodLabel = currentPeriodValue();
+  log("Создаю запись загрузки в kpi_uploads…", null, uploadLogEl);
+  try{
+    const uploadRes = await fetch(`${SUPABASE_URL}/rest/v1/kpi_uploads`, {
+      method: "POST",
+      headers: sbHeaders({ "Content-Type": "application/json", "Prefer": "return=representation" }),
+      body: JSON.stringify([{ period_label: periodLabel, source_filename: currentFilename }]),
+    });
+    if(!uploadRes.ok) throw new Error(await uploadRes.text());
+    const uploadData = await uploadRes.json();
+    const uploadId = uploadData[0].id;
+    log(`Загрузка создана: ${uploadId}`, "ok", uploadLogEl);
+
+    const noviceDbRows = currentNoviceRows.map(e => toDbRow(e, true));
+    const mainDbRows = currentRows.map(e => toDbRow(e, false));
+    const allRows = [...mainDbRows, ...noviceDbRows].map(r => ({ ...r, upload_id: uploadId }));
+
+    const chunkSize = 200;
+    for(let i = 0; i < allRows.length; i += chunkSize){
+      const chunk = allRows.slice(i, i + chunkSize);
+      log(`Записываю строки ${i+1}–${i+chunk.length} из ${allRows.length}…`, null, uploadLogEl);
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/kpi_ratings`, {
+        method: "POST",
+        headers: sbHeaders({ "Content-Type": "application/json", "Prefer": "return=minimal" }),
+        body: JSON.stringify(chunk),
+      });
+      if(!res.ok) throw new Error(await res.text());
+    }
+    log(`Готово: ${allRows.length} строк записано в kpi_ratings (включая ${noviceDbRows.length} новичков с общим местом).`, "ok", uploadLogEl);
+  } catch(err){
+    log("Ошибка записи в Supabase: " + err.message, "err", uploadLogEl);
+  } finally {
+    $("uploadBtn").disabled = false;
+  }
+});
+</script>
+</body>
+</html>

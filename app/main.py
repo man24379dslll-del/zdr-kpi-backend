@@ -1,8 +1,13 @@
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from app.config import settings
 from app.routers import categories, dashboards, payroll, ratings, shifts, supervisor_channels
+
+STATIC_DIR = Path(__file__).parent.parent / "static"
 
 app = FastAPI(title="ЗДР KPI Backend", version="0.1.0")
 
@@ -27,10 +32,15 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/")
+@app.get("/api/info")
 async def root():
     return {
         "service": "ЗДР KPI Backend",
         "docs": "/docs",
         "health": "/health",
     }
+
+
+@app.get("/", include_in_schema=False)
+async def serve_frontend():
+    return FileResponse(STATIC_DIR / "index.html")
