@@ -87,12 +87,14 @@ def test_build_two_stage_payroll_sorted_by_display_group_name_then_fio():
     uploads = [{"id": "u7-1", "period_label": "7-1"}]
     ratings_by_upload = {
         "u7-1": [
-            {"fio": "Яковлев Я.Я.", "supervisor": "Супервайзер - А", "status": "Профи", "is_novice": False, "salary": 100},
-            {"fio": "Антонов А.А.", "supervisor": "Супервайзер - А", "status": "Профи", "is_novice": False, "salary": 100},
+            {"fio": "Яковлев Я.Я.", "supervisor": "Супервайзер - Смирнов С.С.", "status": "Профи", "is_novice": False, "salary": 100},
+            {"fio": "Антонов А.А.", "supervisor": "Супервайзер - Смирнов С.С.", "status": "Профи", "is_novice": False, "salary": 100},
             {"fio": "ЗДР Борисов Б.Б.", "supervisor": "операторы без супервизора", "status": "Профи", "is_novice": False, "salary": 100},
         ],
     }
     result = build_two_stage_payroll(uploads, ratings_by_upload, {}, month=7, stage="1", year=2026)
     fios_in_order = [r["fio"] for r in result["rows"]]
-    # "Регион УК" (кириллица Р) идёт раньше "Супервайзер - А" по алфавиту
+    # display_group_name: "операторы без супервизора" -> "Регион УК" (кириллица
+    # Р), "Супервайзер - Смирнов С.С." -> очищенное "Смирнов С.С." (кириллица
+    # С) — "Регион УК" идёт раньше по алфавиту, внутри группы — по fio
     assert fios_in_order == ["ЗДР Борисов Б.Б.", "Антонов А.А.", "Яковлев Я.Я."]

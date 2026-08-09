@@ -20,6 +20,12 @@ REGION_UK_GROUP_RE = re.compile(r"операторы\s+без\s+супервиз
 PEAKS_GROUP_RE = re.compile(r"операторы\s+без\s+супервизора\s*\[Пики\]", re.IGNORECASE)
 PEAKS_SUFFIX = " [Пики]"
 
+# cleanSupervisorName() из старой JS-версии — префиксы вида
+# "Супервайзер - "/"Супервайзер.- "/"Супервизор " перед именем обычного
+# супервайзера. Порядок важен: сначала более длинный "Супервайзер...".
+_SUPERVISOR_PREFIX_RE = re.compile(r"^Супервайзер[.\-–\s]+", re.IGNORECASE)
+_SUPERVIZOR_PREFIX_RE = re.compile(r"^Супервизор\s*", re.IGNORECASE)
+
 # Тир ЛК жёстко завязан на 5 стандартных категорий (см. weekly_rating.py) —
 # "Регион УК" считается только по этим трём, без канала и % ошибок.
 REGION_UK_SCORE_KEYS = {"c1", "lk", "time"}
@@ -33,14 +39,21 @@ def is_region_uk_or_peaks_supervisor(supervisor: str | None) -> bool:
     return bool(supervisor) and bool(REGION_UK_GROUP_RE.search(supervisor))
 
 
+def clean_supervisor_name(name: str | None) -> str:
+    """Убирает префикс "Супервайзер - "/"Супервайзер.- "/"Супервизор " перед
+    именем обычного супервайзера. Точный перенос cleanSupervisorName()."""
+    name = name or ""
+    name = _SUPERVISOR_PREFIX_RE.sub("", name)
+    name = _SUPERVIZOR_PREFIX_RE.sub("", name)
+    return name.strip()
+
+
 def display_group_name(supervisor: str | None) -> str:
-    """Человекочитаемое название группы для API-ответов/фронтенда.
-    cleanSupervisorName() из старой JS-версии сюда не переносилась (текст
-    функции не был дан) — для обычных супервайзеров возвращаем как есть."""
+    """Человекочитаемое название группы для API-ответов/фронтенда."""
     if not supervisor:
         return ""
     if PEAKS_GROUP_RE.search(supervisor):
         return "Выходы на Пики"
     if REGION_UK_GROUP_RE.search(supervisor):
         return "Регион УК"
-    return supervisor
+    return clean_supervisor_name(supervisor)
