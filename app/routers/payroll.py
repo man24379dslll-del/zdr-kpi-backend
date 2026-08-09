@@ -40,12 +40,10 @@ async def get_two_stage_payroll(
             "kpi_ratings",
             params={"upload_id": f"eq.{upload_id}", "select": "fio,supervisor,status,is_novice,salary"},
         )
-        # TODO: колонки (upload_id, fio, amount) — по аналогии с остальными
-        # таблицами, не сверено с реальной схемой payroll_penalties.
         penalty_rows = await client.get(
             "payroll_penalties",
-            params={"upload_id": f"eq.{upload_id}", "select": "fio,amount"},
+            params={"upload_id": f"eq.{upload_id}", "select": "fio,penalty"},
         )
-        penalties_by_upload_id[upload_id] = {row["fio"]: row["amount"] for row in penalty_rows}
+        penalties_by_upload_id[upload_id] = {row["fio"]: row["penalty"] for row in penalty_rows}
 
     return build_two_stage_payroll(matching_uploads, ratings_by_upload_id, penalties_by_upload_id, month, stage, year)
