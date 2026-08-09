@@ -60,11 +60,11 @@
   }
   label.field{display:block;margin-bottom:18px;}
   label.field span{display:block;font-size:13px;color:var(--muted);margin-bottom:7px;font-weight:500;}
-  input[type=text]{
+  input[type=text], input[type=number]{
     width:100%;background:var(--panel-2);border:1px solid var(--line);color:var(--text);
     padding:11px 13px;border-radius:9px;font-family:var(--sans);font-size:14px;
   }
-  input[type=text]:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim);}
+  input[type=text]:focus, input[type=number]:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim);}
   select.period-select{
     background:var(--panel-2);border:1px solid var(--line);color:var(--text);
     padding:11px 13px;border-radius:9px;font-family:var(--sans);font-size:14px;
@@ -278,6 +278,7 @@
         <button class="btn btn-ghost" id="openPayrollBtn" style="padding:7px 14px;font-size:12.5px;">💰 Ведомость ЗП</button>
         <button class="btn btn-ghost" id="openDashboardsBtn" style="padding:7px 14px;font-size:12.5px;">📊 Дашборды</button>
         <button class="btn btn-ghost" id="openDynamicsBtn" style="padding:7px 14px;font-size:12.5px;">📈 Динамика</button>
+        <button class="btn btn-ghost" id="openConstructorBtn" style="padding:7px 14px;font-size:12.5px;">⚙️ Конструктор рейтинга</button>
         <button class="btn btn-ghost" id="logoutBtn" style="padding:7px 14px;font-size:12.5px;">Выйти</button>
       </div>
     </div>
@@ -396,6 +397,40 @@
     </div>
     <div id="standaloneDynLog" class="log"></div>
     <div id="standaloneDynContainer"></div>
+  </div>
+
+  <div class="panel" id="constructorPanel" style="display:none;">
+    <div class="row" style="justify-content:space-between;align-items:flex-start;">
+      <h2 style="margin:0;">Конструктор рейтинга</h2>
+      <button class="btn btn-ghost" id="closeConstructorBtn" style="padding:7px 14px;font-size:12.5px;">Закрыть ✕</button>
+    </div>
+    <div class="sub" style="margin:10px 0 16px;">Изменения категорий и коэффициентов применяются только к БУДУЩИМ расчётам — уже отображённый на экране рейтинг задним числом не пересчитывается.</div>
+
+    <div class="sub-title" style="margin-top:6px;">Категории рейтинга</div>
+    <div class="subtable-wrap" style="margin-top:10px;">
+      <table class="dyn-table" id="categoriesTable">
+        <thead>
+          <tr>
+            <th>Название</th><th>Колонка-источник</th><th>Вес</th><th>Направление</th><th>Вкл.</th><th>Порядок</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="categoriesTbody"></tbody>
+      </table>
+    </div>
+    <div class="row" style="margin-top:14px;">
+      <button class="btn btn-ghost" id="addCategoryBtn" style="padding:7px 14px;font-size:12.5px;">+ Добавить категорию</button>
+    </div>
+
+    <div class="sub-title" style="margin-top:32px;">Коэффициенты ЛГ (лестничные группы)</div>
+    <div class="sub" style="margin:6px 0 12px;">Тир 1 — лучшие места (обычно наибольший коэффициент), тир 10 — худшие.</div>
+    <div class="subtable-wrap">
+      <table class="dyn-table" id="ladderTiersTable">
+        <thead><tr><th>Тир</th><th>Коэффициент</th></tr></thead>
+        <tbody id="ladderTiersTbody"></tbody>
+      </table>
+    </div>
+
+    <div id="constructorLog" class="log"></div>
   </div>
 
   <div class="panel" id="adminOnlyPanel1">
@@ -581,11 +616,13 @@ function onLoggedIn(){
   if(profile.role === "supervisor"){
     // супервайзер: только просмотр своей группы, без загрузки файлов
     $("adminOnlyPanel1").style.display = "none";
+    $("openConstructorBtn").style.display = "none";
     $("pageTitle").textContent = "Моя группа — рейтинг и ЗП";
     $("pageSub").textContent = "Здесь показаны только сотрудники вашей группы. Данные обновляет администратор/руководитель после загрузки очередного отчёта.";
     buildSupervisorViewer();
   } else {
     $("adminOnlyPanel1").style.display = "block";
+    $("openConstructorBtn").style.display = "";
     checkExistingPeriod();
   }
 }
@@ -2035,6 +2072,7 @@ function closeAllTopPanels(){
   $("payrollPanel").style.display = "none";
   $("dashboardsPanel").style.display = "none";
   $("standaloneDynamicsPanel").style.display = "none";
+  $("constructorPanel").style.display = "none";
 }
 
 $("openDynamicsBtn").addEventListener("click", () => {
@@ -2097,6 +2135,18 @@ async function apiGet(path, params){
   const res = await fetch(`${path}${qs}`, { headers: { "Authorization": `Bearer ${session.access_token}` } });
   if(!res.ok) throw new Error(await res.text());
   return res.json();
+}
+
+// POST/PUT/DELETE на свой бэкенд — используется конструктором рейтинга
+// (категории + коэффициенты ЛГ), тем же принципом, что и apiGet выше.
+async function apiSend(method, path, body){
+  const res = await fetch(path, {
+    method,
+    headers: { "Authorization": `Bearer ${session.access_token}`, "Content-Type": "application/json" },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if(!res.ok) throw new Error(await res.text());
+  return res.status === 204 ? null : res.json();
 }
 
 async function loadDashboardData(){
@@ -2692,6 +2742,170 @@ $("dashboardsPanel").querySelectorAll(".dash-tab-btn").forEach(btn => {
     loadActiveDashboard();
   });
 });
+
+// ---------- Конструктор рейтинга (категории + коэффициенты ЛГ) ----------
+// Только admin/manager (кнопка скрыта для супервайзера в onLoggedIn). Меняет
+// настройки для БУДУЩИХ расчётов — на уже отображённый рейтинг не влияет.
+$("openConstructorBtn").addEventListener("click", () => {
+  closeAllTopPanels();
+  $("constructorPanel").style.display = "block";
+  $("constructorPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+  loadConstructorPanel();
+});
+$("closeConstructorBtn").addEventListener("click", () => { $("constructorPanel").style.display = "none"; });
+
+async function loadConstructorPanel(){
+  clearLog($("constructorLog"));
+  await Promise.all([loadCategoriesTable(), loadLadderTiersTable()]);
+}
+
+async function loadCategoriesTable(){
+  const tbody = $("categoriesTbody");
+  tbody.innerHTML = `<tr><td colspan="7" style="color:var(--muted);">Загрузка…</td></tr>`;
+  try{
+    const categories = await apiGet("/categories");
+    tbody.innerHTML = "";
+    categories.forEach(cat => tbody.appendChild(buildCategoryRow(cat)));
+  } catch(err){
+    tbody.innerHTML = "";
+    log("Не удалось загрузить категории: " + err.message, "err", $("constructorLog"));
+  }
+}
+
+function buildCategoryRow(cat){
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td><input type="text" class="cat-label" value="${escapeHtml(cat.label)}"></td>
+    <td><input type="text" class="cat-source" value="${escapeHtml(cat.source_column)}"></td>
+    <td><input type="number" step="0.1" class="cat-weight" value="${cat.weight}" style="width:80px;"></td>
+    <td>
+      <select class="cat-direction">
+        <option value="desc" ${cat.direction === "desc" ? "selected" : ""}>больше = лучше</option>
+        <option value="asc" ${cat.direction === "asc" ? "selected" : ""}>меньше = лучше</option>
+      </select>
+    </td>
+    <td style="text-align:center;"><input type="checkbox" class="cat-enabled" ${cat.enabled ? "checked" : ""}></td>
+    <td><input type="number" class="cat-sort" value="${cat.sort_order}" style="width:70px;"></td>
+    <td><button class="btn btn-ghost cat-delete" style="padding:5px 10px;font-size:12px;">Удалить</button></td>
+  `;
+
+  const save = () => saveCategoryRow(tr, cat);
+  // текстовые/числовые поля — по потере фокуса; чекбокс и селект — сразу по изменению
+  tr.querySelectorAll("input[type=text], input[type=number]").forEach(el => el.addEventListener("blur", save));
+  tr.querySelectorAll("input[type=checkbox], select").forEach(el => el.addEventListener("change", save));
+  tr.querySelector(".cat-delete").addEventListener("click", () => deleteCategoryRow(tr, cat));
+  return tr;
+}
+
+function readCategoryRowValues(tr){
+  return {
+    label: tr.querySelector(".cat-label").value.trim(),
+    source_column: tr.querySelector(".cat-source").value.trim(),
+    weight: parseFloat(tr.querySelector(".cat-weight").value) || 0,
+    direction: tr.querySelector(".cat-direction").value,
+    enabled: tr.querySelector(".cat-enabled").checked,
+    sort_order: parseInt(tr.querySelector(".cat-sort").value, 10) || 0,
+  };
+}
+
+async function saveCategoryRow(tr, cat){
+  // key не редактируется через интерфейс: на него завязана бизнес-логика
+  // (тир ЛК, Регион УК) по конкретным строкам 'c1'/'lk'/'channel'/'time'/'errors' —
+  // отправляем как было, меняем только показанные в таблице поля.
+  const payload = { key: cat.key, ...readCategoryRowValues(tr) };
+  try{
+    const updated = await apiSend("PUT", `/categories/${cat.id}`, payload);
+    Object.assign(cat, updated);
+    log(`Сохранено: ${updated.label}`, "ok", $("constructorLog"));
+  } catch(err){
+    log(`Не удалось сохранить "${cat.label}": ${err.message}`, "err", $("constructorLog"));
+  }
+}
+
+async function deleteCategoryRow(tr, cat){
+  if(!confirm(`Удалить категорию "${cat.label}"? Она используется в расчёте рейтинга — действие нельзя отменить.`)) return;
+  try{
+    await apiSend("DELETE", `/categories/${cat.id}`);
+    tr.remove();
+    log(`Удалено: ${cat.label}`, "ok", $("constructorLog"));
+  } catch(err){
+    log(`Не удалось удалить "${cat.label}": ${err.message}`, "err", $("constructorLog"));
+  }
+}
+
+$("addCategoryBtn").addEventListener("click", () => {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td><input type="text" class="cat-label" placeholder="Название"></td>
+    <td><input type="text" class="cat-source" placeholder="напр. my_metric_per_contact"></td>
+    <td><input type="number" step="0.1" class="cat-weight" value="1" style="width:80px;"></td>
+    <td>
+      <select class="cat-direction">
+        <option value="desc" selected>больше = лучше</option>
+        <option value="asc">меньше = лучше</option>
+      </select>
+    </td>
+    <td style="text-align:center;"><input type="checkbox" class="cat-enabled" checked></td>
+    <td><input type="number" class="cat-sort" value="0" style="width:70px;"></td>
+    <td>
+      <input type="text" class="cat-key" placeholder="ключ (key)" style="margin-bottom:6px;">
+      <button class="btn btn-primary cat-create" style="padding:5px 10px;font-size:12px;">Создать</button>
+    </td>
+  `;
+  $("categoriesTbody").appendChild(tr);
+  tr.querySelector(".cat-key").focus();
+
+  tr.querySelector(".cat-create").addEventListener("click", async () => {
+    const payload = { key: tr.querySelector(".cat-key").value.trim(), ...readCategoryRowValues(tr) };
+    if(!payload.key || !payload.label || !payload.source_column){
+      log("Заполните ключ, название и колонку-источник.", "err", $("constructorLog"));
+      return;
+    }
+    try{
+      await apiSend("POST", "/categories", payload);
+      log(`Создано: ${payload.label}`, "ok", $("constructorLog"));
+      await loadCategoriesTable(); // проще перезагрузить таблицу, чем достраивать строку вручную
+    } catch(err){
+      log(`Не удалось создать категорию: ${err.message}`, "err", $("constructorLog"));
+    }
+  });
+});
+
+async function loadLadderTiersTable(){
+  const tbody = $("ladderTiersTbody");
+  tbody.innerHTML = `<tr><td colspan="2" style="color:var(--muted);">Загрузка…</td></tr>`;
+  try{
+    const tiers = await apiGet("/ladder-tiers");
+    tbody.innerHTML = "";
+    [...tiers].sort((a,b) => a.tier_number - b.tier_number).forEach(t => tbody.appendChild(buildLadderTierRow(t)));
+  } catch(err){
+    tbody.innerHTML = "";
+    log("Не удалось загрузить коэффициенты ЛГ: " + err.message, "err", $("constructorLog"));
+  }
+}
+
+function buildLadderTierRow(tier){
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td style="font-family:var(--sans);">Тир ${tier.tier_number}</td>
+    <td><input type="number" step="0.01" class="tier-coeff" value="${tier.coefficient}" style="width:100px;"></td>
+  `;
+  const input = tr.querySelector(".tier-coeff");
+  input.addEventListener("blur", async () => {
+    const value = parseFloat(input.value);
+    if(isNaN(value)){
+      log(`Тир ${tier.tier_number}: введите число.`, "err", $("constructorLog"));
+      return;
+    }
+    try{
+      await apiSend("PUT", `/ladder-tiers/${tier.tier_number}`, { coefficient: value });
+      log(`Тир ${tier.tier_number}: сохранено (${value}).`, "ok", $("constructorLog"));
+    } catch(err){
+      log(`Тир ${tier.tier_number}: не удалось сохранить — ${err.message}`, "err", $("constructorLog"));
+    }
+  });
+  return tr;
+}
 
 $("loginPassword").addEventListener("keydown", (e) => { if(e.key === "Enter") $("loginBtn").click(); });
 
