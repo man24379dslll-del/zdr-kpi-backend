@@ -69,7 +69,7 @@ def build_kpi_rating_row(upload_id: str, r: EmployeeScore) -> dict:
 
         "bonus075": raw.get("bonus075"),
         "bonus2": raw.get("bonus2"),
-        "salary": None,  # формула ЗП — отдельный, ещё не перенесённый шаг
+        "salary": r.salary,  # None для дневных периодов, см. services/salary.py
     }
 
 

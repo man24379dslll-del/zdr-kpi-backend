@@ -1,10 +1,11 @@
 """
 Полный недельный расчёт рейтинга: приём Excel-файла → категории из
 конструктора рейтинга (rating_categories) → тир ЛК → итоговое место →
-распределение по ЛГ → запись в kpi_uploads/kpi_ratings. Сам расчёт — в
-services/weekly_rating.py, разбор файла — в services/excel_parsing.py,
+распределение по ЛГ → ЗП недели (по коэффициенту ЛГ прошлой недели) →
+запись в kpi_uploads/kpi_ratings. Сам расчёт — в services/weekly_rating.py,
+разбор файла — в services/excel_parsing.py, ЗП — в services/salary.py,
 запись результата — в services/ratings_repository.py; здесь только
-HTTP-обвязка (приём файла, авторизация, чтение категорий из Supabase).
+HTTP-обвязка (приём файла, авторизация, чтение из Supabase).
 """
 from __future__ import annotations
 
@@ -12,8 +13,10 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 
 from app.auth import CurrentUser, get_current_user
 from app.services.excel_parsing import is_na_row, parse_weekly_rating_excel
+from app.services.payroll import is_weekly_period_label
 from app.services.rating_engine import RatingCategory
 from app.services.ratings_repository import save_weekly_rating
+from app.services.salary import assign_salary
 from app.services.weekly_rating import compute_weekly_rating
 from app.supabase_client import as_user
 
@@ -33,10 +36,37 @@ async def _load_supervisor_channels(user: CurrentUser) -> dict[str, str]:
     return {row["supervisor"]: row["channel"] for row in rows}
 
 
+async def _load_previous_week_coefficients(user: CurrentUser, period_label: str) -> dict[str, float]:
+    """Коэффициент ЛГ, который человек заработал НА ПРОШЛОЙ неделе, по fio.
+
+    Ищем только "месяц-(неделя-1)" ВНУТРИ ТОГО ЖЕ МЕСЯЦА: у period_label
+    нет года, а сколько недель было в предыдущем месяце (4 или 5) —
+    неизвестно, поэтому переход через границу месяца (неделя 1) здесь не
+    обрабатывается — просто нет найденной предыдущей недели, и дальше
+    assign_salary естественно даёт всем коэффициент по умолчанию 1.0."""
+    month_str, _, week_str = period_label.partition("-")
+    week = int(week_str)
+    if week <= 1:
+        return {}
+    prev_label = f"{month_str}-{week - 1}"
+
+    client = as_user(user.access_token)
+    uploads = await client.get("kpi_uploads", params={"period_label": f"eq.{prev_label}", "select": "id"})
+    if not uploads:
+        return {}
+
+    rows = await client.get(
+        "kpi_ratings",
+        params={"upload_id": f"eq.{uploads[0]['id']}", "select": "fio,coefficient"},
+    )
+    return {row["fio"]: row["coefficient"] for row in rows if row.get("coefficient") is not None}
+
+
 @router.post("/compute")
 async def compute_weekly_rating_endpoint(
     file: UploadFile,
     period_label: str,
+    weeks_in_month: int = 4,
     user: CurrentUser = Depends(get_current_user),
 ):
     """Считает полный недельный рейтинг, сохраняет его в kpi_uploads/kpi_ratings
@@ -44,6 +74,9 @@ async def compute_weekly_rating_endpoint(
 
     period_label — метка периода для kpi_uploads (например '7-1' на неделю
     или '2026-07-27' на день) — как в старой JS-версии, формат не проверяем.
+    weeks_in_month — 4 или 5, сколько недель в текущем месяце (для формулы
+    ЗП: MONTHLY_BASE_RATE / weeks_in_month); учитывается только для
+    недельных периодов, ввод не автоматический — вручную задаёт вызывающий.
     """
     if not user.is_admin_or_manager:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Только admin/manager могут считать недельный рейтинг")
@@ -59,6 +92,10 @@ async def compute_weekly_rating_endpoint(
         results = compute_weekly_rating(employees, categories, na_predicate=is_na_row)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    if is_weekly_period_label(period_label):
+        prev_coefficients = await _load_previous_week_coefficients(user, period_label)
+        assign_salary(results, prev_coefficients, weeks_in_month)
 
     client = as_user(user.access_token)
     upload_id = await save_weekly_rating(client, period_label, file.filename or "", results)
@@ -77,6 +114,7 @@ async def compute_weekly_rating_endpoint(
                 "is_na": r.is_na,
                 "tier": r.tier,
                 "coefficient": r.coefficient,
+                "salary": r.salary,
             }
             for r in results
         ],

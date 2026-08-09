@@ -38,6 +38,14 @@ RU_MONTHS_GENITIVE = [
 ]
 
 
+def is_weekly_period_label(period_label: str | None) -> bool:
+    """period_label вида "месяц-неделя" (например "7-1") — недельный
+    период; вида "2026-07-27" (дата) — дневной. Используется и здесь
+    (фонд ЗП/формула ЗП только для недельных периодов), и в
+    services/dashboards.py."""
+    return bool(period_label and PERIOD_LABEL_RE.match(period_label))
+
+
 def format_payroll_period_label(month: int, stage: str, year: int) -> str:
     """"01-15 Августа 2026" (аванс) / "16-31 Августа 2026" (расчёт)."""
     month_name = RU_MONTHS_GENITIVE[month - 1].capitalize()

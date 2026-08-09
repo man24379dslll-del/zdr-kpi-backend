@@ -50,6 +50,7 @@ class EmployeeScore:
     is_na: bool = False
     tier: int | None = None          # ЛГ (1..10), см. services/ladder_groups.py
     coefficient: float | None = None  # коэффициент ЛГ (1.4..0.25)
+    salary: float | None = None      # ЗП недели, см. services/salary.py
 
 
 def rank_standard(values: list[float], value: float, direction: str) -> int:

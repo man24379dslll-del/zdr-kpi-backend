@@ -15,7 +15,7 @@ time_per_contact, errors_pct — меньше значит лучше; для о
 from __future__ import annotations
 
 from app.services.group_naming import display_group_name, is_region_uk_or_peaks_supervisor
-from app.services.payroll import PERIOD_LABEL_RE as WEEKLY_PERIOD_LABEL_RE
+from app.services.payroll import is_weekly_period_label
 
 LOWER_IS_BETTER = {"total_score", "time_per_contact", "errors_pct"}
 
@@ -55,10 +55,6 @@ def _delta(current: float | None, previous: float | None, metric: str) -> dict |
     return {"diff": diff, "is_improvement": is_improvement}
 
 
-def _is_weekly_period(period_label: str | None) -> bool:
-    return bool(period_label and WEEKLY_PERIOD_LABEL_RE.match(period_label))
-
-
 def build_summary_dashboard(
     ratings: list[dict],
     period_label: str | None = None,
@@ -77,7 +73,7 @@ def build_summary_dashboard(
     avg_score = _avg([r.get("total_score") for r in evaluated])
     prev_avg_score = _avg([r.get("total_score") for r in prev_evaluated]) if has_previous else None
 
-    is_weekly = _is_weekly_period(period_label)
+    is_weekly = is_weekly_period_label(period_label)
     salary_fund = sum((r.get("salary") or 0) for r in main) if is_weekly else None
     prev_salary_fund = sum((r.get("salary") or 0) for r in prev_main) if (is_weekly and has_previous) else None
 
