@@ -128,3 +128,32 @@ create policy "ladder_tiers_write" on ladder_tier_coefficients
 insert into ladder_tier_coefficients (tier_number, coefficient) values
   (1,1.4),(2,1.3),(3,1.2),(4,1.1),(5,1.05),(6,1),(7,0.9),(8,0.75),(9,0.5),(10,0.25)
 on conflict (tier_number) do nothing;
+
+-- ============================================================
+-- Штраф/премия за этап ведомости ЗП (не за неделю!)
+-- ============================================================
+-- Один раз на весь этап "Расчёт" (месяц, год, ФИО) — не привязан к
+-- конкретной неделе/upload_id, в отличие от старой payroll_penalties
+-- (та per-week и остаётся как есть). Применяется ТОЛЬКО к stage="2"
+-- (недели 3-5), см. services/payroll.py.
+create table if not exists payroll_stage_adjustments (
+  id uuid primary key default gen_random_uuid(),
+  month int not null check (month between 1 and 12),
+  year int not null,
+  fio text not null,
+  penalty numeric not null default 0,
+  premium numeric not null default 0,
+  comment text,
+  updated_at timestamptz not null default now(),
+  unique(month, year, fio)
+);
+
+alter table payroll_stage_adjustments enable row level security;
+
+drop policy if exists "stage_adj_select" on payroll_stage_adjustments;
+create policy "stage_adj_select" on payroll_stage_adjustments
+  for select using (is_admin_or_manager());
+
+drop policy if exists "stage_adj_write" on payroll_stage_adjustments;
+create policy "stage_adj_write" on payroll_stage_adjustments
+  for all using (is_admin_or_manager()) with check (is_admin_or_manager());

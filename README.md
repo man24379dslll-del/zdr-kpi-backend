@@ -48,8 +48,11 @@ GitHub + Railway + Python (FastAPI). База данных остаётся на
   человекочитаемое название группы для API. Покрыт тестами
   (`tests/test_group_naming.py`, `tests/test_region_uk.py`).
 - `app/services/payroll.py` — двухэтапная ведомость ЗП (аванс нед.1-2 /
-  расчёт нед.3-5), эндпоинт `GET /payroll/two-stage`. Покрыт тестами
-  (`tests/test_payroll.py`).
+  расчёт нед.3-5), эндпоинт `GET /payroll/two-stage`; штраф/премию за
+  этап (`payroll_stage_adjustments` — один раз на (месяц, год, ФИО), не
+  по неделям, только для этапа "Расчёт") правит `PUT /payroll/stage-adjustment`.
+  Подключено к `static/index.html` (панель "💰 Ведомость ЗП"). Покрыт
+  тестами (`tests/test_payroll.py`).
 - `app/services/dashboards.py` — 4 дашборда (сводка, воронка новичков,
   каналы, аномалии), эндпоинты `GET /dashboards/*`. Покрыт тестами
   (`tests/test_dashboards.py`).
@@ -64,7 +67,7 @@ GitHub + Railway + Python (FastAPI). База данных остаётся на
 - `app/auth.py` — проверка Supabase-токена, подтягивание роли
   (admin/manager/supervisor) из `user_profiles`, как в старой версии
 - `app/db/schema.sql` — новые таблицы (`rating_categories`, `shift_records`,
-  `supervisor_channels`, `ladder_tier_coefficients`)
+  `supervisor_channels`, `ladder_tier_coefficients`, `payroll_stage_adjustments`)
 - `railway.json` / `Procfile` — конфиг для деплоя на Railway
 
 ## Что ЕЩЁ НЕ перенесено из старой JS-версии (следующие шаги)

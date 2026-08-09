@@ -2395,63 +2395,60 @@ $("payrollStageToggle").querySelectorAll("button").forEach(btn => {
   });
 });
 
-function daysInMonth(monthNum, year){ return new Date(year, monthNum, 0).getDate(); }
-function periodRangeLabel(monthNum, stage, year){
-  const monthName = MONTHS[monthNum-1];
-  if(stage === "1") return `01-15 ${monthName.charAt(0).toUpperCase()+monthName.slice(1)} ${year}`;
-  const last = daysInMonth(monthNum, year);
-  return `16-${last} ${monthName.charAt(0).toUpperCase()+monthName.slice(1)} ${year}`;
-}
 
 async function buildTwoStagePayroll(){
   const month = parseInt($("payrollMonth").value, 10);
   const stage = $("payrollStageToggle").querySelector(".active").dataset.stage;
-  const weeks = stage === "1" ? [1,2] : [3,4,5];
   const year = new Date().getFullYear();
 
-  const allUploads = await sbGet(`kpi_uploads?select=id,period_label`);
-  const matchingUploads = allUploads.filter(u => {
-    const m = /^(\d+)-(\d+)$/.exec(u.period_label || "");
-    if(!m) return false;
-    return parseInt(m[1],10) === month && weeks.includes(parseInt(m[2],10));
-  });
+  const result = await apiGet("/payroll/two-stage", { month, stage, year });
 
-  const acc = {}; // fio -> {fio, supervisor, status, sum, penaltySum, weeksFound}
-  const reqMap = await fetchRequisitesMap();
-
-  for(const u of matchingUploads){
-    const rows = await sbGet(`kpi_ratings?upload_id=eq.${u.id}&select=fio,supervisor,status,is_novice,salary&salary=not.is.null`);
-    let penaltyMap = {};
-    try{
-      const penRows = await sbGet(`payroll_penalties?upload_id=eq.${u.id}&select=fio,penalty`);
-      for(const p of penRows) penaltyMap[p.fio] = p.penalty;
-    } catch(err){}
-    for(const r of rows){
-      if(r.is_novice) continue; // новички считаем отдельно, в основную ведомость не включаем
-      const net = (r.salary || 0) - (penaltyMap[r.fio] || 0);
-      if(!acc[r.fio]) acc[r.fio] = { fio: r.fio, supervisor: r.supervisor, status: r.status, sum: 0, penaltySum: 0, weeksFound: 0 };
-      acc[r.fio].sum += net;
-      acc[r.fio].penaltySum += (penaltyMap[r.fio] || 0);
-      acc[r.fio].weeksFound += 1;
-      acc[r.fio].supervisor = r.supervisor;
-      acc[r.fio].status = r.status;
-    }
-  }
-
-  const rows = Object.values(acc).sort((a,b) => displayGroupName(a.supervisor).localeCompare(displayGroupName(b.supervisor)) || a.fio.localeCompare(b.fio));
-  rows.forEach(r => {
-    const req = reqMap[r.fio];
-    r.position = (req && req[0] && req[0].position) || r.status || "";
-    r.paymentType = (req && req[0] && req[0].payment_type) || "";
-    r.requisitesText = formatRequisites(req);
-    r.comment = r.penaltySum ? `Штраф удержан: ${fmt(Math.round(r.penaltySum))} ₽` : "";
+  const rows = result.rows.map(r => {
+    // penalty/premium — штраф/премия ЗА ЭТАП (не по неделям), только для
+    // stage="2"; backend уже вычёл/добавил их в r.sum, baseSum — сумма ДО
+    // корректировки, нужна, чтобы пересчитывать sum на лету при редактировании.
+    const penalty = stage === "2" ? (r.penalty || 0) : null;
+    const premium = stage === "2" ? (r.premium || 0) : null;
+    const baseSum = stage === "2" ? (r.sum + penalty - premium) : r.sum;
+    return {
+      fio: r.fio,
+      supervisor: r.supervisor,
+      status: r.status,
+      sum: r.sum,
+      baseSum,
+      penalty,
+      premium,
+      comment: r.comment || "",
+      position: r.status || "",
+      // TODO: реквизиты не подключены к backend (payment_requisites) — подключим отдельно
+      paymentType: "",
+      requisitesText: "",
+    };
   });
 
   return {
-    rows, month, stage, weeks, year,
-    periodLabel: periodRangeLabel(month, stage, year),
-    matchedUploads: matchingUploads.length,
+    rows, month, stage, year,
+    weeks: result.weeks,
+    periodLabel: result.period_label_text,
+    matchedUploads: result.matched_uploads,
   };
+}
+
+async function saveStageAdjustment(row, penaltyInput, premiumInput){
+  const penalty = parseFloat(penaltyInput.value) || 0;
+  const premium = parseFloat(premiumInput.value) || 0;
+  const meta = currentPayrollMeta;
+  try{
+    await apiSend("PUT", "/payroll/stage-adjustment", {
+      month: meta.month, year: meta.year, fio: row.fio, penalty, premium,
+    });
+    row.penalty = penalty;
+    row.premium = premium;
+    row.sum = row.baseSum - penalty + premium;
+    renderPayrollTable(); // локальный перерендер из уже загруженных данных, без сети/перезагрузки страницы
+  } catch(err){
+    alert(`Не удалось сохранить штраф/премию для ${row.fio}: ${err.message}`);
+  }
 }
 
 async function renderDashPayroll(){
@@ -2477,6 +2474,11 @@ function renderPayrollTable(){
   visibleRows.forEach(r => { (byGroup[r.supervisor] ||= []).push(r); });
   const groupNames = Object.keys(byGroup).sort(compareGroupNames);
 
+  // Штраф/премия за этап — только для "Расчёт" (stage="2"), у "Аванса" этих
+  // полей вообще нет (ни как input, ни как текст).
+  const showAdjustments = result.stage === "2";
+  const totalCols = showAdjustments ? 11 : 9;
+
   let globalIdx = 0;
   let html = "";
   groupNames.forEach(gname => {
@@ -2485,11 +2487,11 @@ function renderPayrollTable(){
     html += `<div class="group-block">`;
     html += `<div class="group-title">${displayGroupName(gname)}<span class="count">${groupRows.length} чел. · ${fmt(Math.round(groupTotal))} ₽</span></div>`;
     html += `<div class="subtable-wrap"><table class="dyn-table"><thead><tr>
-      <th>№</th><th>ФИО</th><th>Должность</th><th>Комментарий</th><th>Способ оплаты</th><th>Реквизиты</th><th>Период начисления</th><th>Ставка</th><th>Аванс</th><th>Сумма начисления</th>
+      <th>№</th><th>ФИО</th><th>Должность</th><th>Комментарий</th><th>Способ оплаты</th><th>Реквизиты</th><th>Период начисления</th><th>Ставка</th><th>Аванс</th>${showAdjustments ? "<th>Штраф</th><th>Премия</th>" : ""}<th>Сумма начисления</th>
     </tr></thead><tbody>`;
     groupRows.forEach(r => {
       globalIdx++;
-      html += `<tr>
+      html += `<tr data-fio="${escapeHtml(r.fio)}">
         <td>${globalIdx}</td>
         <td style="font-family:var(--sans);font-weight:600;">${r.fio}</td>
         <td style="font-family:var(--sans);">${r.position}</td>
@@ -2499,11 +2501,15 @@ function renderPayrollTable(){
         <td style="font-family:var(--sans);">${result.periodLabel}</td>
         <td style="font-family:var(--sans);">${result.stage === "2" ? "ставка" : ""}</td>
         <td style="font-family:var(--sans);">${result.stage === "1" ? "Аванс" : ""}</td>
+        ${showAdjustments ? `
+        <td><input type="number" step="0.01" class="payroll-penalty" value="${r.penalty || 0}" style="width:90px;"></td>
+        <td><input type="number" step="0.01" class="payroll-premium" value="${r.premium || 0}" style="width:90px;"></td>
+        ` : ""}
         <td style="font-weight:800;color:var(--good);">${fmt(Math.round(r.sum))}</td>
       </tr>`;
     });
     html += `<tr style="font-weight:800;background:var(--panel-2);">
-      <td colspan="9" style="text-align:right;font-family:var(--sans);">Итого по группе:</td>
+      <td colspan="${totalCols}" style="text-align:right;font-family:var(--sans);">Итого по группе:</td>
       <td style="color:var(--good);">${fmt(Math.round(groupTotal))} ₽</td>
     </tr>`;
     html += `</tbody></table></div></div>`;
@@ -2514,6 +2520,18 @@ function renderPayrollTable(){
     <div class="stat"><div class="n">${fmt(Math.round(grandTotal))} ₽</div><div class="l">${search ? "итого по найденным" : "итого к выплате по всем группам"}</div></div>
   </div>`;
   c.innerHTML = html;
+
+  if(showAdjustments){
+    c.querySelectorAll("tr[data-fio]").forEach(tr => {
+      const row = visibleRows.find(r => r.fio === tr.dataset.fio);
+      if(!row) return;
+      const penaltyInput = tr.querySelector(".payroll-penalty");
+      const premiumInput = tr.querySelector(".payroll-premium");
+      const save = () => saveStageAdjustment(row, penaltyInput, premiumInput);
+      penaltyInput.addEventListener("blur", save);
+      premiumInput.addEventListener("blur", save);
+    });
+  }
 }
 $("payrollSearchBox").addEventListener("input", renderPayrollTable);
 

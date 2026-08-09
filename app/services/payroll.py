@@ -11,7 +11,14 @@
 payroll_penalties (штрафы) — уже существующая в Supabase таблица, здесь
 не создаётся: id, upload_id, fio, penalty numeric, comment, updated_at,
 unique(upload_id, fio). Колонка суммы штрафа называется "penalty" (не
-"amount" — уточнено и поправлено в routers/payroll.py).
+"amount" — уточнено и поправлено в routers/payroll.py). Это ПО-НЕДЕЛЬНЫЙ
+штраф, не путать с payroll_stage_adjustments ниже.
+
+payroll_stage_adjustments (см. app/db/schema.sql) — штраф/премия ОДИН РАЗ
+на весь этап (месяц, год, ФИО), не по неделям. Применяется ТОЛЬКО к
+stage="2" (Расчёт, недели 3-5) — у "Аванса" этих полей нет вообще, даже
+если stage_adjustments_by_fio передан, для stage="1" build_two_stage_payroll
+его игнорирует.
 
 payment_requisites (должность/реквизиты на человека) — намеренно НЕ
 подмешивается: таблицы в Python-версии ещё нет (сказали, что можно
@@ -80,6 +87,7 @@ def build_two_stage_payroll(
     month: int,
     stage: str,
     year: int,
+    stage_adjustments_by_fio: dict[str, dict] | None = None,
 ) -> dict:
     """
     uploads: строки kpi_uploads (нужны id и period_label); можно передать
@@ -87,6 +95,12 @@ def build_two_stage_payroll(
              нет — тут они переотфильтруются)
     ratings_by_upload_id: upload_id -> сырые строки kpi_ratings этой загрузки
     penalties_by_upload_id: upload_id -> {fio: сумма штрафа} из payroll_penalties
+                             (по-недельный штраф, уже учтён в "sum" ниже)
+    stage_adjustments_by_fio: {fio: {"penalty":.., "premium":..}} из
+             payroll_stage_adjustments — по одному разу на весь этап.
+             Применяется ТОЛЬКО когда stage == '2' (Расчёт); для stage == '1'
+             (Аванс) полностью игнорируется, даже если передан — в rows не
+             появятся ключи 'penalty'/'premium' вовсе.
     """
     matching_uploads = filter_uploads_for_stage(uploads, month, stage)
 
@@ -114,6 +128,15 @@ def build_two_stage_payroll(
         penalty_sum = entry["penalty_sum"]
         penalty_text = int(penalty_sum) if penalty_sum == int(penalty_sum) else penalty_sum
         entry["comment"] = f"Штраф удержан: {penalty_text} ₽" if penalty_sum > 0 else None
+
+        if stage == "2":
+            adjustment = (stage_adjustments_by_fio or {}).get(entry["fio"], {})
+            penalty = adjustment.get("penalty") or 0
+            premium = adjustment.get("premium") or 0
+            entry["penalty"] = penalty
+            entry["premium"] = premium
+            entry["sum"] = entry["sum"] - penalty + premium
+
     rows.sort(key=lambda e: (display_group_name(e["supervisor"]), e["fio"]))
 
     return {
@@ -122,4 +145,5 @@ def build_two_stage_payroll(
         "stage": stage,
         "weeks": list(WEEKS_BY_STAGE[stage]),
         "period_label_text": format_payroll_period_label(month, stage, year),
+        "matched_uploads": len(matching_uploads),
     }

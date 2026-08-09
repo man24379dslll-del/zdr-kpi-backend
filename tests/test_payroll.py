@@ -98,3 +98,78 @@ def test_build_two_stage_payroll_sorted_by_display_group_name_then_fio():
     # Р), "Супервайзер - Смирнов С.С." -> очищенное "Смирнов С.С." (кириллица
     # С) — "Регион УК" идёт раньше по алфавиту, внутри группы — по fio
     assert fios_in_order == ["ЗДР Борисов Б.Б.", "Антонов А.А.", "Яковлев Я.Я."]
+
+
+# --- штраф/премия за этап (payroll_stage_adjustments) ---
+
+def test_stage_adjustment_applies_only_for_stage_2():
+    uploads = [
+        {"id": "u7-3", "period_label": "7-3"},
+        {"id": "u7-4", "period_label": "7-4"},
+        {"id": "u7-5", "period_label": "7-5"},
+    ]
+    ratings_by_upload = {
+        u["id"]: [{"fio": "Иванов И.И.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 1000}]
+        for u in uploads
+    }
+    stage_adjustments = {"Иванов И.И.": {"penalty": 500, "premium": 200}}
+
+    result = build_two_stage_payroll(
+        uploads, ratings_by_upload, {}, month=7, stage="2", year=2026,
+        stage_adjustments_by_fio=stage_adjustments,
+    )
+    row = result["rows"][0]
+    assert row["penalty"] == 500
+    assert row["premium"] == 200
+    assert row["sum"] == 3000 - 500 + 200
+
+
+def test_stage_adjustment_has_no_effect_on_stage_1_even_if_passed():
+    uploads = [{"id": "u7-1", "period_label": "7-1"}, {"id": "u7-2", "period_label": "7-2"}]
+    ratings_by_upload = {
+        u["id"]: [{"fio": "Иванов И.И.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 1000}]
+        for u in uploads
+    }
+    # даже если по ошибке передать корректировки на аванс — они не должны применяться
+    stage_adjustments = {"Иванов И.И.": {"penalty": 500, "premium": 200}}
+
+    result = build_two_stage_payroll(
+        uploads, ratings_by_upload, {}, month=7, stage="1", year=2026,
+        stage_adjustments_by_fio=stage_adjustments,
+    )
+    row = result["rows"][0]
+    assert "penalty" not in row
+    assert "premium" not in row
+    assert row["sum"] == 2000
+
+
+def test_stage_adjustment_defaults_to_zero_when_no_record_for_stage_2():
+    uploads = [{"id": "u7-3", "period_label": "7-3"}]
+    ratings_by_upload = {"u7-3": [{"fio": "Без корректировки Б.Б.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 500}]}
+    result = build_two_stage_payroll(uploads, ratings_by_upload, {}, month=7, stage="2", year=2026, stage_adjustments_by_fio={})
+    row = result["rows"][0]
+    assert row["penalty"] == 0
+    assert row["premium"] == 0
+    assert row["sum"] == 500
+
+
+def test_stage_adjustment_reflects_latest_saved_value_after_upsert():
+    # Эмулирует апсерт: PUT /payroll/stage-adjustment перезаписывает запись
+    # по (month, year, fio) — второй расчёт с обновлённым значением должен
+    # показать НОВОЕ значение, не накопленную сумму двух сохранений.
+    uploads = [{"id": "u7-3", "period_label": "7-3"}]
+    ratings_by_upload = {"u7-3": [{"fio": "Иванов И.И.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 1000}]}
+
+    first = build_two_stage_payroll(
+        uploads, ratings_by_upload, {}, month=7, stage="2", year=2026,
+        stage_adjustments_by_fio={"Иванов И.И.": {"penalty": 100, "premium": 0}},
+    )
+    assert first["rows"][0]["sum"] == 900
+
+    second = build_two_stage_payroll(
+        uploads, ratings_by_upload, {}, month=7, stage="2", year=2026,
+        stage_adjustments_by_fio={"Иванов И.И.": {"penalty": 300, "premium": 50}},
+    )
+    assert second["rows"][0]["penalty"] == 300
+    assert second["rows"][0]["premium"] == 50
+    assert second["rows"][0]["sum"] == 750
