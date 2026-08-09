@@ -1,0 +1,66 @@
+"""
+Тир ЛК (A/Б/В) — точный перенос из старой JS-версии (computeTieredLkPlaces).
+
+Определяет МЕСТО сотрудника внутри категории "ЛК" (одной из 5 категорий
+обобщённого движка рейтинга, см. rating_engine.py). Не путать с ЛГ
+(ladder_groups.py) — это отдельный, следующий уровень системы, который
+работает уже с ИТОГОВЫМ местом в рейтинге за неделю, а не с местом внутри
+одной категории.
+
+Тир A — есть карточки ЛК И конверсия > 0: обычный спортивный ранг по
+        "ЛК: сумма с контакта" (lk_pc), больше = лучше.
+Тир Б — карточек 0, либо 1..9 карточек с нулевой конверсией.
+Тир В — 10+ карточек, но конверсия == 0.
+
+Тиры Б и В не ранжируются между собой отдельно: их место = размер
+предыдущих тиров + среднее МЕСТО (не значение) по остальным 4 категориям
+рейтинга той же недели (c1/канал/время/ошибки) — это гарантирует, что
+Б всегда хуже A, а В всегда хуже Б, независимо от результатов в других
+категориях.
+"""
+from __future__ import annotations
+
+from app.services.rating_engine import rank_standard
+
+OTHER_PLACE_FIELDS = ("c1_place", "ch_place", "time_place", "errors_place")
+
+
+def compute_tiered_lk_places(items: list[dict]) -> list[float]:
+    """
+    items: строки за неделю; каждая уже должна содержать посчитанные места
+    по остальным 4 категориям (c1_place/ch_place/time_place/errors_place)
+    и сырые lk_cards/lk_conv/lk_pc.
+
+    Возвращает список мест по категории "ЛК", в том же порядке, что items:
+    тир A — целые числа 1..|A|; тиры Б/В — дробные, гарантированно хуже A.
+    """
+    idx_a: list[int] = []
+    idx_b: list[int] = []
+    idx_c: list[int] = []
+    for i, e in enumerate(items):
+        cards = e.get("lk_cards") or 0
+        conv = e.get("lk_conv") or 0
+        if cards > 0 and conv > 0:
+            idx_a.append(i)
+        elif cards >= 10 and conv == 0:
+            idx_c.append(i)
+        else:
+            idx_b.append(i)  # cards===0, либо (1..9 карточек И конверсия===0)
+
+    places: list[float] = [1.0] * len(items)
+
+    def avg_other_places(i: int) -> float:
+        e = items[i]
+        return sum(e[field] for field in OTHER_PLACE_FIELDS) / 4
+
+    pc_a = [items[i]["lk_pc"] for i in idx_a]
+    for i in idx_a:
+        places[i] = float(rank_standard(pc_a, items[i]["lk_pc"], "desc"))
+
+    for i in idx_b:
+        places[i] = len(idx_a) + avg_other_places(i)
+
+    for i in idx_c:
+        places[i] = len(idx_a) + len(idx_b) + avg_other_places(i)
+
+    return places
