@@ -48,6 +48,8 @@ class EmployeeScore:
     total_score: float = 0.0
     final_place: int | None = None
     is_na: bool = False
+    tier: int | None = None          # ЛГ (1..10), см. services/ladder_groups.py
+    coefficient: float | None = None  # коэффициент ЛГ (1.4..0.25)
 
 
 def rank_standard(values: list[float], value: float, direction: str) -> int:
@@ -59,34 +61,34 @@ def rank_standard(values: list[float], value: float, direction: str) -> int:
     return better + 1
 
 
-def compute_ratings(
-    employees: list[dict],
-    categories: list[RatingCategory],
-    fio_field: str = "fio",
+def apply_category_ranks(results: list[EmployeeScore], categories: list[RatingCategory]) -> None:
+    """Проставляет r.places[cat.key]/r.scores[cat.key] по обычному спортивному
+    рангу для каждой категории. Общая часть, которую переиспользует как
+    compute_ratings, так и services/weekly_rating.py (там она применяется
+    только к категориям, кроме 'lk' — та считается через tier_lk.py)."""
+    for cat in categories:
+        values = [r.raw.get(cat.source_column) or 0 for r in results]
+        for r in results:
+            v = r.raw.get(cat.source_column) or 0
+            place = rank_standard(values, v, cat.direction)
+            r.places[cat.key] = place
+            r.scores[cat.key] = place * cat.weight
+
+
+def finalize_final_places(
+    results: list[EmployeeScore],
     na_predicate=None,
     tie_break_field: str | None = None,
-) -> list[EmployeeScore]:
-    """
-    employees: список сырых строк из загруженного файла, например
-        [{"fio": "Иванов И.И.", "c1_per_contact": 1234.5, "lk_per_contact": 0, ...}, ...]
-    categories: активные категории (уже отфильтрованные по enabled, если нужно)
+) -> None:
+    """Считает total_score/is_na/final_place по уже проставленным
+    r.places/r.scores. Общая часть для compute_ratings и
+    services/weekly_rating.compute_weekly_rating.
+
     na_predicate: функция(row) -> bool — кого не учитывать в итоговом месте
                   (аналог "Н/О" в старой системе: новички, 0 продаж и т.п.)
     tie_break_field: поле для разбивки ничьих по сумме баллов (например,
                   "c1_sum" — у кого больше, тот выше при равенстве баллов)
     """
-    active = [c for c in categories if c.enabled]
-    results = [EmployeeScore(fio=row.get(fio_field, ""), raw=row) for row in employees]
-
-    for cat in active:
-        values = [r.raw.get(cat.source_column) or 0 for r in results]
-        for r in results:
-            v = r.raw.get(cat.source_column) or 0
-            place = rank_standard(values, v, cat.direction)
-            score = place * cat.weight
-            r.places[cat.key] = place
-            r.scores[cat.key] = score
-
     for r in results:
         r.total_score = sum(r.scores.values())
         r.is_na = bool(na_predicate(r.raw)) if na_predicate else False
@@ -110,4 +112,22 @@ def compute_ratings(
                 place += 1
         r.final_place = place
 
+
+def compute_ratings(
+    employees: list[dict],
+    categories: list[RatingCategory],
+    fio_field: str = "fio",
+    na_predicate=None,
+    tie_break_field: str | None = None,
+) -> list[EmployeeScore]:
+    """
+    employees: список сырых строк из загруженного файла, например
+        [{"fio": "Иванов И.И.", "c1_per_contact": 1234.5, "lk_per_contact": 0, ...}, ...]
+    categories: активные категории (уже отфильтрованные по enabled, если нужно)
+    na_predicate/tie_break_field: см. finalize_final_places.
+    """
+    active = [c for c in categories if c.enabled]
+    results = [EmployeeScore(fio=row.get(fio_field, ""), raw=row) for row in employees]
+    apply_category_ranks(results, active)
+    finalize_final_places(results, na_predicate, tie_break_field)
     return results

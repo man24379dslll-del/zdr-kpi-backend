@@ -1,0 +1,99 @@
+"""
+Полный недельный расчёт: категории конструктора рейтинга → тир ЛК →
+итоговое место → распределение по ЛГ (лестничным группам).
+
+Соединяет три самостоятельных модуля в один пайплайн, НЕ сливая их
+логику воедино (так и просили при переносе тира ЛК и ЛГ):
+  - rating_engine.py — обобщённое ранжирование категорий конструктора
+  - tier_lk.py        — особый случай для категории 'lk' (тир A/Б/В)
+  - ladder_groups.py  — ЛГ, следующая ступень поверх итогового места
+
+Живёт отдельным модулем (не внутри rating_engine.py), чтобы не создавать
+циклический импорт: tier_lk.py уже импортирует rank_standard из
+rating_engine.py, поэтому обратный импорт tier_lk.py внутрь
+rating_engine.py невозможен.
+"""
+from __future__ import annotations
+
+from app.services.ladder_groups import assign_tier_coefficients
+from app.services.rating_engine import (
+    EmployeeScore,
+    RatingCategory,
+    apply_category_ranks,
+    finalize_final_places,
+)
+from app.services.tier_lk import compute_tiered_lk_places
+
+# Тир ЛК (в отличие от остальных категорий конструктора) жёстко завязан
+# на эти 4 конкретные категории — как в старой JS-версии. Это не
+# настраивается через конструктор рейтинга.
+LK_TIER_PLACE_FIELDS = {
+    "c1": "c1_place",
+    "channel": "ch_place",
+    "time": "time_place",
+    "errors": "errors_place",
+}
+
+
+def compute_weekly_rating(
+    employees: list[dict],
+    categories: list[RatingCategory],
+    fio_field: str = "fio",
+    supervisor_field: str = "supervisor",
+    na_predicate=None,
+    tie_break_field: str | None = None,
+) -> list[EmployeeScore]:
+    """
+    employees: сырые строки за неделю (см. routers/ratings.py:parse_weekly_rating_excel),
+               включая lk_cards/lk_conv и source_column категории 'lk' (= lk_pc)
+    categories: активные категории конструктора рейтинга (rating_categories).
+                Если среди них есть 'lk', должны быть и все 4 категории из
+                LK_TIER_PLACE_FIELDS — иначе тир ЛК посчитать нечем.
+    supervisor_field: поле в employees с именем супервайзера (для ЛГ)
+    na_predicate/tie_break_field: см. rating_engine.finalize_final_places
+    """
+    active = [c for c in categories if c.enabled]
+    lk_category = next((c for c in active if c.key == "lk"), None)
+    other_categories = [c for c in active if c.key != "lk"]
+
+    if lk_category is not None:
+        missing = set(LK_TIER_PLACE_FIELDS) - {c.key for c in other_categories}
+        if missing:
+            raise ValueError(
+                f"Тир ЛК требует категории {sorted(LK_TIER_PLACE_FIELDS)}, "
+                f"не хватает: {sorted(missing)}"
+            )
+
+    results = [EmployeeScore(fio=row.get(fio_field, ""), raw=row) for row in employees]
+
+    apply_category_ranks(results, other_categories)
+
+    if lk_category is not None:
+        lk_items = []
+        for r in results:
+            item = {field: r.places[key] for key, field in LK_TIER_PLACE_FIELDS.items()}
+            item["lk_cards"] = r.raw.get("lk_cards") or 0
+            item["lk_conv"] = r.raw.get("lk_conv") or 0
+            item["lk_pc"] = r.raw.get(lk_category.source_column) or 0
+            lk_items.append(item)
+        for r, place in zip(results, compute_tiered_lk_places(lk_items)):
+            r.places["lk"] = place
+            r.scores["lk"] = place * lk_category.weight
+
+    finalize_final_places(results, na_predicate, tie_break_field)
+
+    ladder_rows = [
+        {
+            "supervisor": r.raw.get(supervisor_field),
+            "final_place": r.final_place,
+            "is_na": r.is_na,
+        }
+        for r in results
+    ]
+    assign_tier_coefficients(ladder_rows)
+    for r, ladder_row in zip(results, ladder_rows):
+        if "tier" in ladder_row:
+            r.tier = ladder_row["tier"]
+            r.coefficient = ladder_row["coefficient"]
+
+    return results
