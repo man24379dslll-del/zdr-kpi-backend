@@ -63,8 +63,16 @@ _pick_channel() сначала ищет супервайзера в supervisor_c
 Группы сотрудников: строка вида "ГРУППА: <название>" в колонке A
 предшествует сотрудникам этой группы (действует до следующей строки
 "ГРУППА:"). Само название группы (после "ГРУППА:") — это то, что
-дальше пишется в kpi_ratings.supervisor. Группа "операторы без
-супервизора" (регистр не важен) — обычная группа, без особой обработки.
+дальше пишется в kpi_ratings.supervisor.
+
+Особый случай — группа "операторы без супервизора" (сборная солянка
+разных ролей, ФИО-префиксы ЗДР/ПП/Увеличители вперемешку): делится на
+две ВИРТУАЛЬНЫЕ группы по префиксу ФИО "ЗДР" — см. app/services/group_naming.py.
+Сотрудники с префиксом "ЗДР" остаются в группе "операторы без
+супервизора" (employee['is_region_uk'] = True — их total_score считает
+только по c1/lk/time, см. weekly_rating.py), остальные уходят в группу
+"операторы без супервизора [Пики]" (is_region_uk=False — полный набор
+категорий, как у обычных групп).
 """
 from __future__ import annotations
 
@@ -73,6 +81,8 @@ import re
 
 import pandas as pd
 from fastapi import HTTPException, status
+
+from app.services.group_naming import PEAKS_SUFFIX, REGION_UK_GROUP_RE
 
 FIO_COLUMN = "ФИО"
 STATUS_COLUMN = "Статус (уровень)"
@@ -246,6 +256,8 @@ def parse_weekly_rating_excel(raw: bytes, supervisor_channels: dict[str, str] | 
 
     employees = []
     current_supervisor: str | None = None
+    current_peaks_supervisor: str | None = None
+    current_group_splits_region_uk = False
 
     for _, row in df.iterrows():
         fio = _text(row.get(FIO_COLUMN))
@@ -253,14 +265,26 @@ def parse_weekly_rating_excel(raw: bytes, supervisor_channels: dict[str, str] | 
             continue
         if fio.lower().startswith(GROUP_ROW_PREFIX):
             current_supervisor = fio[len(GROUP_ROW_PREFIX):].strip()
+            current_group_splits_region_uk = bool(REGION_UK_GROUP_RE.search(current_supervisor))
+            current_peaks_supervisor = (
+                current_supervisor + PEAKS_SUFFIX if current_group_splits_region_uk else None
+            )
             continue
 
+        if current_group_splits_region_uk:
+            is_region_uk = fio.upper().startswith("ЗДР")
+            supervisor = current_supervisor if is_region_uk else current_peaks_supervisor
+        else:
+            is_region_uk = False
+            supervisor = current_supervisor
+
         status_text = _text(row.get(STATUS_COLUMN))
-        channel, channel_is_guessed, channel_values = _pick_channel(row, current_supervisor, supervisor_channels)
+        channel, channel_is_guessed, channel_values = _pick_channel(row, supervisor, supervisor_channels)
 
         employees.append({
             "fio": fio,
-            "supervisor": current_supervisor,
+            "supervisor": supervisor,
+            "is_region_uk": is_region_uk,
             "status": status_text,
             "is_novice": status_text.lower().startswith("новичок"),
             "bonus075": _num(row.get(BONUS075_COLUMN)),

@@ -12,9 +12,16 @@
 циклический импорт: tier_lk.py уже импортирует rank_standard из
 rating_engine.py, поэтому обратный импорт tier_lk.py внутрь
 rating_engine.py невозможен.
+
+"Регион УК" (employee['is_region_uk'] = True, см. excel_parsing.py) —
+особый случай: место по каждой категории считается как обычно (общий
+пул компании, нужно для тира ЛК и для хранения в kpi_ratings), но в
+total_score идут только c1/lk/time — канал и % ошибок для этих
+сотрудников не в счёт (см. REGION_UK_SCORE_KEYS).
 """
 from __future__ import annotations
 
+from app.services.group_naming import REGION_UK_SCORE_KEYS
 from app.services.ladder_groups import assign_tier_coefficients
 from app.services.rating_engine import (
     EmployeeScore,
@@ -79,6 +86,13 @@ def compute_weekly_rating(
         for r, place in zip(results, compute_tiered_lk_places(lk_items)):
             r.places["lk"] = place
             r.scores["lk"] = place * lk_category.weight
+
+    # "Регион УК": total_score только по c1/lk/time. Места (r.places)
+    # не трогаем — они уже посчитаны по общему пулу компании и нужны
+    # тиру ЛК (LK_TIER_PLACE_FIELDS) плюс для хранения в kpi_ratings.
+    for r in results:
+        if r.raw.get("is_region_uk"):
+            r.scores = {k: v for k, v in r.scores.items() if k in REGION_UK_SCORE_KEYS}
 
     finalize_final_places(results, na_predicate, tie_break_field)
 
