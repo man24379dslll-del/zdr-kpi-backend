@@ -535,8 +535,12 @@
     <div class="row" style="margin-top:26px;">
       <button class="btn btn-ghost" id="exportBtn">Скачать Excel</button>
       <button class="btn btn-ghost" id="uploadBtn">Записать в Supabase</button>
+      <button class="btn btn-ghost" id="compareBackendBtn">🔬 Сравнить с новым бэкендом</button>
     </div>
     <div class="log" id="uploadLog"></div>
+
+    <div id="backendCompareLog" class="log"></div>
+    <div id="backendCompareContainer" style="margin-top:6px;"></div>
   </div>
 
   <div class="panel">
@@ -3200,6 +3204,154 @@ $("uploadBtn").addEventListener("click", async () => {
     $("uploadBtn").disabled = false;
   }
 });
+
+// ---------- Сравнение "старый JS vs новый backend" (dry_run, ничего не пишет) ----------
+// ОТДЕЛЬНАЯ, независимая функциональность — поток "Разобрать → Посчитать →
+// Записать в Supabase" выше не меняет и не трогает.
+const BACKEND_COMPARE_FIELDS = [
+  ["final_place", "Итоговое место"],
+  ["total_score", "Сумма баллов"],
+  ["tier", "Тир ЛГ"],
+  ["coefficient", "Коэфф. ЛГ"],
+  ["salary", "ЗП"],
+  ["c1_place", "Место: 1 обращение"],
+  ["lk_place", "Место: ЛК"],
+  ["ch_place", "Место: канал"],
+  ["time_place", "Место: время"],
+  ["errors_place", "Место: % ошибок"],
+];
+// "channel" сюда намеренно НЕ входит: старый JS берёт канал из ручного
+// выбора в channelPanel этой же сессии, новый backend — из supervisor_channels
+// в Supabase (плюс эвристика-заглушка) — это два разных источника данных,
+// сравнивать их как "разошёлся расчёт" было бы вводящим в заблуждение.
+
+function normalizeJsRowForCompare(r){
+  return {
+    final_place: r.final_place ?? null, total_score: r.total_score ?? null,
+    tier: r.tier ?? null, coefficient: r.coefficient ?? null, salary: r.salary ?? null,
+    c1_place: r.c1_place ?? null, lk_place: r.lk_place ?? null, ch_place: r.ch_place ?? null,
+    time_place: r.time_place ?? null, errors_place: r.errors_place ?? null,
+  };
+}
+function normalizeApiRowForCompare(r){
+  const p = r.places || {};
+  return {
+    final_place: r.final_place ?? null, total_score: r.total_score ?? null,
+    tier: r.tier ?? null, coefficient: r.coefficient ?? null, salary: r.salary ?? null,
+    c1_place: p.c1 ?? null, lk_place: p.lk ?? null, ch_place: p.channel ?? null,
+    time_place: p.time ?? null, errors_place: p.errors ?? null,
+  };
+}
+function compareValuesEqual(a, b){
+  if(a === undefined) a = null;
+  if(b === undefined) b = null;
+  if(a === null || b === null) return a === b;
+  if(typeof a === "number" && typeof b === "number") return Math.abs(a - b) < 0.01; // терпимо к плавающей точке
+  return a === b;
+}
+
+async function compareWithBackend(){
+  const logEl = $("backendCompareLog");
+  const container = $("backendCompareContainer");
+  clearLog(logEl);
+  container.innerHTML = "";
+
+  if(!selectedFile){
+    log("Сравнение доступно только сразу после разбора файла в этой сессии — у сохранённого из Supabase периода нет исходного файла, сравнивать нечем.", "warn", logEl);
+    return;
+  }
+  if(!currentRows || !currentNoviceRows) return;
+
+  const btn = $("compareBackendBtn");
+  btn.disabled = true;
+  log("Отправляю файл в новый бэкенд (dry_run — ничего не пишется в базу)…", null, logEl);
+  try{
+    const fd = new FormData();
+    fd.append("file", selectedFile);
+    const params = new URLSearchParams({
+      period_label: currentPeriodValue(),
+      weeks_in_month: String(parseInt($("weeksInMonth").value, 10) || 4),
+      dry_run: "true",
+    });
+    const res = await fetch(`/ratings/compute?${params.toString()}`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${session.access_token}` },
+      body: fd,
+    });
+    if(!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    log(`Бэкенд посчитал ${data.rows.length} строк (dry_run=${data.dry_run}, в базу не записано).`, "ok", logEl);
+    renderBackendCompare(data.rows);
+  } catch(err){
+    log("Ошибка: " + err.message, "err", logEl);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderBackendCompare(apiRows){
+  const container = $("backendCompareContainer");
+  const jsByFio = {};
+  [...currentRows, ...currentNoviceRows].forEach(r => { jsByFio[r.fio] = r; });
+  const apiByFio = {};
+  apiRows.forEach(r => { apiByFio[r.fio] = r; });
+  const allFios = new Set([...Object.keys(jsByFio), ...Object.keys(apiByFio)]);
+
+  let matched = 0;
+  const mismatchRows = [];
+  const onlyJsFios = [];
+  const onlyApiFios = [];
+
+  allFios.forEach(fio => {
+    const jsRow = jsByFio[fio], apiRow = apiByFio[fio];
+    if(jsRow && !apiRow){ onlyJsFios.push(fio); return; }
+    if(apiRow && !jsRow){ onlyApiFios.push(fio); return; }
+
+    const jsN = normalizeJsRowForCompare(jsRow);
+    const apiN = normalizeApiRowForCompare(apiRow);
+    const diffs = BACKEND_COMPARE_FIELDS
+      .filter(([field]) => !compareValuesEqual(jsN[field], apiN[field]))
+      .map(([field, label]) => ({ label, was: jsN[field], now: apiN[field] }));
+
+    if(diffs.length) mismatchRows.push({ fio, diffs });
+    else matched++;
+  });
+
+  let html = `<div class="stats" style="margin-top:10px;">`;
+  html += statCard(matched, "полностью совпало");
+  html += statCard(mismatchRows.length, "разошлось");
+  html += statCard(onlyJsFios.length, "только в старом (JS)");
+  html += statCard(onlyApiFios.length, "только в новом (backend)");
+  html += `</div>`;
+
+  if(mismatchRows.length){
+    html += `<div class="sub-title" style="margin-top:22px;">Расхождения по сотрудникам</div>`;
+    html += `<div class="subtable-wrap" style="margin-top:10px;"><table class="dyn-table"><thead><tr>
+      <th>ФИО</th><th>Поле</th><th>Было (JS)</th><th>Стало (backend)</th>
+    </tr></thead><tbody>`;
+    mismatchRows.forEach(m => {
+      m.diffs.forEach((d, i) => {
+        html += `<tr>`;
+        if(i === 0) html += `<td rowspan="${m.diffs.length}" style="font-family:var(--sans);font-weight:600;vertical-align:top;">${escapeHtml(m.fio)}</td>`;
+        html += `<td style="font-family:var(--sans);">${d.label}</td>
+          <td>${d.was === null ? "—" : d.was}</td>
+          <td>${d.now === null ? "—" : d.now}</td>
+        </tr>`;
+      });
+    });
+    html += `</tbody></table></div>`;
+  }
+
+  if(onlyJsFios.length || onlyApiFios.length){
+    html += `<div class="sub-title" style="margin-top:22px;">Есть только в одной из версий</div>`;
+    if(onlyJsFios.length) html += `<div style="font-size:13px;margin-top:6px;"><b>Только в старом (JS):</b> ${onlyJsFios.map(f => escapeHtml(f)).join(", ")}</div>`;
+    if(onlyApiFios.length) html += `<div style="font-size:13px;margin-top:6px;"><b>Только в новом (backend):</b> ${onlyApiFios.map(f => escapeHtml(f)).join(", ")}</div>`;
+  }
+
+  container.innerHTML = html;
+}
+
+$("compareBackendBtn").addEventListener("click", compareWithBackend);
 </script>
 </body>
 </html>

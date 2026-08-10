@@ -16,7 +16,7 @@ from app.services.excel_parsing import is_na_row, parse_weekly_rating_excel
 from app.services.payroll import is_weekly_period_label
 from app.services.periods import find_previous_period
 from app.services.rating_engine import RatingCategory
-from app.services.ratings_repository import save_weekly_rating
+from app.services.ratings_repository import maybe_save_weekly_rating, save_weekly_rating
 from app.services.salary import assign_salary
 from app.services.weekly_rating import compute_weekly_rating
 from app.supabase_client import as_user
@@ -77,6 +77,7 @@ async def compute_weekly_rating_endpoint(
     file: UploadFile,
     period_label: str,
     weeks_in_month: int = 4,
+    dry_run: bool = False,
     user: CurrentUser = Depends(get_current_user),
 ):
     """Считает полный недельный рейтинг, сохраняет его в kpi_uploads/kpi_ratings
@@ -87,6 +88,10 @@ async def compute_weekly_rating_endpoint(
     weeks_in_month — 4 или 5, сколько недель в текущем месяце (для формулы
     ЗП: MONTHLY_BASE_RATE / weeks_in_month); учитывается только для
     недельных периодов, ввод не автоматический — вручную задаёт вызывающий.
+    dry_run — если true, считает всё как обычно (включая ЗП), но НИЧЕГО
+    не пишет в kpi_uploads/kpi_ratings — только возвращает JSON. Для режима
+    сравнения "старый JS vs новый backend" на реальных файлах, пока сам
+    расчёт на проде не переключён. upload_id в ответе будет null.
     """
     if not user.is_admin_or_manager:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Только admin/manager могут считать недельный рейтинг")
@@ -111,10 +116,13 @@ async def compute_weekly_rating_endpoint(
         assign_salary(results, prev_coefficients, weeks_in_month)
 
     client = as_user(user.access_token)
-    upload_id = await save_weekly_rating(client, period_label, file.filename or "", results)
+    upload_id = await maybe_save_weekly_rating(
+        dry_run, lambda: save_weekly_rating(client, period_label, file.filename or "", results)
+    )
 
     return {
         "upload_id": upload_id,
+        "dry_run": dry_run,
         "rows": [
             {
                 "fio": r.fio,

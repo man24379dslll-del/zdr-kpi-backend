@@ -91,3 +91,17 @@ async def save_weekly_rating(
     await client.post("kpi_ratings", rows, prefer="return=minimal")
 
     return upload_id
+
+
+async def maybe_save_weekly_rating(dry_run: bool, save) -> str | None:
+    """Ветвление "писать или не писать" для POST /ratings/compute?dry_run=
+    (routers/ratings.py) — режим сравнения "старый JS vs новый backend" не
+    должен трогать Supabase вообще. save — async callable без аргументов
+    (обычно замыкание над save_weekly_rating(client, ...)); при dry_run=True
+    НЕ вызывается вовсе (значит и никакого сетевого похода в Supabase не
+    происходит), просто возвращается None. Вынесено в отдельную чистую
+    функцию, чтобы тестировать без реального Supabase/.env — так же, как
+    build_kpi_rating_row выше."""
+    if dry_run:
+        return None
+    return await save()

@@ -32,11 +32,17 @@ GitHub + Railway + Python (FastAPI). База данных остаётся на
 - `app/services/weekly_rating.py` — **связывает всё в один пайплайн**:
   категории конструктора → тир ЛК → итоговое место → ЛГ. Используется
   эндпоинтом `POST /ratings/compute` (`app/routers/ratings.py`) — принимает
-  xlsx + `period_label` + `weeks_in_month`, категории берёт из
+  xlsx + `period_label` + `weeks_in_month` + `dry_run`, категории берёт из
   `rating_categories`, считает рейтинг за неделю и ЗП (для недельных
   периодов), пишет результат в `kpi_uploads`/`kpi_ratings`
   (`app/services/ratings_repository.py`, схема этих таблиц уже есть в
   Supabase) и возвращает посчитанные строки вместе с `upload_id`.
+  `dry_run=true` считает всё точно так же, но ничего не пишет в
+  Supabase (`upload_id: null` в ответе) — режим сравнения "старый
+  JS vs новый backend" на сайте (кнопка "🔬 Сравнить с новым бэкендом"
+  в результатах, ещё не заменяет реальный расчёт). Ветвление
+  "писать/не писать" вынесено в чистую `maybe_save_weekly_rating`,
+  тестируется без Supabase (`tests/test_dry_run.py`).
 - `app/services/excel_parsing.py` — разбор реального xlsx (точные
   заголовки колонок, группы супервайзеров по строкам "ГРУППА: ...",
   отказоустойчивость к отсутствующим "кол-во"-колонкам, выбор канала
