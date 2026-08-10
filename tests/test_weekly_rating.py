@@ -148,6 +148,51 @@ def test_group_rows_split_supervisors_and_are_not_employees():
     assert len(petrova_people) == 5
 
 
+def test_category_places_are_scoped_to_supervisor_group_not_company_wide():
+    """Регрессия на баг, при котором места по категориям (и итоговое место)
+    считались по ВСЕЙ компании разом, а не внутри своей группы супервайзера,
+    как в оригинальной JS-логике (computeMainRating вызывает scoreSlice по
+    одному разу НА КАЖДУЮ группу, а не один раз на весь файл — сотрудник
+    соревнуется со своей командой, а не со всей компанией).
+
+    Сотрудники двух РАЗНЫХ групп подобраны так, чтобы их значения
+    ПЕРЕСЕКАЛИСЬ: "средний" сотрудник группы Б (75) лежит МЕЖДУ двумя
+    сотрудниками группы А (100 и 50). Если бы места считались по всей
+    компании (баг), пул был бы 100>75>50>10 -> A1=1, B1=2, A2=3, B2=4.
+    Правильно (внутри своей группы из 2 человек): A1=1,A2=2 в группе А;
+    B1=1,B2=2 в группе Б — т.е. оба "лучших" получают место 1, а не 1 и 2.
+    """
+    def emp(fio, supervisor, value):
+        # time/errors — asc (меньше = лучше), поэтому инвертируем value,
+        # чтобы "лучше" по всем 5 категориям было единообразно у каждого
+        # сотрудника (упрощает арифметику итогового места).
+        return {
+            "fio": fio, "supervisor": supervisor, "is_region_uk": False,
+            "c1_per_contact": value, "lk_per_contact": value, "lk_cards": 1, "lk_conv": 10,
+            "ch_per_contact": value, "ch_cards": 15,
+            "time_per_contact": 1000 - value, "errors_pct": 1000 - value,
+        }
+
+    employees = [
+        emp("A1", "Группа А", 100),
+        emp("A2", "Группа А", 50),
+        emp("B1", "Группа Б", 75),  # между A1 и A2 — ключевой случай
+        emp("B2", "Группа Б", 10),
+    ]
+    results = compute_weekly_rating(employees, CATEGORIES)
+    by_fio = {r.fio: r for r in results}
+
+    assert by_fio["A1"].places["c1"] == 1
+    assert by_fio["B1"].places["c1"] == 1  # НЕ 2 — не сравнивается с A1 из чужой группы
+    assert by_fio["A2"].places["c1"] == 2
+    assert by_fio["B2"].places["c1"] == 2  # НЕ 4
+
+    assert by_fio["A1"].final_place == 1
+    assert by_fio["B1"].final_place == 1  # НЕ 2
+    assert by_fio["A2"].final_place == 2
+    assert by_fio["B2"].final_place == 2  # НЕ 4
+
+
 KURBANOVA_ROWS = [
     _group_row("Супервайзер - Курбанова Зарина Рахимджановна"),
     _employee_row("Сотрудник 1", "", 100, 50, 100, 30, 2, 1, 5, 1000, "inet"),
@@ -317,14 +362,21 @@ def test_na_employees_excluded_from_final_place_and_ladder():
 
 
 def test_tier_lk_ranks_tier_a_by_lk_pc_desc():
+    # Места считаются ВНУТРИ своей группы супервайзера (см. докстринг
+    # weekly_rating.py) — Комаров/Петров (группа Иванова) и Волков (группа
+    # Петровой) НЕ делят один пул, поэтому Волков лучший и единственный в
+    # тире A своей группы, а не "между" Комаровым и Петровым.
     by_fio = _compute()
-    # Тир A (карточки>0 и конверсия>0): Комаров(100) > Волков(90) > Петров(80)
+    # Тир A внутри группы Иванова (карточки>0 и конверсия>0): Комаров(100) > Петров(80)
     assert by_fio["Комаров К."].places["lk"] == 1
-    assert by_fio["Волков В."].places["lk"] == 2
-    assert by_fio["Петров П."].places["lk"] == 3
-    # Тиры Б/В гарантированно хуже места 3 (размера тира A)
-    for fio in ("Сидоров С.", "Кузнецова К.", "Смирнов С.", "Орлова О."):
-        assert by_fio[fio].places["lk"] > 3
+    assert by_fio["Петров П."].places["lk"] == 2
+    # Тир A внутри группы Петровой: Волков — единственный (и потому лучший) в своём тире A
+    assert by_fio["Волков В."].places["lk"] == 1
+    # Тиры Б/В гарантированно хуже размера тира A СВОЕЙ группы (2 у Иванова, 1 у Петровой)
+    for fio in ("Сидоров С.", "Кузнецова К."):
+        assert by_fio[fio].places["lk"] > 2
+    for fio in ("Смирнов С.", "Орлова О."):
+        assert by_fio[fio].places["lk"] > 1
 
 
 def test_tier_c_worse_than_tier_b_within_same_supervisor():

@@ -14,10 +14,20 @@ rating_engine.py, поэтому обратный импорт tier_lk.py вну
 rating_engine.py невозможен.
 
 "Регион УК" (employee['is_region_uk'] = True, см. excel_parsing.py) —
-особый случай: место по каждой категории считается как обычно (общий
-пул компании, нужно для тира ЛК и для хранения в kpi_ratings), но в
+особый случай: место по каждой категории считается как обычно (внутри
+своей группы, нужно для тира ЛК и для хранения в kpi_ratings), но в
 total_score идут только c1/lk/time — канал и % ошибок для этих
 сотрудников не в счёт (см. REGION_UK_SCORE_KEYS).
+
+ВАЖНО: места по категориям, тир ЛК, тир канала и итоговое место
+считаются ВНУТРИ каждой группы супервайзера отдельно, а не по всей
+компании сразу — точный перенос старой JS-версии, где scoreSlice
+вызывается по одному разу на каждую группу (см. computeMainRating в
+static/index.html), а не один раз на весь файл. Сотрудник соревнуется
+со своей командой, а не со всеми сотрудниками компании. Раньше здесь
+было по-другому (общий пул компании) — это был баг, обнаруженный и
+исправленный отдельно от переноса тира канала/сплита Курбановой; см.
+tests/test_weekly_rating.py::test_category_places_are_scoped_to_supervisor_group_not_company_wide.
 """
 from __future__ import annotations
 
@@ -99,42 +109,52 @@ def compute_weekly_rating(
 
     results = [EmployeeScore(fio=row.get(fio_field, ""), raw=row) for row in employees]
 
-    apply_category_ranks(results, other_categories)
-
-    if lk_category is not None:
-        lk_items = []
-        for r in results:
-            item = {field: r.places[key] for key, field in LK_TIER_PLACE_FIELDS.items()}
-            item["lk_cards"] = r.raw.get("lk_cards") or 0
-            item["lk_conv"] = r.raw.get("lk_conv") or 0
-            item["lk_pc"] = r.raw.get(lk_category.source_column) or 0
-            lk_items.append(item)
-        for r, place in zip(results, compute_tiered_lk_places(lk_items)):
-            r.places["lk"] = place
-            r.scores["lk"] = place * lk_category.weight
-
-    # Тир канала — обязательно ПОСЛЕ тира ЛК: читает уже тированное
-    # r.places["lk"] (см. CHANNEL_TIER_PLACE_FIELDS и docstring
-    # tier_channel.py про разрыв циклической зависимости).
-    if channel_category is not None:
-        channel_items = []
-        for r in results:
-            item = {field: r.places[key] for key, field in CHANNEL_TIER_PLACE_FIELDS.items()}
-            item["ch_cards"] = r.raw.get("ch_cards") or 0
-            item["ch_per_contact"] = r.raw.get(channel_category.source_column) or 0
-            channel_items.append(item)
-        for r, place in zip(results, compute_tiered_channel_places(channel_items)):
-            r.places["channel"] = place
-            r.scores["channel"] = place * channel_category.weight
-
-    # "Регион УК": total_score только по c1/lk/time. Места (r.places)
-    # не трогаем — они уже посчитаны по общему пулу компании и нужны
-    # тиру ЛК (LK_TIER_PLACE_FIELDS) плюс для хранения в kpi_ratings.
+    # Группируем по супервайзеру и считаем места/тиры/итоговое место
+    # ОТДЕЛЬНО внутри каждой группы (см. докстринг модуля) — Регион
+    # УК/Пики и подгруппы Курбановой распадаются на свои собственные
+    # группы естественно, т.к. у них уже разные значения supervisor
+    # (см. excel_parsing.py), никакого дополнительного кода тут не нужно.
+    groups: dict[object, list[EmployeeScore]] = {}
     for r in results:
-        if r.raw.get("is_region_uk"):
-            r.scores = {k: v for k, v in r.scores.items() if k in REGION_UK_SCORE_KEYS}
+        groups.setdefault(r.raw.get(supervisor_field), []).append(r)
 
-    finalize_final_places(results, na_predicate, tie_break_field)
+    for group_results in groups.values():
+        apply_category_ranks(group_results, other_categories)
+
+        if lk_category is not None:
+            lk_items = []
+            for r in group_results:
+                item = {field: r.places[key] for key, field in LK_TIER_PLACE_FIELDS.items()}
+                item["lk_cards"] = r.raw.get("lk_cards") or 0
+                item["lk_conv"] = r.raw.get("lk_conv") or 0
+                item["lk_pc"] = r.raw.get(lk_category.source_column) or 0
+                lk_items.append(item)
+            for r, place in zip(group_results, compute_tiered_lk_places(lk_items)):
+                r.places["lk"] = place
+                r.scores["lk"] = place * lk_category.weight
+
+        # Тир канала — обязательно ПОСЛЕ тира ЛК: читает уже тированное
+        # r.places["lk"] (см. CHANNEL_TIER_PLACE_FIELDS и docstring
+        # tier_channel.py про разрыв циклической зависимости).
+        if channel_category is not None:
+            channel_items = []
+            for r in group_results:
+                item = {field: r.places[key] for key, field in CHANNEL_TIER_PLACE_FIELDS.items()}
+                item["ch_cards"] = r.raw.get("ch_cards") or 0
+                item["ch_per_contact"] = r.raw.get(channel_category.source_column) or 0
+                channel_items.append(item)
+            for r, place in zip(group_results, compute_tiered_channel_places(channel_items)):
+                r.places["channel"] = place
+                r.scores["channel"] = place * channel_category.weight
+
+        # "Регион УК": total_score только по c1/lk/time. Места (r.places)
+        # не трогаем — они уже посчитаны внутри группы и нужны тиру ЛК
+        # (LK_TIER_PLACE_FIELDS) плюс для хранения в kpi_ratings.
+        for r in group_results:
+            if r.raw.get("is_region_uk"):
+                r.scores = {k: v for k, v in r.scores.items() if k in REGION_UK_SCORE_KEYS}
+
+        finalize_final_places(group_results, na_predicate, tie_break_field)
 
     ladder_rows = [
         {
