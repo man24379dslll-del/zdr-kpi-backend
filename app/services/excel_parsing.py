@@ -75,6 +75,21 @@ _pick_channel() сначала ищет супервайзера в supervisor_c
 только по c1/lk/time, см. weekly_rating.py), остальные уходят в группу
 "операторы без супервизора [Пики]" (is_region_uk=False — полный набор
 категорий, как у обычных групп).
+
+Ещё один особый случай — группа супервайзера Курбановой: делится на 2
+ВИРТУАЛЬНЫЕ подгруппы "через одного" по порядку строк в файле (1-й
+сотрудник -> подгруппа 1, 2-й -> подгруппа 2, 3-й -> подгруппа 1, ...;
+НЕ пересортировка). В отличие от Регион УК/Пиков — это ПОЛНОЦЕННЫЕ
+группы супервайзера: is_region_uk остаётся False (полный набор
+категорий, total_score не урезается), места по категориям всё равно
+считаются по общему пулу компании (как для любой обычной группы), а
+разными подгруппы делает только сам supervisor (см. компанию, ЛГ
+у ladder_groups.assign_tier_coefficients группирует именно по нему) —
+то есть ЛГ (лестничная группа/тиры 1..10) считается отдельно и
+независимо для каждой подгруппы, как для любых двух разных
+супервайзеров. Никакого специального кода в weekly_rating.py для этого
+не нужно — только тут, на уровне парсинга, генерируем разные строки
+supervisor для чётных/нечётных сотрудников этой группы.
 """
 from __future__ import annotations
 
@@ -85,6 +100,11 @@ import pandas as pd
 from fastapi import HTTPException, status
 
 from app.services.group_naming import PEAKS_SUFFIX, REGION_UK_GROUP_RE
+
+# Локально (не в group_naming.py), т.к. в отличие от Регион УК/Пиков
+# этому случаю не нужны ни человекочитаемое имя группы, ни урезание
+# total_score — это чисто парсинг-уровневое разбиение "через одного".
+KURBANOVA_GROUP_RE = re.compile(r"курбанова", re.IGNORECASE)
 
 FIO_COLUMN = "ФИО"
 STATUS_COLUMN = "Статус (уровень)"
@@ -261,6 +281,8 @@ def parse_weekly_rating_excel(raw: bytes, supervisor_channels: dict[str, str] | 
     current_supervisor: str | None = None
     current_peaks_supervisor: str | None = None
     current_group_splits_region_uk = False
+    current_group_is_kurbanova = False
+    kurbanova_position = 0
 
     for _, row in df.iterrows():
         fio = _text(row.get(FIO_COLUMN))
@@ -272,11 +294,17 @@ def parse_weekly_rating_excel(raw: bytes, supervisor_channels: dict[str, str] | 
             current_peaks_supervisor = (
                 current_supervisor + PEAKS_SUFFIX if current_group_splits_region_uk else None
             )
+            current_group_is_kurbanova = bool(KURBANOVA_GROUP_RE.search(current_supervisor))
+            kurbanova_position = 0
             continue
 
         if current_group_splits_region_uk:
             is_region_uk = fio.upper().startswith("ЗДР")
             supervisor = current_supervisor if is_region_uk else current_peaks_supervisor
+        elif current_group_is_kurbanova:
+            is_region_uk = False
+            supervisor = f"{current_supervisor} — {(kurbanova_position % 2) + 1}"
+            kurbanova_position += 1
         else:
             is_region_uk = False
             supervisor = current_supervisor

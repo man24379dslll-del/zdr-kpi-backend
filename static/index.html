@@ -944,7 +944,18 @@ function parseWorkbook(arrayBuffer){
   const groups = [];
   let current = null;
   let currentPeaks = null; // "родная" пара для операторов без супервизора: не-ЗДР идут сюда
+  let currentKurbanovaSubgroups = null; // [подгруппа1, подгруппа2], когда текущая группа — Курбанова
+  let kurbanovaPosition = 0;
   const REGION_UK_RE = /операторы\s+без\s+супервизора/i;
+  // Группа супервайзера Курбановой делится на 2 ВИРТУАЛЬНЫЕ подгруппы "через
+  // одного" по порядку строк в файле (без пересортировки) — в отличие от
+  // Региона УК/Пиков это ПОЛНОЦЕННЫЕ группы супервайзера: полный набор
+  // категорий (isRegionUK не проставляется), места по категориям считаются
+  // как обычно внутри своей подгруппы (см. scoreSlice, вызывается отдельно
+  // на каждую группу из groups), а ЛГ (assignTierCoefficients группирует по
+  // r.supervisor) естественно получается отдельной и независимой для каждой
+  // подгруппы — за счёт разных строк supervisor, без специального кода там.
+  const KURBANOVA_RE = /курбанова/i;
 
   for(let r = 1; r < rows.length; r++){
     const row = rows[r];
@@ -953,13 +964,24 @@ function parseWorkbook(arrayBuffer){
     if(fio.startsWith("ГРУППА")){
       const rawName = fio.replace("ГРУППА:","").trim();
       const isSpecial = REGION_UK_RE.test(rawName);
+      const isKurbanova = !isSpecial && KURBANOVA_RE.test(rawName);
       current = { supervisor: rawName, employees: [], isRegionUK: isSpecial };
-      groups.push(current);
       if(isSpecial){
+        groups.push(current);
         currentPeaks = { supervisor: rawName + " [Пики]", employees: [], isPeaks: true };
         groups.push(currentPeaks);
-      } else {
+        currentKurbanovaSubgroups = null;
+      } else if(isKurbanova){
         currentPeaks = null;
+        const sub1 = { supervisor: rawName + " — 1", employees: [] };
+        const sub2 = { supervisor: rawName + " — 2", employees: [] };
+        groups.push(sub1, sub2);
+        currentKurbanovaSubgroups = [sub1, sub2];
+        kurbanovaPosition = 0;
+      } else {
+        groups.push(current);
+        currentPeaks = null;
+        currentKurbanovaSubgroups = null;
       }
       continue;
     }
@@ -969,6 +991,9 @@ function parseWorkbook(arrayBuffer){
     let target = current;
     if(current.isRegionUK){
       target = fio.trim().toUpperCase().startsWith("ЗДР") ? current : currentPeaks;
+    } else if(currentKurbanovaSubgroups){
+      target = currentKurbanovaSubgroups[kurbanovaPosition % 2];
+      kurbanovaPosition++;
     }
     if(!target) continue;
 
@@ -1147,6 +1172,36 @@ function computeTieredLkPlaces(items){
   return places;
 }
 
+// Тир канала (Радио+ТВ / Интернет) — упрощённый аналог тира ЛК выше: та же
+// идея, но БЕЗ подтипов Б/В и без проверки конверсии, только порог по
+// количеству карточек.
+//   cards>=10 — обычный ранг по "сумма с контакта" среди тех, у кого тоже >=10
+//   cards<10  — место = (сколько человек с cards>=10) + среднее МЕСТО по
+//               остальным 4 категориям (1 обращение, ЛК, время, ошибки)
+// ВАЖНО про порядок: тир ЛК выше использует ЕЩЁ "плоское" (нетированное)
+// ch_place (см. avgOthers в computeTieredLkPlaces), а этот тир канала
+// использует уже ТИРИРОВАННОЕ lk_place — вызывается ПОСЛЕ тира ЛК в
+// scoreSlice. Иначе тир ЛК и тир канала зависели бы друг от друга
+// циклически.
+function computeTieredChannelPlaces(items){
+  const idxEnough = [], idxFew = [];
+  items.forEach((e, i) => {
+    const cards = e.ch_cards ?? 0;
+    if(cards >= 10) idxEnough.push(i);
+    else idxFew.push(i);
+  });
+
+  const places = new Array(items.length).fill(1);
+  const avgOthers = (i) => (items[i].c1_place + items[i].lk_place + items[i].time_place + items[i].errors_place) / 4;
+
+  const pcEnough = idxEnough.map(i => items[i].ch_pc);
+  idxEnough.forEach(i => { places[i] = rankDesc(pcEnough, items[i].ch_pc); });
+
+  idxFew.forEach(i => { places[i] = idxEnough.length + avgOthers(i); });
+
+  return places;
+}
+
 function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategories){
   if(items.length === 0) return [];
   const active = activeCategories || { c1:true, lk:true, ch:true, time:true, errors:true };
@@ -1174,12 +1229,28 @@ function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategorie
     lkPlaces = pass1.map(e => rankDesc(lkpc, e.lk_pc));
   }
 
+  // Тир канала считается ТОЛЬКО там же, где тир ЛК (specialLK) — глобальный
+  // список новичков и рейтинг супервайзеров тир не используют, как и раньше
+  // не использовали тир ЛК. Обязательно ПОСЛЕ тира ЛК — см. docstring
+  // computeTieredChannelPlaces про разрыв циклической зависимости.
+  let chPlaces;
+  if(specialLK){
+    const channelItems = pass1.map((e, i) => ({
+      c1_place: e.c1_place, lk_place: lkPlaces[i], time_place: e.time_place, errors_place: e.errors_place,
+      ch_pc: e.ch_pc, ch_cards: e.ch_cards,
+    }));
+    chPlaces = computeTieredChannelPlaces(channelItems);
+  } else {
+    chPlaces = pass1.map(e => e.ch_place);
+  }
+
   const scored = pass1.map((e, i) => {
     const lk_place = lkPlaces[i];
-    const c1_score = e.c1_place*3, lk_score = lk_place*1.5, ch_score = e.ch_place*2.5;
+    const ch_place = chPlaces[i];
+    const c1_score = e.c1_place*3, lk_score = lk_place*1.5, ch_score = ch_place*2.5;
     const time_score = e.time_place*1, errors_score = e.errors_place*1;
     const total_score = (active.c1?c1_score:0)+(active.lk?lk_score:0)+(active.ch?ch_score:0)+(active.time?time_score:0)+(active.errors?errors_score:0);
-    return {...e, lk_place, c1_score, lk_score, ch_score, time_score, errors_score, total_score};
+    return {...e, lk_place, ch_place, c1_score, lk_score, ch_score, time_score, errors_score, total_score};
   });
 
   return scored.map(e => {
