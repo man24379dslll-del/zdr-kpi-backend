@@ -325,6 +325,36 @@ def test_c1_cards_fallback_column_name_is_used_when_present():
     assert employees[0]["c1_cards"] == 42
 
 
+def test_bonus_columns_matched_by_suffix_when_percentage_differs():
+    # Регрессия на реальный баг (найден на реальном файле заказчика):
+    # bonus075/bonus2 искались по ТОЧНОМУ совпадению текста колонки и были
+    # ОБЯЗАТЕЛЬНЫМИ — файл с "3.5% за дост." вместо жёстко зашитого
+    # "2% за дост." (процент варьируется от файла к файлу) заставлял весь
+    # парсер падать с HTTPException 400 "не хватает колонок", хотя нужная
+    # колонка физически была, просто с другим числом в начале названия.
+    row = _employee_row("Тестов Т.", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
+    del row[BONUS2]
+    row["3.5% за дост."] = 777
+    raw = _build_excel_bytes([_group_row("Тестовая группа"), row])
+    employees = parse_weekly_rating_excel(raw)
+    assert employees[0]["bonus2"] == 777
+    assert employees[0]["bonus075"] == 100  # соседняя колонка не пострадала
+
+
+def test_bonus_columns_missing_do_not_crash_parsing():
+    # Обе бонусные колонки отсутствуют вовсе — раньше это было невозможно
+    # проверить, т.к. они считались обязательными и парсер падал раньше,
+    # чем доходил до этой строки. Теперь — просто None, как у остальных
+    # необязательных полей (карточки, errors_count).
+    row = _employee_row("Тестов Т.", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
+    del row[BONUS075]
+    del row[BONUS2]
+    raw = _build_excel_bytes([_group_row("Тестовая группа"), row])
+    employees = parse_weekly_rating_excel(raw)
+    assert employees[0]["bonus075"] is None
+    assert employees[0]["bonus2"] is None
+
+
 def test_errors_count_parsed_when_column_present():
     # "Ошибок" (сырое число) — необязательная колонка, только для
     # информации; не путать с обязательной "Ошибок, %" (errors_pct),

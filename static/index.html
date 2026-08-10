@@ -853,6 +853,16 @@ let currentNoviceRows = null;
 let currentSupervisorRows = null;
 let currentFilename = "";
 
+// Заголовки колонок бонусов берутся из САМОГО файла (процент в названии
+// меняется от файла к файлу, см. findColBySuffix) — используются как
+// подписи столбцов в таблице/экспорте, чтобы не показывать "2%", когда
+// в реальном файле "3.5%". Значения по умолчанию — на случай, если
+// колонки не нашлись, или ещё ничего не разобрано (напр. просмотр
+// сохранённого периода из Supabase, где исходных заголовков уже нет).
+const DEFAULT_BONUS075_LABEL = "0.75% за офор.";
+const DEFAULT_BONUS2_LABEL = "2% за дост.";
+let bonusColumnLabels = { bonus075: DEFAULT_BONUS075_LABEL, bonus2: DEFAULT_BONUS2_LABEL };
+
 function onFileChosen(){
   selectedFile = fileInput.files[0];
   if(!selectedFile) return;
@@ -929,6 +939,11 @@ function parseWorkbook(arrayBuffer){
   if(col.radio_cards === -1) cardsMissing.push("Радио + ТВ");
   if(col.inet_cards === -1) cardsMissing.push("Интернет");
   const salaryMissing = (col.bonus075 === -1 || col.bonus2 === -1);
+  // Реальный текст заголовка из файла (процент в названии у разных файлов
+  // разный, напр. "0.75%"/"3.5%") — используется как подпись столбца
+  // вместо жёстко зашитого текста, см. bonusColumnLabels.
+  const bonus075Label = col.bonus075 !== -1 ? headers[col.bonus075] : DEFAULT_BONUS075_LABEL;
+  const bonus2Label = col.bonus2 !== -1 ? headers[col.bonus2] : DEFAULT_BONUS2_LABEL;
 
   let errorsCol = findCol(headers, "Ошибок, %");
   let errorsIsFallback = false;
@@ -1019,7 +1034,7 @@ function parseWorkbook(arrayBuffer){
       errors_count: errorsCountCol !== -1 ? num(row[errorsCountCol]) : null,
     });
   }
-  return { groups, errorsIsFallback, cardsMissing, salaryMissing };
+  return { groups, errorsIsFallback, cardsMissing, salaryMissing, bonus075Label, bonus2Label };
 }
 
 // ---------- step 1: parse & show channel settings ----------
@@ -1030,9 +1045,10 @@ $("parseBtn").addEventListener("click", async () => {
   log("Читаю файл…");
   try{
     const buf = await selectedFile.arrayBuffer();
-    const { groups, errorsIsFallback, cardsMissing, salaryMissing } = parseWorkbook(buf);
+    const { groups, errorsIsFallback, cardsMissing, salaryMissing, bonus075Label, bonus2Label } = parseWorkbook(buf);
     parsedGroups = groups;
     currentFilename = selectedFile.name;
+    bonusColumnLabels = { bonus075: bonus075Label, bonus2: bonus2Label };
 
     log(`Групп найдено: ${groups.length}`, "ok");
     log(`Сотрудников в файле: ${groups.reduce((s,g)=>s+g.employees.length,0)}`, "ok");
@@ -1045,9 +1061,9 @@ $("parseBtn").addEventListener("click", async () => {
       log(`Внимание: нет колонки "Карточек" для блока(ов): ${cardsMissing.join(", ")} — там будет прочерк.`, "warn");
     }
     if(salaryMissing){
-      log(`Внимание: нет колонок "0.75% за офор." / "2% за дост." — ЗП посчитается только по ставке, без бонуса.`, "warn");
+      log(`Внимание: нет колонок "0.75% за офор." / "2% за дост." (или похожих, оканчивающихся на "за офор."/"за дост.") — ЗП посчитается только по ставке, без бонуса.`, "warn");
     } else {
-      log(`Нашёл колонки бонусов — ЗП будет посчитана для недельного отчёта.`, "ok");
+      log(`Нашёл колонки бонусов ("${bonus075Label}" / "${bonus2Label}") — ЗП будет посчитана для недельного отчёта.`, "ok");
     }
 
     buildChannelSettings(groups);
@@ -1702,7 +1718,7 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
         <th rowspan="2">Сумма баллов</th>
         <th rowspan="2">Место</th>
         ${showDelta ? `<th rowspan="2" class="${showTier ? '' : 'block-end'}">Δ к пред. периоду</th>` : ``}
-        ${showTier ? `<th rowspan="2">ЛГ</th><th rowspan="2">Коэфф. (эта неделя)</th><th rowspan="2">Коэфф. пред. недели (в ЗП)</th><th rowspan="2">0.75% за офор.</th><th rowspan="2">2% за дост.</th><th rowspan="2">ЗП</th>` : ``}
+        ${showTier ? `<th rowspan="2">ЛГ</th><th rowspan="2">Коэфф. (эта неделя)</th><th rowspan="2">Коэфф. пред. недели (в ЗП)</th><th rowspan="2">${escapeHtml(bonusColumnLabels.bonus075)}</th><th rowspan="2">${escapeHtml(bonusColumnLabels.bonus2)}</th><th rowspan="2">ЗП</th>` : ``}
         ${showConvStatus ? `<th rowspan="2">Статус по сумме с контакта</th>` : ``}
       </tr>
       <tr class="sub">
@@ -3161,7 +3177,7 @@ function categoryHeaderRows(leadLabels, withTier){
   rowA[26] = "Место";
   if(withTier){
     rowA[27] = "ЛГ"; rowA[28] = "Коэффициент";
-    rowA[29] = "0.75% за офор."; rowA[30] = "2% за дост."; rowA[31] = "ЗП";
+    rowA[29] = bonusColumnLabels.bonus075; rowA[30] = bonusColumnLabels.bonus2; rowA[31] = "ЗП";
   }
 
   const subLabels = ["карточек","сумма","ср.чек","конв.,%","с контакта","место"];

@@ -8,8 +8,11 @@
 
   A  ФИО
   B  Статус (уровень)
-  C  0.75% за офор.                    <- бонус для ЗП
-  D  2% за дост.                       <- бонус для ЗП
+  C  0.75% за офор.                    <- бонус для ЗП; число в начале названия
+  D  2% за дост.                       <- бонус для ЗП; меняется от файла к файлу
+                                           (напр. "3.5% за дост."), поэтому эти 2
+                                           колонки ищутся по ОКОНЧАНИЮ названия, не
+                                           по точному совпадению — см. _find_col_by_suffix
   E  Первый контакт: кол-во            <- необязательная, см. ниже
   F  Первый контакт: сумма
   G  Первый контакт: ср.чек
@@ -108,8 +111,13 @@ KURBANOVA_GROUP_RE = re.compile(r"курбанова", re.IGNORECASE)
 
 FIO_COLUMN = "ФИО"
 STATUS_COLUMN = "Статус (уровень)"
-BONUS075_COLUMN = "0.75% за офор."
-BONUS2_COLUMN = "2% за дост."
+# Число в начале названия этих 2 колонок меняется от файла к файлу
+# ("0.75% за офор.", "2%"/"3.5% за дост.") — ищем по ОКОНЧАНИЮ названия
+# (см. _find_col_by_suffix), не по точному совпадению целиком. Раньше
+# были захардкожены как точные строки и как обязательные — падало 400
+# на любом файле, где процент отличался от "2%"; это исправлено.
+BONUS075_SUFFIX = "за офор."
+BONUS2_SUFFIX = "за дост."
 
 C1_COUNT_COLUMN = "Первый контакт: кол-во"
 C1_COUNT_FALLBACK_COLUMN = "Карточек (Первый контакт)"
@@ -142,9 +150,10 @@ ERRORS_COUNT_COLUMN = "Ошибок"  # сырое число, необязат�
 
 GROUP_ROW_PREFIX = "группа:"
 
-# Всё, кроме 4 "кол-во"-колонок (E/J/O/T) — они необязательные, см. докстринг.
+# Всё, кроме 4 "кол-во"-колонок (E/J/O/T) и 2 бонусных (ищутся по
+# суффиксу, см. BONUS075_SUFFIX/BONUS2_SUFFIX) — они необязательные, см. докстринг.
 _MANDATORY_COLUMNS = {
-    FIO_COLUMN, STATUS_COLUMN, BONUS075_COLUMN, BONUS2_COLUMN,
+    FIO_COLUMN, STATUS_COLUMN,
     C1_SUM_COLUMN, C1_CHECK_COLUMN, C1_CONV_COLUMN, C1_PER_CONTACT_COLUMN,
     LK_SUM_COLUMN, LK_CHECK_COLUMN, LK_CONV_COLUMN, LK_PER_CONTACT_COLUMN,
     RADIO_SUM_COLUMN, RADIO_CHECK_COLUMN, RADIO_CONV_COLUMN, RADIO_PER_CONTACT_COLUMN,
@@ -191,6 +200,17 @@ def _first_value(row: pd.Series, *column_names: str):
 def _optional_num(row: pd.Series, *column_names: str) -> float | None:
     value = _first_value(row, *column_names)
     return None if value is None else _num(value)
+
+
+def _find_col_by_suffix(columns, suffix: str) -> str | None:
+    """Аналог JS findColBySuffix — ищет колонку по ОКОНЧАНИЮ названия, а не
+    по точному совпадению целиком (число в начале названия бонусных
+    колонок меняется от файла к файлу). Возвращает None, если не нашли —
+    парсер не должен падать из-за этого, см. _MANDATORY_COLUMNS."""
+    for col in columns:
+        if str(col).strip().endswith(suffix):
+            return col
+    return None
 
 
 def _normalize_supervisor(text: str) -> str:
@@ -277,6 +297,9 @@ def parse_weekly_rating_excel(raw: bytes, supervisor_channels: dict[str, str] | 
             f"Есть: {', '.join(df.columns.astype(str))}",
         )
 
+    bonus075_col = _find_col_by_suffix(df.columns, BONUS075_SUFFIX)
+    bonus2_col = _find_col_by_suffix(df.columns, BONUS2_SUFFIX)
+
     employees = []
     current_supervisor: str | None = None
     current_peaks_supervisor: str | None = None
@@ -318,8 +341,8 @@ def parse_weekly_rating_excel(raw: bytes, supervisor_channels: dict[str, str] | 
             "is_region_uk": is_region_uk,
             "status": status_text,
             "is_novice": status_text.lower().startswith("новичок"),
-            "bonus075": _num(row.get(BONUS075_COLUMN)),
-            "bonus2": _num(row.get(BONUS2_COLUMN)),
+            "bonus075": _num(row.get(bonus075_col)) if bonus075_col else None,
+            "bonus2": _num(row.get(bonus2_col)) if bonus2_col else None,
 
             "c1_sum": _num(row.get(C1_SUM_COLUMN)),
             "c1_check": _num(row.get(C1_CHECK_COLUMN)),
