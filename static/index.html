@@ -639,7 +639,7 @@ function dbRowToDisplayRow(r){
     lk_sum: r.lk_sum, lk_check: r.lk_check, lk_conv: r.lk_conv, lk_pc: r.lk_per_contact, lk_cards: r.lk_cards, lk_place: r.lk_place,
     ch_sum: r.ch_sum, ch_check: r.ch_check, ch_conv: r.ch_conv, ch_pc: r.ch_per_contact, ch_cards: r.ch_cards, ch_place: r.ch_place,
     time: r.time_per_contact, time_place: r.time_place,
-    errors_pct: r.errors_pct, errors_place: r.errors_place,
+    errors_pct: r.errors_pct, errors_place: r.errors_place, errors_count: r.errors_count ?? null,
     total_score: r.total_score, final_place: r.final_place,
     tier: r.tier, coefficient: r.coefficient, bonus075: r.bonus075, bonus2: r.bonus2, salary: r.salary,
     salaryCoeffUsed: r.coefficient, salaryCoeffFromPrev: true, channel: r.channel,
@@ -869,6 +869,12 @@ function onFileChosen(){
 function findCol(headers, name){
   return headers.findIndex(h => (h||"").toString().trim() === name);
 }
+// Для колонок бонусов: число в названии меняется от файла к файлу
+// ("0.75% за офор.", "2% за дост." vs "3.5% за дост.") — ищем по
+// окончанию названия, а не по точному совпадению целиком.
+function findColBySuffix(headers, suffix){
+  return headers.findIndex(h => (h||"").toString().trim().endsWith(suffix));
+}
 function num(v){
   if(v === undefined || v === null || v === "") return 0;
   const n = Number(v);
@@ -914,8 +920,8 @@ function parseWorkbook(arrayBuffer){
     lk_cards: optionalAny("ЛК: кол-во", "Карточек (ЛК)"),
     radio_cards: optionalAny("Радио + ТВ: кол-во", "Карточек (Радио + ТВ)"),
     inet_cards: optionalAny("Интернет: кол-во", "Карточек (Интернет)"),
-    bonus075: optional("0.75% за офор."),
-    bonus2: optional("2% за дост."),
+    bonus075: findColBySuffix(headers, "за офор."),
+    bonus2: findColBySuffix(headers, "за дост."),
   };
   const cardsMissing = [];
   if(col.c1_cards === -1) cardsMissing.push("Первый контакт");
@@ -931,6 +937,9 @@ function parseWorkbook(arrayBuffer){
     errorsIsFallback = true;
   }
   if(errorsCol === -1) throw new Error("Не найдена колонка ошибок ('Ошибок, %' или '% Постобработки (ПО)')");
+  // Сырое число ошибок (не путать с "Ошибок, %") — не участвует в местах/
+  // расчёте, только для информации в таблице. Необязательная колонка.
+  const errorsCountCol = optional("Ошибок");
 
   const groups = [];
   let current = null;
@@ -982,6 +991,7 @@ function parseWorkbook(arrayBuffer){
       bonus075: col.bonus075 !== -1 ? num(row[col.bonus075]) : null,
       bonus2: col.bonus2 !== -1 ? num(row[col.bonus2]) : null,
       errors_pct: num(row[errorsCol]),
+      errors_count: errorsCountCol !== -1 ? num(row[errorsCountCol]) : null,
     });
   }
   return { groups, errorsIsFallback, cardsMissing, salaryMissing };
@@ -1328,6 +1338,7 @@ function toDbRow(e, isNovice){
     ch_place: e.ch_place, ch_score: e.ch_score,
     time_per_contact: e.time, time_place: e.time_place, time_score: e.time_score,
     errors_pct: e.errors_pct, errors_place: e.errors_place, errors_score: e.errors_score,
+    errors_count: e.errors_count ?? null,
     total_score: e.total_score, final_place: e.final_place, is_na: e.is_na,
     tier: e.tier !== undefined ? e.tier : null,
     coefficient: e.coefficient !== undefined ? e.coefficient : null,
@@ -1576,7 +1587,7 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
         <th colspan="6" class="block-end">ЛК</th>
         <th colspan="6" class="block-end">${channelLabel || "Радио+ТВ / Интернет"}</th>
         <th colspan="2" class="block-end">Время/контакт</th>
-        <th colspan="2" class="block-end">% ошибок</th>
+        <th colspan="3" class="block-end">% ошибок</th>
         <th rowspan="2">Сумма баллов</th>
         <th rowspan="2">Место</th>
         ${showDelta ? `<th rowspan="2" class="${showTier ? '' : 'block-end'}">Δ к пред. периоду</th>` : ``}
@@ -1588,7 +1599,7 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
         <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
         <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
         <th>чч:мм:сс</th><th class="block-end">место</th>
-        <th>%</th><th class="block-end">место</th>
+        <th>кол-во</th><th>%</th><th class="block-end">место</th>
       </tr>
     </thead>`;
 }
@@ -1621,7 +1632,7 @@ function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvSt
       <td>${fmtCards(r.lk_cards)}</td><td>${fmt(r.lk_sum)}</td><td>${fmt(r.lk_check)}</td><td>${fmtPct(r.lk_conv)}</td><td>${fmt(r.lk_pc)}</td><td class="block-end">${rankBadge(r.lk_place, lkMap(r.lk_place))}</td>
       <td>${fmtCards(r.ch_cards)}</td><td>${fmt(r.ch_sum)}</td><td>${fmt(r.ch_check)}</td><td>${fmtPct(r.ch_conv)}</td><td>${fmt(r.ch_pc)}</td><td class="block-end">${rankBadge(r.ch_place, chMap(r.ch_place))}</td>
       <td>${fmtTime(r.time)}</td><td class="block-end">${rankBadge(r.time_place, timeMap(r.time_place))}</td>
-      <td>${fmtPct(r.errors_pct)}</td><td class="block-end">${rankBadge(r.errors_place, errMap(r.errors_place))}</td>
+      <td>${fmtCards(r.errors_count)}</td><td>${fmtPct(r.errors_pct)}</td><td class="block-end">${rankBadge(r.errors_place, errMap(r.errors_place))}</td>
       <td>${fmt(r.total_score)}</td>
       <td class="place-cell">${r.is_na ? "Н/О" : rankBadge(r.final_place, finalMap(r.final_place))}</td>
       ${showDelta ? `<td class="${showTier ? '' : 'block-end'}">${deltaBadge(r.deltaPlace)}</td>` : ``}

@@ -59,6 +59,7 @@ def build_kpi_rating_row(upload_id: str, r: EmployeeScore) -> dict:
         "errors_pct": raw.get("errors_pct"),
         "errors_place": r.places.get("errors"),
         "errors_score": r.scores.get("errors"),
+        "errors_count": raw.get("errors_count"),  # только для информации, не в расчёте
 
         "total_score": r.total_score,
         "final_place": r.final_place,

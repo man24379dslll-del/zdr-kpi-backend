@@ -33,8 +33,10 @@
   Y  Время/контакт, мин
   Z  % Постобработки (ПО)              <- не используется в расчёте, не читаем
   AA % Сервисного времени              <- не используется в расчёте, не читаем
-  AB Ошибок                            <- не используется в расчёте (берём AC)
-  AC Ошибок, %                         <- это и есть errors_pct
+  AB Ошибок                            <- сырое число, errors_count — только для
+                                           информации, НЕ участвует в местах/расчёте
+                                           (необязательная колонка)
+  AC Ошибок, %                         <- это и есть errors_pct, вот она участвует в расчёте
 
 "Кол-во" (карточки) колонки ненадёжны между версиями файла: в старых
 файлах их не было вообще ни у одного канала, у "Первый контакт" в части
@@ -116,6 +118,7 @@ INET_PER_CONTACT_COLUMN = "Интернет: сумма с контакта"
 
 TIME_PER_CONTACT_COLUMN = "Время/контакт, мин"
 ERRORS_PCT_COLUMN = "Ошибок, %"
+ERRORS_COUNT_COLUMN = "Ошибок"  # сырое число, необязательная, только для информации
 
 GROUP_ROW_PREFIX = "группа:"
 
@@ -308,6 +311,7 @@ def parse_weekly_rating_excel(raw: bytes, supervisor_channels: dict[str, str] | 
 
             "time_per_contact": _num(row.get(TIME_PER_CONTACT_COLUMN)),
             "errors_pct": _num(row.get(ERRORS_PCT_COLUMN)),
+            "errors_count": _optional_num(row, ERRORS_COUNT_COLUMN),
         })
 
     return employees

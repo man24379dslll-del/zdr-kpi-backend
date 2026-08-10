@@ -222,6 +222,24 @@ def test_c1_cards_fallback_column_name_is_used_when_present():
     assert employees[0]["c1_cards"] == 42
 
 
+def test_errors_count_parsed_when_column_present():
+    # "Ошибок" (сырое число) — необязательная колонка, только для
+    # информации; не путать с обязательной "Ошибок, %" (errors_pct),
+    # которая участвует в расчёте категории "% ошибок".
+    row = _employee_row("Тестов Т.", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
+    row["Ошибок"] = 7
+    raw = _build_excel_bytes([_group_row("Тестовая группа"), row])
+    employees = parse_weekly_rating_excel(raw)
+    assert employees[0]["errors_count"] == 7
+
+
+def test_errors_count_is_none_when_column_missing():
+    row = _employee_row("Тестов Т.", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
+    raw = _build_excel_bytes([_group_row("Тестовая группа"), row])
+    employees = parse_weekly_rating_excel(raw)
+    assert employees[0]["errors_count"] is None
+
+
 def test_missing_mandatory_column_raises_400():
     row = _employee_row("Тестов Т.", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
     del row[C1_SUM]
@@ -318,6 +336,7 @@ def test_build_kpi_rating_row_maps_computed_fields_for_supabase():
     assert row["coefficient"] == TIER_COEFFICIENTS[0]
     assert row["bonus075"] == 100
     assert row["bonus2"] == 50
+    assert row["errors_count"] is None  # "Ошибок" не задана в тестовых строках — не роняет, просто null
     assert row["salary"] is None  # формула ЗП ещё не перенесена
 
     novikov = by_fio["Новиков Н."]

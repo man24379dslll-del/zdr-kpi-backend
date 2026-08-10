@@ -157,3 +157,11 @@ create policy "stage_adj_select" on payroll_stage_adjustments
 drop policy if exists "stage_adj_write" on payroll_stage_adjustments;
 create policy "stage_adj_write" on payroll_stage_adjustments
   for all using (is_admin_or_manager()) with check (is_admin_or_manager());
+
+-- ============================================================
+-- Кол-во ошибок (сырое число, рядом с уже существующим errors_pct)
+-- ============================================================
+-- Только для информации в таблице — НЕ участвует в местах/расчёте
+-- категории "% ошибок" (та как считалась по errors_pct, так и считается).
+-- Необязательная колонка в исходном Excel — может быть null.
+alter table kpi_ratings add column if not exists errors_count numeric;
