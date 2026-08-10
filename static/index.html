@@ -1343,7 +1343,7 @@ function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategorie
   });
 }
 
-function computeMainRating(groups, prevCoeffMap){
+function computeMainRating(groups, prevCoeffMap, tierCoefficients){
   const out = [];
   for(const g of groups){
     const channel = groupChannels[g.supervisor] || "radio";
@@ -1351,17 +1351,22 @@ function computeMainRating(groups, prevCoeffMap){
     const scored = scoreSlice(g.employees, e => channelFields(e, channel), isNaMain, "c1_sum", true, active);
     out.push(...scored.map(e => ({...e, supervisor: g.supervisor, channel, isRegionUK: !!g.isRegionUK, isPeaks: !!g.isPeaks})));
   }
-  if(periodType === "week"){ assignTierCoefficients(out); assignSalary(out, prevCoeffMap); }
+  if(periodType === "week"){ assignTierCoefficients(out, tierCoefficients); assignSalary(out, prevCoeffMap); }
   return out;
 }
 
 // ---------- ЛГ: распределение по группам-тирам с коэффициентом (только недельный отчёт) ----------
+// TIER_COEFFICIENTS — ТОЛЬКО запасной вариант по умолчанию (если /ladder-tiers
+// недоступен или вернул не 10 валидных строк), НЕ единственный источник
+// истины — реальные значения задаются через конструктор рейтинга и
+// загружаются в обработчике calcBtn (см. ниже), передаются сюда параметром.
 const TIER_COEFFICIENTS = [1.4, 1.3, 1.2, 1.1, 1.05, 1, 0.9, 0.75, 0.5, 0.25];
 function tierSizes(n){
   const base = Math.floor(n / 10), rem = n % 10;
   return Array.from({length: 10}, (_, i) => base + (i < rem ? 1 : 0));
 }
-function assignTierCoefficients(rows){
+function assignTierCoefficients(rows, coefficients){
+  const coeffs = (Array.isArray(coefficients) && coefficients.length === 10) ? coefficients : TIER_COEFFICIENTS;
   const bySupervisor = {};
   for(const r of rows){
     (bySupervisor[r.supervisor] ||= []).push(r);
@@ -1376,11 +1381,27 @@ function assignTierCoefficients(rows){
       for(let k = 0; k < size; k++){
         if(!evaluated[idx]) return;
         evaluated[idx].tier = tierIdx + 1;
-        evaluated[idx].coefficient = TIER_COEFFICIENTS[tierIdx];
+        evaluated[idx].coefficient = coeffs[tierIdx];
         idx++;
       }
     });
   }
+}
+
+// Загружает 10 коэффициентов ЛГ из /ladder-tiers (настройка конструктора,
+// см. app/routers/ladder_tiers.py + таблица ladder_tier_coefficients) в
+// виде массива по индексу tier_number-1. Возвращает null, если запрос не
+// удался или пришло не 10 валидных строк — тогда assignTierCoefficients
+// сама подставит запасной TIER_COEFFICIENTS.
+async function fetchTierCoefficients(){
+  const tiers = await apiGet("/ladder-tiers");
+  if(!Array.isArray(tiers) || tiers.length !== 10) return null;
+  const coeffs = new Array(10);
+  for(const t of tiers){
+    if(!(t.tier_number >= 1 && t.tier_number <= 10) || typeof t.coefficient !== "number") return null;
+    coeffs[t.tier_number - 1] = t.coefficient;
+  }
+  return coeffs.every(c => typeof c === "number") ? coeffs : null;
 }
 
 // ---------- ЗП (только недельный отчёт) ----------
@@ -1632,7 +1653,23 @@ $("calcBtn").addEventListener("click", async () => {
       log("Не удалось загрузить предыдущий период (" + err.message + ") — считаю без него.", "warn", uploadLogEl);
     }
 
-    const mainRated = computeMainRating(parsedGroups, prevCoeffMap);
+    // 1б) коэффициенты ЛГ — из настроек конструктора (/ladder-tiers), а
+    // не захардкоженный TIER_COEFFICIENTS (тот — только запасной вариант).
+    let tierCoefficients = null;
+    if(periodType === "week"){
+      try{
+        tierCoefficients = await fetchTierCoefficients();
+        if(tierCoefficients){
+          log("Коэффициенты ЛГ загружены из настроек конструктора.", "ok", uploadLogEl);
+        } else {
+          log("Настройки коэффициентов ЛГ не найдены/неполные — использую значения по умолчанию.", "warn", uploadLogEl);
+        }
+      } catch(err){
+        log("Не удалось загрузить коэффициенты ЛГ (" + err.message + ") — использую значения по умолчанию.", "warn", uploadLogEl);
+      }
+    }
+
+    const mainRated = computeMainRating(parsedGroups, prevCoeffMap, tierCoefficients);
     const noviceRated = computeGlobalNovices(parsedGroups);
     const supervisorRated = computeSupervisorRating(parsedGroups);
 
@@ -2370,6 +2407,13 @@ async function renderDashSummary(){
   }
 
   if(vType === "week"){
+    // Реальные коэффициенты конструктора для подписей — не захардкоженный
+    // TIER_COEFFICIENTS (та же путаница, что была в самом расчёте, см.
+    // fetchTierCoefficients/assignTierCoefficients).
+    let tierCoeffsForChart = null;
+    try{ tierCoeffsForChart = await fetchTierCoefficients(); } catch(err){ /* используем запасной вариант ниже */ }
+    const coeffsForLabels = tierCoeffsForChart || TIER_COEFFICIENTS;
+
     const tierCounts = new Array(11).fill(0);
     for(let t = 1; t <= 10; t++) tierCounts[t] = s.tier_distribution[t] || 0;
     const maxCount = Math.max(...tierCounts, 1);
@@ -2380,7 +2424,7 @@ async function renderDashSummary(){
       html += `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;">
         <div style="font-size:11px;font-family:var(--mono);margin-bottom:4px;">${tierCounts[t]}</div>
         <div style="width:100%;background:linear-gradient(180deg,var(--accent),var(--accent-2));border-radius:4px 4px 0 0;height:${h}%;min-height:2px;"></div>
-        <div style="font-size:10px;color:var(--muted);margin-top:4px;">${TIER_COEFFICIENTS[t-1]}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:4px;">${coeffsForLabels[t-1]}</div>
       </div>`;
     }
     html += `</div>`;
