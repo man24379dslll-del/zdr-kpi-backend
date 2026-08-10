@@ -141,6 +141,7 @@ def compute_weekly_rating(
             for r in group_results:
                 item = {field: r.places[key] for key, field in CHANNEL_TIER_PLACE_FIELDS.items()}
                 item["ch_cards"] = r.raw.get("ch_cards") or 0
+                item["ch_conv"] = r.raw.get("ch_conv") or 0
                 item["ch_per_contact"] = r.raw.get(channel_category.source_column) or 0
                 channel_items.append(item)
             for r, place in zip(group_results, compute_tiered_channel_places(channel_items)):

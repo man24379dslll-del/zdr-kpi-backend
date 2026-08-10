@@ -1186,31 +1186,35 @@ function computeTieredLkPlaces(items){
 }
 
 // Тир канала (Радио+ТВ / Интернет) — упрощённый аналог тира ЛК выше: та же
-// идея, но БЕЗ подтипов Б/В и без проверки конверсии, только порог по
-// количеству карточек.
-//   cards>=10 — обычный ранг по "сумма с контакта" среди тех, у кого тоже >=10
-//   cards<10  — место = (сколько человек с cards>=10) + среднее МЕСТО по
-//               остальным 4 категориям (1 обращение, ЛК, время, ошибки)
+// идея (2 случая вместо 3 — БЕЗ подтипов Б/В), и порог попадания в "тир A"
+// ТОТ ЖЕ САМЫЙ, что у тира ЛК — карточки>=1 И конверсия>0% (есть хотя бы
+// одна успешная сделка).
+//   cards>=1 И conv>0 — обычный ранг по "сумма с контакта" среди тех, у
+//                        кого тоже есть хотя бы 1 сделка
+//   иначе (0 карточек, либо конверсия 0%) — место = (сколько человек в
+//                        тире выше) + среднее МЕСТО по остальным 4
+//                        категориям (1 обращение, ЛК, время, ошибки)
 // ВАЖНО про порядок: тир ЛК выше использует ЕЩЁ "плоское" (нетированное)
 // ch_place (см. avgOthers в computeTieredLkPlaces), а этот тир канала
 // использует уже ТИРИРОВАННОЕ lk_place — вызывается ПОСЛЕ тира ЛК в
 // scoreSlice. Иначе тир ЛК и тир канала зависели бы друг от друга
 // циклически.
 function computeTieredChannelPlaces(items){
-  const idxEnough = [], idxFew = [];
+  const idxA = [], idxRest = [];
   items.forEach((e, i) => {
     const cards = e.ch_cards ?? 0;
-    if(cards >= 10) idxEnough.push(i);
-    else idxFew.push(i);
+    const conv = e.ch_conv ?? 0;
+    if(cards >= 1 && conv > 0) idxA.push(i);
+    else idxRest.push(i);
   });
 
   const places = new Array(items.length).fill(1);
   const avgOthers = (i) => (items[i].c1_place + items[i].lk_place + items[i].time_place + items[i].errors_place) / 4;
 
-  const pcEnough = idxEnough.map(i => items[i].ch_pc);
-  idxEnough.forEach(i => { places[i] = rankDesc(pcEnough, items[i].ch_pc); });
+  const pcA = idxA.map(i => items[i].ch_pc);
+  idxA.forEach(i => { places[i] = rankDesc(pcA, items[i].ch_pc); });
 
-  idxFew.forEach(i => { places[i] = idxEnough.length + avgOthers(i); });
+  idxRest.forEach(i => { places[i] = idxA.length + avgOthers(i); });
 
   return places;
 }
@@ -1250,7 +1254,7 @@ function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategorie
   if(specialLK){
     const channelItems = pass1.map((e, i) => ({
       c1_place: e.c1_place, lk_place: lkPlaces[i], time_place: e.time_place, errors_place: e.errors_place,
-      ch_pc: e.ch_pc, ch_cards: e.ch_cards,
+      ch_pc: e.ch_pc, ch_cards: e.ch_cards, ch_conv: e.ch_conv,
     }));
     chPlaces = computeTieredChannelPlaces(channelItems);
   } else {

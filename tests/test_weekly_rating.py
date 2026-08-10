@@ -428,13 +428,11 @@ def test_compute_weekly_rating_passes_through_custom_tier_coefficients():
     assert komarov.coefficient != TIER_COEFFICIENTS[0]
 
 
-def test_channel_tier_ranks_by_per_contact_when_enough_cards():
-    # ch_cards>=10 -> обычный спортивный ранг по ch_per_contact среди тех,
-    # у кого тоже >=10 (проверяем отдельно от "мало карточек" ниже).
+def test_channel_tier_ranks_by_per_contact_when_deal_exists():
+    # Карточек>=1 И конверсия>0 -> обычный спортивный ранг по ch_per_contact
+    # среди тех, у кого тоже есть сделка (проверяем отдельно от "нет сделки" ниже).
     a = _employee_row("Тир-А1", "", 100, 100, 500, 20, 1, 5, 20, 5000, "radio")
-    a[RADIO_COUNT] = 15
     b = _employee_row("Тир-А2", "", 90, 90, 400, 22, 1.2, 6, 15, 4000, "radio")
-    b[RADIO_COUNT] = 12
     raw = _build_excel_bytes([_group_row("Супервайзер - Тестов Тест Тестович"), a, b])
     employees = parse_weekly_rating_excel(raw)
     results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
@@ -450,14 +448,12 @@ def test_channel_tier_uses_already_tiered_lk_place_not_raw_rank():
     # тир канала зависели бы друг от друга циклически (см. docstring
     # tier_channel.py и weekly_rating.CHANNEL_TIER_PLACE_FIELDS).
     a = _employee_row("Тир-А1", "", 100, 100, 500, 20, 1, 5, 20, 5000, "radio")  # тир ЛК A, лучший lk_pc
-    a[RADIO_COUNT] = 15  # >=10 -> "достаточно" карточек канала
     b = _employee_row("Тир-А2", "", 90, 90, 400, 22, 1.2, 6, 15, 4000, "radio")  # тир ЛК A, хуже lk_pc
-    b[RADIO_COUNT] = 12
     # У "Мало-карт" самый большой СЫРОЙ lk_pc (999), но lk_cards=0 ->
     # тир ЛК Б (карточек нет вовсе) -> реальное (тированное) место хуже,
     # чем у А1/А2, несмотря на формально лучший lk_pc.
     c = _employee_row("Мало-карт", "", 80, 999, 10, 25, 1.5, 0, 0, 3000, "radio")
-    c[RADIO_COUNT] = 3  # <10 -> "мало карточек" канала
+    c[RADIO_CONV] = 0  # конверсия 0% по каналу -> НЕ тир A, независимо от кол-ва карточек
 
     raw = _build_excel_bytes([_group_row("Супервайзер - Тестов Тест Тестович"), a, b, c])
     employees = parse_weekly_rating_excel(raw)
