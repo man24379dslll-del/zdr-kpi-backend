@@ -165,3 +165,15 @@ create policy "stage_adj_write" on payroll_stage_adjustments
 -- категории "% ошибок" (та как считалась по errors_pct, так и считается).
 -- Необязательная колонка в исходном Excel — может быть null.
 alter table kpi_ratings add column if not exists errors_count numeric;
+
+-- ============================================================
+-- Рабочее время и кол-во смен (для новой формулы ЗП по часам)
+-- ============================================================
+-- work_hours ("Рабочее время, ч") — участвует в формуле ЗП недели:
+-- ставка_за_час × work_hours (см. app/services/salary.py). Если null —
+-- salary для этой строки тоже null (честно "не посчитано", не 0 часов).
+-- shift_count ("Кол-во смен") — чисто информационная, в формулу ЗП
+-- НЕ входит, выводится в таблице рядом для справки. Обе — необязательные
+-- колонки исходного Excel, могут быть null.
+alter table kpi_ratings add column if not exists work_hours numeric;
+alter table kpi_ratings add column if not exists shift_count numeric;

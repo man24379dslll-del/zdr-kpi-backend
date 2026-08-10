@@ -642,6 +642,7 @@ function dbRowToDisplayRow(r){
     total_score: r.total_score, final_place: r.final_place,
     tier: r.tier, coefficient: r.coefficient, bonus075: r.bonus075, bonus2: r.bonus2, salary: r.salary,
     salaryCoeffUsed: r.coefficient, salaryCoeffFromPrev: true, channel: r.channel,
+    work_hours: r.work_hours ?? null, shift_count: r.shift_count ?? null,
   };
 }
 
@@ -940,6 +941,7 @@ function parseWorkbook(arrayBuffer){
     bonus075: findColBySuffix(headers, "за офор."),
     bonus2: findColBySuffix(headers, "за дост."),
     work_hours: optional("Рабочее время, ч"),
+    shift_count: optional("Кол-во смен"), // чисто информационная, в формулу ЗП не входит
   };
   const cardsMissing = [];
   if(col.c1_cards === -1) cardsMissing.push("Первый контакт");
@@ -1045,6 +1047,7 @@ function parseWorkbook(arrayBuffer){
       errors_pct: num(row[errorsCol]),
       errors_count: errorsCountCol !== -1 ? num(row[errorsCountCol]) : null,
       work_hours: col.work_hours !== -1 ? numOrNull(row[col.work_hours]) : null,
+      shift_count: col.shift_count !== -1 ? numOrNull(row[col.shift_count]) : null,
     });
   }
   return { groups, errorsIsFallback, cardsMissing, salaryMissing, bonus075Label, bonus2Label, workHoursMissing };
@@ -1513,6 +1516,8 @@ function toDbRow(e, isNovice){
     bonus2: e.bonus2 ?? null,
     salary: e.salary !== undefined ? e.salary : null,
     channel: e.channel ?? null,
+    work_hours: e.work_hours ?? null,
+    shift_count: e.shift_count ?? null,
   };
 }
 
@@ -1758,7 +1763,7 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
         <th rowspan="2">Сумма баллов</th>
         <th rowspan="2">Место</th>
         ${showDelta ? `<th rowspan="2" class="${showTier ? '' : 'block-end'}">Δ к пред. периоду</th>` : ``}
-        ${showTier ? `<th rowspan="2">ЛГ</th><th rowspan="2">Коэфф. (эта неделя)</th><th rowspan="2">Коэфф. пред. недели (в ЗП)</th><th rowspan="2">${escapeHtml(bonusColumnLabels.bonus075)}</th><th rowspan="2">${escapeHtml(bonusColumnLabels.bonus2)}</th><th rowspan="2">ЗП</th>` : ``}
+        ${showTier ? `<th rowspan="2">ЛГ</th><th rowspan="2">Коэфф. (эта неделя)</th><th rowspan="2">Коэфф. пред. недели (в ЗП)</th><th rowspan="2">Рабочее время, ч</th><th rowspan="2">Кол-во смен</th><th rowspan="2">${escapeHtml(bonusColumnLabels.bonus075)}</th><th rowspan="2">${escapeHtml(bonusColumnLabels.bonus2)}</th><th rowspan="2">ЗП</th>` : ``}
         ${showConvStatus ? `<th rowspan="2">Статус по сумме с контакта</th>` : ``}
       </tr>
       <tr class="sub">
@@ -1803,7 +1808,7 @@ function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvSt
       <td>${fmt(r.total_score)}</td>
       <td class="place-cell">${r.is_na ? "Н/О" : rankBadge(r.final_place, finalMap(r.final_place))}</td>
       ${showDelta ? `<td class="${showTier ? '' : 'block-end'}">${deltaBadge(r.deltaPlace)}</td>` : ``}
-      ${showTier ? `<td>${r.tier ?? ""}</td><td style="font-weight:700;">${r.coefficient ?? ""}</td><td>${r.salaryCoeffUsed ?? ""}${r.salaryCoeffFromPrev ? "" : " (по умолч.)"}</td><td>${fmtCards(r.bonus075)}</td><td>${fmtCards(r.bonus2)}</td><td style="font-weight:800;color:var(--good);">${fmt(r.salary)}</td>` : ``}
+      ${showTier ? `<td>${r.tier ?? ""}</td><td style="font-weight:700;">${r.coefficient ?? ""}</td><td>${r.salaryCoeffUsed ?? ""}${r.salaryCoeffFromPrev ? "" : " (по умолч.)"}</td><td>${fmtCards(r.work_hours)}</td><td>${fmtCards(r.shift_count)}</td><td>${fmtCards(r.bonus075)}</td><td>${fmtCards(r.bonus2)}</td><td style="font-weight:800;color:var(--good);">${fmt(r.salary)}</td>` : ``}
       ${showConvStatus ? `<td>${convBadge(r.c1_pc)}</td>` : ``}
     `;
     tbody.appendChild(tr);

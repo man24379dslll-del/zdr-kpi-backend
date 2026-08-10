@@ -71,6 +71,9 @@ def build_kpi_rating_row(upload_id: str, r: EmployeeScore) -> dict:
         "bonus075": raw.get("bonus075"),
         "bonus2": raw.get("bonus2"),
         "salary": r.salary,  # None для дневных периодов, см. services/salary.py
+
+        "work_hours": raw.get("work_hours"),  # участвует в формуле ЗП, см. services/salary.py
+        "shift_count": raw.get("shift_count"),  # только для информации, в формулу не входит
     }
 
 

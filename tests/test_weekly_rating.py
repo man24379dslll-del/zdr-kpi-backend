@@ -405,6 +405,23 @@ def test_work_hours_is_none_for_specific_employee_when_cell_empty():
     assert by_fio["Без часов"]["work_hours"] is None
 
 
+def test_shift_count_parsed_when_column_present():
+    # "Кол-во смен" — чисто информационная колонка (в отличие от
+    # work_hours НЕ участвует в формуле ЗП), только для отображения рядом.
+    row = _employee_row("Тестов Т.", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
+    row["Кол-во смен"] = 5
+    raw = _build_excel_bytes([_group_row("Тестовая группа"), row])
+    employees = parse_weekly_rating_excel(raw)
+    assert employees[0]["shift_count"] == 5
+
+
+def test_shift_count_is_none_when_column_missing():
+    row = _employee_row("Тестов Т.", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
+    raw = _build_excel_bytes([_group_row("Тестовая группа"), row])
+    employees = parse_weekly_rating_excel(raw)
+    assert employees[0]["shift_count"] is None
+
+
 def test_missing_mandatory_column_raises_400():
     row = _employee_row("Тестов Т.", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
     del row[C1_SUM]
@@ -612,6 +629,8 @@ def test_build_kpi_rating_row_maps_computed_fields_for_supabase():
     assert row["bonus2"] == 50
     assert row["errors_count"] is None  # "Ошибок" не задана в тестовых строках — не роняет, просто null
     assert row["salary"] is None  # assign_salary тут не вызывается (это работа routers/ratings.py, не compute_weekly_rating)
+    assert row["work_hours"] is None  # "Рабочее время, ч" не задана в тестовых строках
+    assert row["shift_count"] is None  # "Кол-во смен" не задана в тестовых строках
 
     novikov = by_fio["Новиков Н."]
     novikov_row = build_kpi_rating_row("upload-123", novikov)

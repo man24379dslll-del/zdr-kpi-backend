@@ -156,6 +156,10 @@ ERRORS_COUNT_COLUMN = "Ошибок"  # сырое число, необязат�
 # предупредить об этом в логе, аналогично salaryMissing для бонусов.
 WORK_HOURS_COLUMN = "Рабочее время, ч"
 
+# Кол-во смен — чисто информационная колонка (в формулу ЗП НЕ входит,
+# в отличие от work_hours выше), выводится в таблице рядом для справки.
+SHIFT_COUNT_COLUMN = "Кол-во смен"
+
 GROUP_ROW_PREFIX = "группа:"
 
 # Всё, кроме 4 "кол-во"-колонок (E/J/O/T) и 2 бонусных (ищутся по
@@ -372,6 +376,7 @@ def parse_weekly_rating_excel(raw: bytes, supervisor_channels: dict[str, str] | 
             "errors_pct": _num(row.get(ERRORS_PCT_COLUMN)),
             "errors_count": _optional_num(row, ERRORS_COUNT_COLUMN),
             "work_hours": _optional_num(row, WORK_HOURS_COLUMN),
+            "shift_count": _optional_num(row, SHIFT_COUNT_COLUMN),
         })
 
     return employees
