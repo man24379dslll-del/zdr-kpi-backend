@@ -452,12 +452,11 @@
         <select id="periodWeek" class="period-select"></select>
         <span id="periodPreview" style="font-family:var(--mono);color:var(--accent);"></span>
       </div>
-      <div class="row" style="gap:8px;margin-top:10px;">
-        <span style="font-size:13px;color:var(--muted);align-self:center;">Недель в этом месяце (для деления оклада):</span>
-        <select id="weeksInMonth" class="period-select">
-          <option value="4" selected>4</option>
-          <option value="5">5</option>
-        </select>
+      <div class="row" style="gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap;">
+        <span style="font-size:13px;color:var(--muted);">База ставки, ₽/мес (для расчёта ставки за час):</span>
+        <input type="number" id="monthlyBaseRate" class="period-select" style="width:100px;" value="40000" min="0" step="1">
+        <span style="font-size:13px;color:var(--muted);">Норма часов в месяце:</span>
+        <input type="number" id="hoursNorm" class="period-select" style="width:80px;" value="160" min="1" step="0.1">
       </div>
     </label>
 
@@ -890,6 +889,14 @@ function num(v){
   const n = Number(v);
   return isNaN(n) ? 0 : n;
 }
+// В отличие от num(): пустая/отсутствующая ячейка -> null, а не 0. Нужен
+// для work_hours — пустая ячейка означает "неизвестно", а НЕ "0 часов
+// отработано" (что дало бы заниженную, но не нулевую ЗП по формуле).
+function numOrNull(v){
+  if(v === undefined || v === null || v === "") return null;
+  const n = Number(v);
+  return isNaN(n) ? null : n;
+}
 
 function parseWorkbook(arrayBuffer){
   const wb = XLSX.read(arrayBuffer, { type: "array" });
@@ -932,6 +939,7 @@ function parseWorkbook(arrayBuffer){
     inet_cards: optionalAny("Интернет: кол-во", "Карточек (Интернет)"),
     bonus075: findColBySuffix(headers, "за офор."),
     bonus2: findColBySuffix(headers, "за дост."),
+    work_hours: optional("Рабочее время, ч"),
   };
   const cardsMissing = [];
   if(col.c1_cards === -1) cardsMissing.push("Первый контакт");
@@ -939,6 +947,10 @@ function parseWorkbook(arrayBuffer){
   if(col.radio_cards === -1) cardsMissing.push("Радио + ТВ");
   if(col.inet_cards === -1) cardsMissing.push("Интернет");
   const salaryMissing = (col.bonus075 === -1 || col.bonus2 === -1);
+  // "Рабочее время, ч" — обязательна для ЧЕСТНОГО расчёта ЗП (база
+  // формулы, см. assignSalary), но не должна ронять сам разбор файла —
+  // без нужны только предупредить (аналогично salaryMissing выше).
+  const workHoursMissing = col.work_hours === -1;
   // Реальный текст заголовка из файла (процент в названии у разных файлов
   // разный, напр. "0.75%"/"3.5%") — используется как подпись столбца
   // вместо жёстко зашитого текста, см. bonusColumnLabels.
@@ -1032,9 +1044,10 @@ function parseWorkbook(arrayBuffer){
       bonus2: col.bonus2 !== -1 ? num(row[col.bonus2]) : null,
       errors_pct: num(row[errorsCol]),
       errors_count: errorsCountCol !== -1 ? num(row[errorsCountCol]) : null,
+      work_hours: col.work_hours !== -1 ? numOrNull(row[col.work_hours]) : null,
     });
   }
-  return { groups, errorsIsFallback, cardsMissing, salaryMissing, bonus075Label, bonus2Label };
+  return { groups, errorsIsFallback, cardsMissing, salaryMissing, bonus075Label, bonus2Label, workHoursMissing };
 }
 
 // ---------- step 1: parse & show channel settings ----------
@@ -1045,7 +1058,7 @@ $("parseBtn").addEventListener("click", async () => {
   log("Читаю файл…");
   try{
     const buf = await selectedFile.arrayBuffer();
-    const { groups, errorsIsFallback, cardsMissing, salaryMissing, bonus075Label, bonus2Label } = parseWorkbook(buf);
+    const { groups, errorsIsFallback, cardsMissing, salaryMissing, bonus075Label, bonus2Label, workHoursMissing } = parseWorkbook(buf);
     parsedGroups = groups;
     currentFilename = selectedFile.name;
     bonusColumnLabels = { bonus075: bonus075Label, bonus2: bonus2Label };
@@ -1064,6 +1077,11 @@ $("parseBtn").addEventListener("click", async () => {
       log(`Внимание: нет колонок "0.75% за офор." / "2% за дост." (или похожих, оканчивающихся на "за офор."/"за дост.") — ЗП посчитается только по ставке, без бонуса.`, "warn");
     } else {
       log(`Нашёл колонки бонусов ("${bonus075Label}" / "${bonus2Label}") — ЗП будет посчитана для недельного отчёта.`, "ok");
+    }
+    if(workHoursMissing){
+      log(`Внимание: нет колонки "Рабочее время, ч" — ЗП честно посчитать нельзя, будет пусто для всех в этом периоде.`, "warn");
+    } else {
+      log(`Нашёл колонку "Рабочее время, ч" — база ЗП будет посчитана по отработанным часам.`, "ok");
     }
 
     buildChannelSettings(groups);
@@ -1363,19 +1381,41 @@ function assignTierCoefficients(rows){
 }
 
 // ---------- ЗП (только недельный отчёт) ----------
-// ЗП = (Ставка + бонус075 + бонус2) × коэффициент ЛГ (или ×1, если коэффициента нет)
-const MONTHLY_BASE_RATE = 20000;
-function currentWeeksInMonth(){
-  return parseInt($("weeksInMonth").value, 10) || 4;
+// ПОЛНАЯ ЗАМЕНА старой формулы (была: фиксированный оклад / кол-во недель
+// в месяце, не зависела от реально отработанного времени):
+//   ставка_за_час = monthlyBaseRate / hoursNorm
+//   weekBase      = ставка_за_час × r.work_hours ("Рабочее время, ч" из файла)
+//   ЗП            = weekBase + (бонус075 + бонус2) × коэффициент ЛГ прошлой недели
+// ВАЖНО: коэффициент умножает ТОЛЬКО сумму бонусов, НЕ weekBase — часовая
+// ставка идёт отдельным слагаемым без умножения на коэффициент.
+// Если у сотрудника нет work_hours (колонки не было в файле, либо пустая
+// ячейка) — базу посчитать нельзя (это НЕ "0 часов", а "неизвестно"),
+// поэтому salary = null целиком, а не "0 + бонусы" (которое выглядело бы
+// как настоящая заниженная ЗП и могло остаться незамеченным).
+function currentHoursNorm(){
+  return parseFloat($("hoursNorm").value) || 160;
+}
+function currentMonthlyBaseRate(){
+  return parseFloat($("monthlyBaseRate").value) || 40000;
 }
 function assignSalary(rows, prevCoeffMap){
-  const weekBase = MONTHLY_BASE_RATE / currentWeeksInMonth();
+  const hourlyRate = currentMonthlyBaseRate() / currentHoursNorm();
   for(const r of rows){
+    if(r.work_hours == null){
+      r.salary = null;
+      r.salaryBaseUsed = null;
+      r.salaryCoeffUsed = null;
+      r.salaryCoeffFromPrev = false;
+      continue;
+    }
+    const weekBase = hourlyRate * r.work_hours;
     const bonus075 = r.bonus075 ?? 0;
     const bonus2 = r.bonus2 ?? 0;
     const prev = prevCoeffMap ? prevCoeffMap[r.fio] : null;
     const coeff = (prev && prev.coefficient != null) ? prev.coefficient : 1.0;
-    r.salary = (weekBase + bonus075 + bonus2) * coeff;
+    // Коэффициент умножает ТОЛЬКО сумму бонусов, НЕ часовую ставку —
+    // weekBase идёт отдельным слагаемым без умножения на coeff.
+    r.salary = weekBase + (bonus075 + bonus2) * coeff;
     r.salaryBaseUsed = weekBase;
     r.salaryCoeffUsed = coeff;
     r.salaryCoeffFromPrev = !!(prev && prev.coefficient != null);
@@ -3408,7 +3448,8 @@ async function compareWithBackend(){
     fd.append("file", selectedFile);
     const params = new URLSearchParams({
       period_label: currentPeriodValue(),
-      weeks_in_month: String(parseInt($("weeksInMonth").value, 10) || 4),
+      hours_norm: String(currentHoursNorm()),
+      monthly_base_rate: String(currentMonthlyBaseRate()),
       dry_run: "true",
     });
     const res = await fetch(`/ratings/compute?${params.toString()}`, {

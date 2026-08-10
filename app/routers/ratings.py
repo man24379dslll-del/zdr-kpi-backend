@@ -17,7 +17,7 @@ from app.services.payroll import is_weekly_period_label
 from app.services.periods import find_previous_period
 from app.services.rating_engine import RatingCategory
 from app.services.ratings_repository import maybe_save_weekly_rating, save_weekly_rating
-from app.services.salary import assign_salary
+from app.services.salary import DEFAULT_HOURS_NORM, DEFAULT_MONTHLY_BASE_RATE, assign_salary
 from app.services.weekly_rating import compute_weekly_rating
 from app.supabase_client import as_user
 
@@ -76,7 +76,8 @@ async def _load_previous_week_coefficients(user: CurrentUser, period_label: str)
 async def compute_weekly_rating_endpoint(
     file: UploadFile,
     period_label: str,
-    weeks_in_month: int = 4,
+    hours_norm: float = DEFAULT_HOURS_NORM,
+    monthly_base_rate: float = DEFAULT_MONTHLY_BASE_RATE,
     dry_run: bool = False,
     user: CurrentUser = Depends(get_current_user),
 ):
@@ -85,9 +86,11 @@ async def compute_weekly_rating_endpoint(
 
     period_label — метка периода для kpi_uploads (например '7-1' на неделю
     или '2026-07-27' на день) — как в старой JS-версии, формат не проверяем.
-    weeks_in_month — 4 или 5, сколько недель в текущем месяце (для формулы
-    ЗП: MONTHLY_BASE_RATE / weeks_in_month); учитывается только для
-    недельных периодов, ввод не автоматический — вручную задаёт вызывающий.
+    hours_norm/monthly_base_rate — параметры формулы ЗП недели (см.
+    services/salary.py: ставка_за_час = monthly_base_rate / hours_norm,
+    база = ставка_за_час × "Рабочее время, ч" сотрудника из файла);
+    учитываются только для недельных периодов, ввод не автоматический —
+    вручную задаёт вызывающий (заменяет прежний weeks_in_month).
     dry_run — если true, считает всё как обычно (включая ЗП), но НИЧЕГО
     не пишет в kpi_uploads/kpi_ratings — только возвращает JSON. Для режима
     сравнения "старый JS vs новый backend" на реальных файлах, пока сам
@@ -111,9 +114,14 @@ async def compute_weekly_rating_endpoint(
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
+    warnings: list[str] = []
     if is_weekly_period_label(period_label):
+        if all(e.get("work_hours") is None for e in employees):
+            warnings.append(
+                'Внимание: нет колонки "Рабочее время, ч" — ЗП не посчитана ни для кого этого периода.'
+            )
         prev_coefficients = await _load_previous_week_coefficients(user, period_label)
-        assign_salary(results, prev_coefficients, weeks_in_month)
+        assign_salary(results, prev_coefficients, hours_norm, monthly_base_rate)
 
     client = as_user(user.access_token)
     upload_id = await maybe_save_weekly_rating(
@@ -123,6 +131,7 @@ async def compute_weekly_rating_endpoint(
     return {
         "upload_id": upload_id,
         "dry_run": dry_run,
+        "warnings": warnings,
         "rows": [
             {
                 "fio": r.fio,

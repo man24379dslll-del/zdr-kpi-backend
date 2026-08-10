@@ -373,6 +373,38 @@ def test_errors_count_is_none_when_column_missing():
     assert employees[0]["errors_count"] is None
 
 
+def test_work_hours_parsed_when_column_present():
+    # "Рабочее время, ч" — необязательная колонка при разборе (парсер не
+    # падает без неё), но обязательна для честного расчёта ЗП, см.
+    # services/salary.py.
+    row = _employee_row("Тестов Т.", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
+    row["Рабочее время, ч"] = 38.5
+    raw = _build_excel_bytes([_group_row("Тестовая группа"), row])
+    employees = parse_weekly_rating_excel(raw)
+    assert employees[0]["work_hours"] == 38.5
+
+
+def test_work_hours_is_none_when_column_missing():
+    row = _employee_row("Тестов Т.", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
+    raw = _build_excel_bytes([_group_row("Тестовая группа"), row])
+    employees = parse_weekly_rating_excel(raw)
+    assert employees[0]["work_hours"] is None
+
+
+def test_work_hours_is_none_for_specific_employee_when_cell_empty():
+    # Колонка ЕСТЬ в файле, но у конкретного человека ячейка пустая — это
+    # тоже "неизвестно" (None), а НЕ 0 часов (иначе ЗП формула тихо дала
+    # бы заниженную, но ненулевую ЗП вместо явного "не посчитано").
+    row_with = _employee_row("С часами", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
+    row_with["Рабочее время, ч"] = 38.5
+    row_without = _employee_row("Без часов", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
+    raw = _build_excel_bytes([_group_row("Тестовая группа"), row_with, row_without])
+    employees = parse_weekly_rating_excel(raw)
+    by_fio = {e["fio"]: e for e in employees}
+    assert by_fio["С часами"]["work_hours"] == 38.5
+    assert by_fio["Без часов"]["work_hours"] is None
+
+
 def test_missing_mandatory_column_raises_400():
     row = _employee_row("Тестов Т.", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
     del row[C1_SUM]
@@ -579,7 +611,7 @@ def test_build_kpi_rating_row_maps_computed_fields_for_supabase():
     assert row["bonus075"] == 100
     assert row["bonus2"] == 50
     assert row["errors_count"] is None  # "Ошибок" не задана в тестовых строках — не роняет, просто null
-    assert row["salary"] is None  # формула ЗП ещё не перенесена
+    assert row["salary"] is None  # assign_salary тут не вызывается (это работа routers/ratings.py, не compute_weekly_rating)
 
     novikov = by_fio["Новиков Н."]
     novikov_row = build_kpi_rating_row("upload-123", novikov)

@@ -148,6 +148,14 @@ TIME_PER_CONTACT_COLUMN = "Время/контакт, мин"
 ERRORS_PCT_COLUMN = "Ошибок, %"
 ERRORS_COUNT_COLUMN = "Ошибок"  # сырое число, необязательная, только для информации
 
+# Рабочее время за период (часы) — участвует в формуле ЗП (см.
+# services/salary.py: база_недели = ставка_за_час × work_hours).
+# Необязательная колонка: без неё ЗП для этого периода честно посчитать
+# нельзя (не 0 часов, а НЕИЗВЕСТНО), поэтому salary остаётся None, а не
+# падает разбор целиком — вызывающая сторона (routers/ratings.py) обязана
+# предупредить об этом в логе, аналогично salaryMissing для бонусов.
+WORK_HOURS_COLUMN = "Рабочее время, ч"
+
 GROUP_ROW_PREFIX = "группа:"
 
 # Всё, кроме 4 "кол-во"-колонок (E/J/O/T) и 2 бонусных (ищутся по
@@ -363,6 +371,7 @@ def parse_weekly_rating_excel(raw: bytes, supervisor_channels: dict[str, str] | 
             "time_per_contact": _num(row.get(TIME_PER_CONTACT_COLUMN)),
             "errors_pct": _num(row.get(ERRORS_PCT_COLUMN)),
             "errors_count": _optional_num(row, ERRORS_COUNT_COLUMN),
+            "work_hours": _optional_num(row, WORK_HOURS_COLUMN),
         })
 
     return employees
