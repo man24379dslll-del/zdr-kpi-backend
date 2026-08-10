@@ -442,45 +442,87 @@ def test_channel_tier_ranks_by_per_contact_when_deal_exists():
     assert by_fio["Тир-А2"].places["channel"] == 2  # ch_pc=400
 
 
-def test_channel_tier_uses_already_tiered_lk_place_not_raw_rank():
-    # Тир канала считается ПОСЛЕ тира ЛК и должен использовать уже
-    # тированное место по ЛК (не сырой ранг по lk_pc) — иначе тир ЛК и
-    # тир канала зависели бы друг от друга циклически (см. docstring
-    # tier_channel.py и weekly_rating.CHANNEL_TIER_PLACE_FIELDS).
-    a = _employee_row("Тир-А1", "", 100, 100, 500, 20, 1, 5, 20, 5000, "radio")  # тир ЛК A, лучший lk_pc
-    b = _employee_row("Тир-А2", "", 90, 90, 400, 22, 1.2, 6, 15, 4000, "radio")  # тир ЛК A, хуже lk_pc
-    # У "Мало-карт" самый большой СЫРОЙ lk_pc (999), но lk_cards=0 ->
-    # тир ЛК Б (карточек нет вовсе) -> реальное (тированное) место хуже,
-    # чем у А1/А2, несмотря на формально лучший lk_pc.
-    c = _employee_row("Мало-карт", "", 80, 999, 10, 25, 1.5, 0, 0, 3000, "radio")
-    c[RADIO_CONV] = 0  # конверсия 0% по каналу -> НЕ тир A, независимо от кол-ва карточек
+def test_channel_tier_is_self_contained_and_lk_uses_its_final_place():
+    # Тир канала считается ПЕРВЫМ и НЕ зависит от мест других категорий —
+    # только от собственных карточек/конверсии/суммы с контакта (см.
+    # docstring tier_channel.py). Тир ЛК считается ПОСЛЕ и использует уже
+    # ГОТОВОЕ (финальное, не промежуточное) место по каналу в своём
+    # среднем для тиров Б/В.
+    a = _employee_row("А", "", 100, 50, 0, 20, 1, 5, 20, 5000, "radio")  # ЛК тир A; канал: 0 карточек -> тир Б
+    a[RADIO_COUNT] = 0
+    a[RADIO_CONV] = 0
+    b = _employee_row("Б", "", 90, 40, 999, 22, 1.2, 6, 15, 4000, "radio")  # ЛК тир A; канал тир A, лучший ch_pc
+    b[RADIO_COUNT] = 3
+    b[RADIO_CONV] = 10
+    # У X — САМЫЙ БОЛЬШОЙ сырой ch_pc (9999) во всей группе, но
+    # конверсия по каналу 0% -> это тир В (карточки впустую), а НЕ тир A,
+    # несмотря на формально лучшую "сумму с контакта". Также ЛК тир Б
+    # (карточек ЛК нет вовсе).
+    x = _employee_row("X", "", 80, 999, 9999, 25, 1.5, 0, 0, 3000, "radio")
+    x[RADIO_COUNT] = 50
+    x[RADIO_CONV] = 0
 
-    raw = _build_excel_bytes([_group_row("Супервайзер - Тестов Тест Тестович"), a, b, c])
+    raw = _build_excel_bytes([_group_row("Супервайзер - Тестов Тест Тестович"), a, b, x])
     employees = parse_weekly_rating_excel(raw)
     results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
     by_fio = {r.fio: r for r in results}
 
-    malo = by_fio["Мало-карт"]
-    # Тир Б (карточек 0): 2 (размер тира A) + среднее место по c1/канал(плоский на тот момент)/время/ошибки = 2 + 3 = 5
-    assert malo.places["lk"] == 5.0
-    assert malo.places["lk"] > 1  # НЕ то место, что дал бы сырой ранг по lk_pc=999 (было бы 1)
+    # Канал: Б тир A (единственный, cards>0 и conv>0) -> место 1;
+    # А тир Б (0 карточек) -> место |A|+1 = 2;
+    # X тир В (карточки есть, конверсия 0%, ЕДИНСТВЕННЫЙ в тире В) -> место |A|+|Б|+1 = 3
+    assert by_fio["Б"].places["channel"] == 1.0
+    assert by_fio["А"].places["channel"] == 2.0
+    assert by_fio["X"].places["channel"] == 3.0
+    # НЕ 1 — то место, что дал бы сырой ранг по ch_pc=9999 (был бы лучшим во всей группе)
+    assert by_fio["X"].places["channel"] != 1.0
 
-    # Тир канала: 2 + среднее МЕСТО по c1/ЛК(уже тированное!)/время/ошибки = 2 + (3+5+3+3)/4 = 5.5
-    assert malo.places["channel"] == pytest.approx(5.5)
-    # Если бы вместо тированного lk_place использовался сырой ранг по lk_pc
-    # (у "Мало-карт" он был бы =1, лучший), получилось бы 2 + (3+1+3+3)/4 = 4.5
-    assert malo.places["channel"] != pytest.approx(4.5)
+    xr = by_fio["X"]
+    # ЛК тир Б (карточек ЛК нет): |A|=2 (А и Б оба тир A по ЛК) + среднее
+    # МЕСТО по c1/каналу(ФИНАЛЬНОЕ!)/времени/ошибкам = 2 + (3+3+3+3)/4 = 5
+    assert xr.places["lk"] == pytest.approx(5.0)
+    # Если бы вместо финального места канала использовался сырой ранг по
+    # ch_pc (у X он был бы =1, лучший во всей группе), получилось бы
+    # 2 + (3+1+3+3)/4 = 4.5 — другое число.
+    assert xr.places["lk"] != pytest.approx(4.5)
 
 
-def test_channel_tier_missing_required_category_raises_value_error():
-    # Убираем именно 'lk' (а не, скажем, 'time'), чтобы сработала ТОЛЬКО
-    # проверка тира канала, а не тира ЛК: тир ЛК просто выключается, если
-    # категории 'lk' нет вовсе, а тир канала явно требует её как одну из
-    # своих 4 (CHANNEL_TIER_PLACE_FIELDS).
-    categories = [c for c in CATEGORIES if c.key != "lk"]
+def test_lk_average_reconciles_exactly_with_places_visible_in_the_table():
+    # Явная регрессия на путаницу, из-за которой раньше "среднее по
+    # категориям" у тира ЛК не совпадало с тем, что реально видно в
+    # таблице "По группам" (пример Астаховой/Кожеуровой) — тир канала
+    # считался ПОСЛЕ тира ЛК на ещё "плоском" месте, отличном от
+    # итогового. Теперь канал считается первым и самостоятельно, поэтому
+    # "место ЛК = размер предыдущих тиров + среднее из чисел, видимых в
+    # таблице" должно сходиться буквально, без исключений.
+    a = _employee_row("А", "", 100, 50, 0, 20, 1, 5, 20, 5000, "radio")
+    a[RADIO_COUNT] = 0
+    a[RADIO_CONV] = 0
+    b = _employee_row("Б", "", 90, 40, 999, 22, 1.2, 6, 15, 4000, "radio")
+    b[RADIO_COUNT] = 3
+    b[RADIO_CONV] = 10
+    x = _employee_row("X", "", 80, 999, 9999, 25, 1.5, 0, 0, 3000, "radio")
+    x[RADIO_COUNT] = 50
+    x[RADIO_CONV] = 0
+
+    raw = _build_excel_bytes([_group_row("Супервайзер - Тестов Тест Тестович"), a, b, x])
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    by_fio = {r.fio: r for r in results}
+    xr = by_fio["X"]
+
+    size_tier_a_lk = 2  # А и Б — оба тир A по ЛК (см. тест выше)
+    manual_avg = (xr.places["c1"] + xr.places["channel"] + xr.places["time"] + xr.places["errors"]) / 4
+    assert xr.places["lk"] == pytest.approx(size_tier_a_lk + manual_avg)
+
+
+def test_lk_tier_missing_channel_category_raises_value_error():
+    # Убираем 'channel' (а не 'lk') — тир ЛК явно требует эту категорию
+    # для своего среднего (LK_TIER_PLACE_FIELDS), а сам тир канала больше
+    # ни от чего не зависит и без 'lk' прекрасно работает.
+    categories = [c for c in CATEGORIES if c.key != "channel"]
     raw = _build_excel_bytes(ROWS)
     employees = parse_weekly_rating_excel(raw)
-    with pytest.raises(ValueError, match="Тир канала требует категории"):
+    with pytest.raises(ValueError, match="Тир ЛК требует категории"):
         compute_weekly_rating(employees, categories, na_predicate=is_na_row)
 
 

@@ -1,11 +1,17 @@
 """
-Полный недельный расчёт: категории конструктора рейтинга → тир ЛК →
-итоговое место → распределение по ЛГ (лестничным группам).
+Полный недельный расчёт: тир канала → категории конструктора рейтинга →
+тир ЛК → итоговое место → распределение по ЛГ (лестничным группам).
 
-Соединяет три самостоятельных модуля в один пайплайн, НЕ сливая их
-логику воедино (так и просили при переносе тира ЛК и ЛГ):
-  - rating_engine.py — обобщённое ранжирование категорий конструктора
-  - tier_lk.py        — особый случай для категории 'lk' (тир A/Б/В)
+Соединяет самостоятельные модули в один пайплайн, НЕ сливая их логику
+воедино (так и просили при переносе тира ЛК и ЛГ):
+  - rating_engine.py  — обобщённое ранжирование категорий конструктора
+  - tier_channel.py   — особый случай для категории 'channel' (тир A/Б/В
+                         по картам+конверсии канала); считается ПЕРВЫМ,
+                         ни от чего не зависит
+  - tier_lk.py         — особый случай для категории 'lk' (тир A/Б/В по
+                         картам+конверсии ЛК); считается ПОСЛЕ тира
+                         канала, использует его финальное место в
+                         среднем для тиров Б/В — см. LK_TIER_PLACE_FIELDS
   - ladder_groups.py  — ЛГ, следующая ступень поверх итогового места
 
 Живёт отдельным модулем (не внутри rating_engine.py), чтобы не создавать
@@ -44,21 +50,12 @@ from app.services.tier_lk import compute_tiered_lk_places
 
 # Тир ЛК (в отличие от остальных категорий конструктора) жёстко завязан
 # на эти 4 конкретные категории — как в старой JS-версии. Это не
-# настраивается через конструктор рейтинга.
+# настраивается через конструктор рейтинга. "channel" здесь — уже
+# ФИНАЛЬНОЕ место по каналу (тир канала считается раньше и ни от чего
+# не зависит, см. compute_weekly_rating и docstring tier_channel.py).
 LK_TIER_PLACE_FIELDS = {
     "c1": "c1_place",
     "channel": "ch_place",
-    "time": "time_place",
-    "errors": "errors_place",
-}
-
-# Тир канала — аналогично, но использует уже ТИРИРОВАННОЕ место по ЛК
-# (считается ПОСЛЕ тира ЛК, см. compute_weekly_rating и docstring
-# tier_channel.py — иначе тир ЛК и тир канала зависели бы друг от друга
-# циклически).
-CHANNEL_TIER_PLACE_FIELDS = {
-    "c1": "c1_place",
-    "lk": "lk_place",
     "time": "time_place",
     "errors": "errors_place",
 }
@@ -89,21 +86,15 @@ def compute_weekly_rating(
     active_keys = {c.key for c in active}
     lk_category = next((c for c in active if c.key == "lk"), None)
     channel_category = next((c for c in active if c.key == "channel"), None)
-    other_categories = [c for c in active if c.key != "lk"]
+    # Ни 'lk', ни 'channel' не участвуют в обычном apply_category_ranks —
+    # у обеих свой особый расчёт (см. ниже).
+    other_categories = [c for c in active if c.key not in ("lk", "channel")]
 
     if lk_category is not None:
-        missing = set(LK_TIER_PLACE_FIELDS) - {c.key for c in other_categories}
+        missing = set(LK_TIER_PLACE_FIELDS) - active_keys
         if missing:
             raise ValueError(
                 f"Тир ЛК требует категории {sorted(LK_TIER_PLACE_FIELDS)}, "
-                f"не хватает: {sorted(missing)}"
-            )
-
-    if channel_category is not None:
-        missing = set(CHANNEL_TIER_PLACE_FIELDS) - active_keys
-        if missing:
-            raise ValueError(
-                f"Тир канала требует категории {sorted(CHANNEL_TIER_PLACE_FIELDS)}, "
                 f"не хватает: {sorted(missing)}"
             )
 
@@ -119,8 +110,28 @@ def compute_weekly_rating(
         groups.setdefault(r.raw.get(supervisor_field), []).append(r)
 
     for group_results in groups.values():
+        # 1. Тир канала — считается ПЕРВЫМ и полностью самостоятельно: не
+        # зависит от мест других категорий вообще, только от собственных
+        # ch_cards/ch_conv/ch_per_contact (см. docstring tier_channel.py).
+        if channel_category is not None:
+            channel_items = []
+            for r in group_results:
+                channel_items.append({
+                    "ch_cards": r.raw.get("ch_cards") or 0,
+                    "ch_conv": r.raw.get("ch_conv") or 0,
+                    "ch_per_contact": r.raw.get(channel_category.source_column) or 0,
+                })
+            for r, place in zip(group_results, compute_tiered_channel_places(channel_items)):
+                r.places["channel"] = place
+                r.scores["channel"] = place * channel_category.weight
+
+        # 2. Обычные категории конструктора (1 обращение, время, % ошибок,
+        # любые кастомные) — независимы, обычный спортивный ранг.
         apply_category_ranks(group_results, other_categories)
 
+        # 3. Тир ЛК — ПОСЛЕ канала: среднее для тиров Б/В использует уже
+        # ФИНАЛЬНОЕ (не промежуточное) место по каналу из шага 1, циклической
+        # зависимости между тиром ЛК и тиром канала больше нет.
         if lk_category is not None:
             lk_items = []
             for r in group_results:
@@ -132,21 +143,6 @@ def compute_weekly_rating(
             for r, place in zip(group_results, compute_tiered_lk_places(lk_items)):
                 r.places["lk"] = place
                 r.scores["lk"] = place * lk_category.weight
-
-        # Тир канала — обязательно ПОСЛЕ тира ЛК: читает уже тированное
-        # r.places["lk"] (см. CHANNEL_TIER_PLACE_FIELDS и docstring
-        # tier_channel.py про разрыв циклической зависимости).
-        if channel_category is not None:
-            channel_items = []
-            for r in group_results:
-                item = {field: r.places[key] for key, field in CHANNEL_TIER_PLACE_FIELDS.items()}
-                item["ch_cards"] = r.raw.get("ch_cards") or 0
-                item["ch_conv"] = r.raw.get("ch_conv") or 0
-                item["ch_per_contact"] = r.raw.get(channel_category.source_column) or 0
-                channel_items.append(item)
-            for r, place in zip(group_results, compute_tiered_channel_places(channel_items)):
-                r.places["channel"] = place
-                r.scores["channel"] = place * channel_category.weight
 
         # "Регион УК": total_score только по c1/lk/time. Места (r.places)
         # не трогаем — они уже посчитаны внутри группы и нужны тиру ЛК

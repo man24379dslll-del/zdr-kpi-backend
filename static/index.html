@@ -1160,6 +1160,11 @@ function rankByKeys(idxList, keyFns){
   return ranks;
 }
 
+// ВАЖНО про порядок вызова (см. scoreSlice): "канал" в avgOthers ниже —
+// это ФИНАЛЬНОЕ (и единственное) место по каналу. Тир канала
+// (computeTieredChannelPlaces ниже) считается ПЕРВЫМ, самостоятельно —
+// не зависит от мест других категорий вообще, поэтому циклической
+// зависимости между тиром ЛК и тиром канала больше нет.
 function computeTieredLkPlaces(items){
   const idxA = [], idxB = [], idxC = [];
   items.forEach((e, i) => {
@@ -1185,36 +1190,48 @@ function computeTieredLkPlaces(items){
   return places;
 }
 
-// Тир канала (Радио+ТВ / Интернет) — упрощённый аналог тира ЛК выше: та же
-// идея (2 случая вместо 3 — БЕЗ подтипов Б/В), и порог попадания в "тир A"
-// ТОТ ЖЕ САМЫЙ, что у тира ЛК — карточки>=1 И конверсия>0% (есть хотя бы
-// одна успешная сделка).
-//   cards>=1 И conv>0 — обычный ранг по "сумма с контакта" среди тех, у
-//                        кого тоже есть хотя бы 1 сделка
-//   иначе (0 карточек, либо конверсия 0%) — место = (сколько человек в
-//                        тире выше) + среднее МЕСТО по остальным 4
-//                        категориям (1 обращение, ЛК, время, ошибки)
-// ВАЖНО про порядок: тир ЛК выше использует ЕЩЁ "плоское" (нетированное)
-// ch_place (см. avgOthers в computeTieredLkPlaces), а этот тир канала
-// использует уже ТИРИРОВАННОЕ lk_place — вызывается ПОСЛЕ тира ЛК в
-// scoreSlice. Иначе тир ЛК и тир канала зависели бы друг от друга
-// циклически.
+// Тир канала (Радио+ТВ / Интернет) — структурно СИММЕТРИЧЕН тиру ЛК выше
+// (тир A/Б/В по картам+конверсии), но НЕ использует места других
+// категорий вообще — только свои карточки/конверсию/сумму с контакта.
+// Это делает тир канала полностью самостоятельным (в отличие от тира
+// ЛК, который зависит от него) и снимает саму возможность циклической
+// зависимости: тир канала считается ПЕРВЫМ, окончательно, до всех
+// остальных категорий; тир ЛК считается ПОСЛЕ и использует уже готовое
+// (финальное) место по каналу, см. scoreSlice.
+//
+//   Тир A (лучший)  — карточки>0 И конверсия>0%: обычный спортивный
+//                      ранг по "сумма с контакта" (больше = лучше).
+//                      Одинаковые места при равных суммах — норма.
+//   Тир Б (средний) — карточек 0: ВСЕ такие сотрудники делят ОДНО
+//                      место, сразу после тира A (idxA.length + 1).
+//                      Это НЕ среднее по категориям (в отличие от
+//                      тира ЛК) — просто фиксированная позиция.
+//   Тир В (худший)  — карточки>0, но конверсия==0% (впустую потрачены):
+//                      ранжируется по количеству карточек — чем БОЛЬШЕ
+//                      впустую потрачено карт, тем ХУЖЕ место. Начинается
+//                      сразу после тира Б (idxA.length + idxB.length + 1,
+//                      по обычной логике "пропуска мест при ничьей").
 function computeTieredChannelPlaces(items){
-  const idxA = [], idxRest = [];
+  const idxA = [], idxB = [], idxC = [];
   items.forEach((e, i) => {
     const cards = e.ch_cards ?? 0;
     const conv = e.ch_conv ?? 0;
-    if(cards >= 1 && conv > 0) idxA.push(i);
-    else idxRest.push(i);
+    if(cards > 0 && conv > 0) idxA.push(i);
+    else if(cards > 0 && conv === 0) idxC.push(i);
+    else idxB.push(i); // карточек 0 (конверсия в этом случае тоже 0)
   });
 
   const places = new Array(items.length).fill(1);
-  const avgOthers = (i) => (items[i].c1_place + items[i].lk_place + items[i].time_place + items[i].errors_place) / 4;
 
   const pcA = idxA.map(i => items[i].ch_pc);
   idxA.forEach(i => { places[i] = rankDesc(pcA, items[i].ch_pc); });
 
-  idxRest.forEach(i => { places[i] = idxA.length + avgOthers(i); });
+  const bPlace = idxA.length + 1;
+  idxB.forEach(i => { places[i] = bPlace; });
+
+  const cardsC = idxC.map(i => items[i].ch_cards);
+  const baseC = idxA.length + idxB.length;
+  idxC.forEach(i => { places[i] = baseC + rankAsc(cardsC, items[i].ch_cards); });
 
   return places;
 }
@@ -1223,21 +1240,39 @@ function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategorie
   if(items.length === 0) return [];
   const active = activeCategories || { c1:true, lk:true, ch:true, time:true, errors:true };
   const c1pc = items.map(e=>e.c1_pc);
-  const chpc = items.map(e=>channelOf(e).pc);
   const time = items.map(e=>e.time);
   const err  = items.map(e=>e.errors_pct);
 
-  // первый проход: места, не зависящие от ЛК (нужны заранее для тиров B/C)
-  const pass1 = items.map(e => {
+  // Тир канала — считается ПЕРВЫМ и полностью самостоятельно (см.
+  // docstring computeTieredChannelPlaces): не зависит от мест других
+  // категорий вообще, только от собственных карточек/конверсии/суммы с
+  // контакта. Применяется там же, где тир ЛК (specialLK) — глобальный
+  // список новичков и рейтинг супервайзеров тиры не используют.
+  let chPlaces;
+  if(specialLK){
+    const channelItems = items.map(e => {
+      const ch = channelOf(e);
+      return { ch_pc: ch.pc, ch_cards: ch.cards, ch_conv: ch.conv };
+    });
+    chPlaces = computeTieredChannelPlaces(channelItems);
+  } else {
+    const chpc = items.map(e => channelOf(e).pc);
+    chPlaces = items.map(e => rankDesc(chpc, channelOf(e).pc));
+  }
+
+  // первый проход: остальные обычные категории (1 обращение, время, ошибки) — независимы
+  const pass1 = items.map((e, i) => {
     const ch = channelOf(e);
     const c1_place = rankDesc(c1pc, e.c1_pc);
-    const ch_place = rankDesc(chpc, ch.pc);
     const time_place = rankAscDense(time, e.time);
     const errors_place = rankAscDense(err, e.errors_pct);
     return {...e, ch_sum: ch.sum, ch_check: ch.check, ch_conv: ch.conv, ch_pc: ch.pc, ch_cards: ch.cards,
-                  c1_place, ch_place, time_place, errors_place};
+                  c1_place, ch_place: chPlaces[i], time_place, errors_place};
   });
 
+  // Тир ЛК — ПОСЛЕ канала: среднее для тиров Б/В использует уже
+  // ФИНАЛЬНОЕ (не промежуточное) место по каналу из pass1.ch_place —
+  // циклической зависимости между тиром ЛК и тиром канала больше нет.
   let lkPlaces;
   if(specialLK){
     lkPlaces = computeTieredLkPlaces(pass1);
@@ -1246,24 +1281,9 @@ function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategorie
     lkPlaces = pass1.map(e => rankDesc(lkpc, e.lk_pc));
   }
 
-  // Тир канала считается ТОЛЬКО там же, где тир ЛК (specialLK) — глобальный
-  // список новичков и рейтинг супервайзеров тир не используют, как и раньше
-  // не использовали тир ЛК. Обязательно ПОСЛЕ тира ЛК — см. docstring
-  // computeTieredChannelPlaces про разрыв циклической зависимости.
-  let chPlaces;
-  if(specialLK){
-    const channelItems = pass1.map((e, i) => ({
-      c1_place: e.c1_place, lk_place: lkPlaces[i], time_place: e.time_place, errors_place: e.errors_place,
-      ch_pc: e.ch_pc, ch_cards: e.ch_cards, ch_conv: e.ch_conv,
-    }));
-    chPlaces = computeTieredChannelPlaces(channelItems);
-  } else {
-    chPlaces = pass1.map(e => e.ch_place);
-  }
-
   const scored = pass1.map((e, i) => {
     const lk_place = lkPlaces[i];
-    const ch_place = chPlaces[i];
+    const ch_place = e.ch_place;
     const c1_score = e.c1_place*3, lk_score = lk_place*1.5, ch_score = ch_place*2.5;
     const time_score = e.time_place*1, errors_score = e.errors_place*1;
     const total_score = (active.c1?c1_score:0)+(active.lk?lk_score:0)+(active.ch?ch_score:0)+(active.time?time_score:0)+(active.errors?errors_score:0);
