@@ -3278,7 +3278,7 @@ function styleTitleRow(ws, rowIdx, colCount){
 // Двухстрочная шапка: сверху названия блоков (объединённые ячейки), снизу подписи колонок —
 // как на экране (строки "cat" и "sub").
 function categoryHeaderRows(leadLabels, withTier){
-  const totalCols = withTier ? 32 : 27;
+  const totalCols = withTier ? 34 : 27;
   const rowA = new Array(totalCols).fill("");
   const rowB = new Array(totalCols).fill("");
   rowA[0] = leadLabels[0]; rowA[1] = leadLabels[1]; rowA[2] = leadLabels[2];
@@ -3291,7 +3291,8 @@ function categoryHeaderRows(leadLabels, withTier){
   rowA[26] = "Место";
   if(withTier){
     rowA[27] = "ЛГ"; rowA[28] = "Коэффициент";
-    rowA[29] = bonusColumnLabels.bonus075; rowA[30] = bonusColumnLabels.bonus2; rowA[31] = "ЗП";
+    rowA[29] = "Рабочее время, ч"; rowA[30] = "Кол-во смен";
+    rowA[31] = bonusColumnLabels.bonus075; rowA[32] = bonusColumnLabels.bonus2; rowA[33] = "ЗП";
   }
 
   const subLabels = ["карточек","сумма","ср.чек","конв.,%","с контакта","место"];
@@ -3302,7 +3303,7 @@ function categoryHeaderRows(leadLabels, withTier){
   return { rowA, rowB, totalCols };
 }
 function categoryHeaderMerges(baseRow, totalCols){
-  const vertCols = [0, 1, 2, 25, 26, ...(totalCols > 27 ? [27, 28, 29, 30, 31] : [])];
+  const vertCols = [0, 1, 2, 25, 26, ...(totalCols > 27 ? [27, 28, 29, 30, 31, 32, 33] : [])];
   const merges = vertCols.map(c => ({ s: { r: baseRow, c }, e: { r: baseRow + 1, c } }));
   merges.push({ s: { r: baseRow, c: 3 },  e: { r: baseRow, c: 8 } });
   merges.push({ s: { r: baseRow, c: 9 },  e: { r: baseRow, c: 14 } });
@@ -3350,7 +3351,7 @@ function buildExportSheet(rows, withConvStatus){
 function buildGroupedMainSheet(){
   const withTier = periodType === "week";
   const rowFn = r => withTier
-    ? [...rowToArray(r), r.tier ?? "", r.coefficient ?? "", r.bonus075 ?? "", r.bonus2 ?? "", r.salary ?? ""]
+    ? [...rowToArray(r), r.tier ?? "", r.coefficient ?? "", r.work_hours ?? "", r.shift_count ?? "", r.bonus075 ?? "", r.bonus2 ?? "", r.salary ?? ""]
     : rowToArray(r);
   const { rowA, rowB, totalCols } = categoryHeaderRows(["ФИО","Статус","Группа"], withTier);
 
