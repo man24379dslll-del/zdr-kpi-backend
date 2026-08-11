@@ -679,7 +679,7 @@ async function buildSupervisorViewer(){
       const rowsRaw = await sbGet(`kpi_ratings?upload_id=eq.${latest.id}&select=*`);
       const rows = rowsRaw.map(dbRowToDisplayRow);
 
-      const prevUpload = await fetchLatestUpload(vType, latest.id);
+      const prevUpload = await fetchLatestUpload(vType, latest.period_label);
       let prevMap = null;
       if(prevUpload){
         const prevRaw = await sbGet(`kpi_ratings?upload_id=eq.${prevUpload.id}&select=fio,final_place,total_score,is_na`);
@@ -810,7 +810,7 @@ async function loadSavedPeriod(upload){
     const main = display.filter(r => !r.is_novice);
     const novices = display.filter(r => r.is_novice);
 
-    const prevUpload = await fetchLatestUpload(periodType, upload.id);
+    const prevUpload = await fetchLatestUpload(periodType, upload.period_label);
     let prevMap = null;
     if(prevUpload){
       const prevRaw = await sbGet(`kpi_ratings?upload_id=eq.${prevUpload.id}&select=fio,final_place,total_score,is_na`);
@@ -1571,10 +1571,28 @@ function sortByCalendarDesc(uploads, type){
   });
 }
 
-async function fetchLatestUpload(type, excludeId){
+// Возвращает загрузку с САМЫМ ПОЗДНИМ календарным периодом среди тех, что
+// СТРОГО РАНЬШЕ referencePeriodLabel (если передан) — иначе просто самую
+// позднюю загрузку вообще (referencePeriodLabel не передан).
+//
+// ВАЖНО: сравнение — по КАЛЕНДАРНОМУ periodSortValue периода, а не по ID
+// конкретной загрузки. Раньше тут был excludeId (сравнение по ID) — баг:
+// при повторном сохранении ТОГО ЖЕ периода (например, файл перезалили
+// после ошибки) новая загрузка получала ДРУГОЙ id, поэтому старая запись
+// ТОГО ЖЕ периода не исключалась и ошибочно принималась за "предыдущий
+// период" — коэффициент ЛГ для формулы ЗП брался из дубликата того же
+// периода, а не из реально предыдущего (найдено на практике на неделе
+// 8-1, сохранённой дважды). Сравнение по calendar-значению периода
+// естественно исключает и сам период, и любые его дубликаты, и любые
+// более поздние периоды — не только конкретный id.
+async function fetchLatestUpload(type, referencePeriodLabel){
   const uploads = await sbGet(`kpi_uploads?select=id,period_label,uploaded_at&limit=500`);
   const pattern = PERIOD_PATTERN[type];
-  const filtered = uploads.filter(u => pattern.test(u.period_label) && u.id !== excludeId);
+  let filtered = uploads.filter(u => pattern.test(u.period_label));
+  if(referencePeriodLabel != null){
+    const refValue = periodSortValue(type, referencePeriodLabel);
+    filtered = filtered.filter(u => periodSortValue(type, u.period_label) < refValue);
+  }
   const sorted = sortByCalendarDesc(filtered, type);
   return sorted[0] || null;
 }
@@ -1638,10 +1656,14 @@ $("calcBtn").addEventListener("click", async () => {
   $("calcBtn").disabled = true;
   try{
     // 1) подтягиваем предыдущий период того же типа (для коэффициента ЗП и дельт)
+    // ВАЖНО: передаём currentPeriodValue() как referencePeriodLabel, чтобы
+    // при повторном сохранении ТОГО ЖЕ периода (например, перезаливка файла
+    // после ошибки) fetchLatestUpload не нашёл дубликат этого же периода и
+    // не принял его коэффициент за "предыдущий" — см. докстринг fetchLatestUpload.
     let prevUpload = null, prevCoeffMap = null, prevMainMap = null, prevNoviceMap = null;
     log("Ищу предыдущий период в Supabase…", null, uploadLogEl);
     try{
-      prevUpload = await fetchLatestUpload(periodType);
+      prevUpload = await fetchLatestUpload(periodType, currentPeriodValue());
       if(prevUpload){
         log(`Нашёл предыдущий период: ${prevUpload.period_label}`, "ok", uploadLogEl);
         const map = await fetchRatingsMap(prevUpload.id);
@@ -2198,7 +2220,7 @@ async function loadStandaloneDynamics(){
       log("Периодов такого типа в базе ещё нет.", "warn", logEl3);
       return;
     }
-    const prev = await fetchLatestUpload(vType, latest.id);
+    const prev = await fetchLatestUpload(vType, latest.period_label);
     if(!prev){
       log(`Есть только один период (${latest.period_label}) — сравнивать не с чем.`, "warn", logEl3);
       return;
