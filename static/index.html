@@ -933,7 +933,10 @@ function parseWorkbook(arrayBuffer){
     radio_pc: needAny("Радио + ТВ: сумма с контакта", "Радио: сумма с контакта"),
     inet_sum: need("Интернет: сумма"), inet_check: need("Интернет: ср.чек"),
     inet_conv: need("Интернет: конверсия, %"), inet_pc: need("Интернет: сумма с контакта"),
-    time: need("Время/контакт, мин"),
+    // "Время/контакт БЕЗ ЗВОНКА" (не "Время/контакт, мин" — та колонка
+    // тоже есть в файле, но в расчёт не идёт), по прямому запросу
+    // заказчика: категория "время" в рейтинге считается по времени без звонка.
+    time: need("Время/контакт без звонка, мин"),
     c1_cards: optionalAny("Первый контакт: кол-во", "Карточек (Первый контакт)"),
     lk_cards: optionalAny("ЛК: кол-во", "Карточек (ЛК)"),
     radio_cards: optionalAny("Радио + ТВ: кол-во", "Карточек (Радио + ТВ)"),
@@ -1817,7 +1820,7 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
         <th colspan="6" class="block-end">1 обращение</th>
         <th colspan="6" class="block-end">ЛК</th>
         <th colspan="6" class="block-end">${channelLabel || "Радио+ТВ / Интернет"}</th>
-        <th colspan="2" class="block-end">Время/контакт</th>
+        <th colspan="2" class="block-end">Время/контакт (без звонка)</th>
         <th colspan="3" class="block-end">% ошибок</th>
         <th rowspan="2">Сумма баллов</th>
         <th rowspan="2">Место</th>
@@ -1985,7 +1988,7 @@ function renderSupervisors(){
         <th colspan="6" class="block-end">1 обращение</th>
         <th colspan="6" class="block-end">ЛК</th>
         <th colspan="6" class="block-end">Радио+ТВ / Интернет</th>
-        <th colspan="2" class="block-end">Время/контакт</th>
+        <th colspan="2" class="block-end">Время/контакт (без звонка)</th>
         <th colspan="2" class="block-end">% ошибок</th>
         <th rowspan="2">Сумма баллов</th>
         <th rowspan="2">Место</th>
@@ -3282,7 +3285,7 @@ function categoryHeaderRows(leadLabels, withTier){
   rowA[3] = "1 ОБРАЩЕНИЕ";
   rowA[9] = "ЛК";
   rowA[15] = "РАДИО+ТВ / ИНТЕРНЕТ";
-  rowA[21] = "ВРЕМЯ/КОНТАКТ";
+  rowA[21] = "ВРЕМЯ/КОНТАКТ (БЕЗ ЗВОНКА)";
   rowA[23] = "% ОШИБОК";
   rowA[25] = "Сумма баллов";
   rowA[26] = "Место";

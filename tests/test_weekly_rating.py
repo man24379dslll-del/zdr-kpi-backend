@@ -52,7 +52,7 @@ INET_SUM = "Интернет: сумма"
 INET_CHECK = "Интернет: ср.чек"
 INET_CONV = "Интернет: конверсия, %"
 INET_PC = "Интернет: сумма с контакта"
-TIME_PC = "Время/контакт, мин"
+TIME_PC = "Время/контакт без звонка, мин"  # категория "время" считается БЕЗ звонка, не "Время/контакт, мин"
 ERRORS_PCT = "Ошибок, %"
 
 CATEGORIES = [
@@ -371,6 +371,19 @@ def test_errors_count_is_none_when_column_missing():
     raw = _build_excel_bytes([_group_row("Тестовая группа"), row])
     employees = parse_weekly_rating_excel(raw)
     assert employees[0]["errors_count"] is None
+
+
+def test_time_category_reads_from_without_call_column_not_the_decoy():
+    # Регрессия: категория "время" должна читаться из "Время/контакт без
+    # звонка, мин" (Z), а НЕ из "Время/контакт, мин" (Y) — в файле есть
+    # ОБЕ колонки, а раньше по ошибке читалась Y. "decoy"-значение в Y
+    # намеренно другое, чтобы тест упал, если код снова начнёт читать не
+    # ту колонку.
+    row = _employee_row("Тестов Т.", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
+    row["Время/контакт, мин"] = 999  # decoy — этой колонки в расчёте быть не должно
+    raw = _build_excel_bytes([_group_row("Тестовая группа"), row])
+    employees = parse_weekly_rating_excel(raw)
+    assert employees[0]["time_per_contact"] == 30  # значение из TIME_PC ("без звонка"), не decoy 999
 
 
 def test_work_hours_parsed_when_column_present():
