@@ -976,18 +976,7 @@ function parseWorkbook(arrayBuffer){
   const groups = [];
   let current = null;
   let currentPeaks = null; // "родная" пара для операторов без супервизора: не-ЗДР идут сюда
-  let currentKurbanovaSubgroups = null; // [подгруппа1, подгруппа2], когда текущая группа — Курбанова
-  let kurbanovaPosition = 0;
   const REGION_UK_RE = /операторы\s+без\s+супервизора/i;
-  // Группа супервайзера Курбановой делится на 2 ВИРТУАЛЬНЫЕ подгруппы "через
-  // одного" по порядку строк в файле (без пересортировки) — в отличие от
-  // Региона УК/Пиков это ПОЛНОЦЕННЫЕ группы супервайзера: полный набор
-  // категорий (isRegionUK не проставляется), места по категориям считаются
-  // как обычно внутри своей подгруппы (см. scoreSlice, вызывается отдельно
-  // на каждую группу из groups), а ЛГ (assignTierCoefficients группирует по
-  // r.supervisor) естественно получается отдельной и независимой для каждой
-  // подгруппы — за счёт разных строк supervisor, без специального кода там.
-  const KURBANOVA_RE = /курбанова/i;
 
   for(let r = 1; r < rows.length; r++){
     const row = rows[r];
@@ -996,24 +985,13 @@ function parseWorkbook(arrayBuffer){
     if(fio.startsWith("ГРУППА")){
       const rawName = fio.replace("ГРУППА:","").trim();
       const isSpecial = REGION_UK_RE.test(rawName);
-      const isKurbanova = !isSpecial && KURBANOVA_RE.test(rawName);
       current = { supervisor: rawName, employees: [], isRegionUK: isSpecial };
+      groups.push(current);
       if(isSpecial){
-        groups.push(current);
         currentPeaks = { supervisor: rawName + " [Пики]", employees: [], isPeaks: true };
         groups.push(currentPeaks);
-        currentKurbanovaSubgroups = null;
-      } else if(isKurbanova){
-        currentPeaks = null;
-        const sub1 = { supervisor: rawName + " — 1", employees: [] };
-        const sub2 = { supervisor: rawName + " — 2", employees: [] };
-        groups.push(sub1, sub2);
-        currentKurbanovaSubgroups = [sub1, sub2];
-        kurbanovaPosition = 0;
       } else {
-        groups.push(current);
         currentPeaks = null;
-        currentKurbanovaSubgroups = null;
       }
       continue;
     }
@@ -1023,9 +1001,6 @@ function parseWorkbook(arrayBuffer){
     let target = current;
     if(current.isRegionUK){
       target = fio.trim().toUpperCase().startsWith("ЗДР") ? current : currentPeaks;
-    } else if(currentKurbanovaSubgroups){
-      target = currentKurbanovaSubgroups[kurbanovaPosition % 2];
-      kurbanovaPosition++;
     }
     if(!target) continue;
 

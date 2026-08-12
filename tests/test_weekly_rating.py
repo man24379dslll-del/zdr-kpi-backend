@@ -22,7 +22,6 @@ import pandas as pd
 import pytest
 
 from app.services.excel_parsing import is_na_row, parse_weekly_rating_excel
-from app.services.group_naming import clean_supervisor_name, display_group_name
 from app.services.ladder_groups import TIER_COEFFICIENTS
 from app.services.rating_engine import RatingCategory
 from app.services.ratings_repository import build_kpi_rating_row
@@ -191,63 +190,6 @@ def test_category_places_are_scoped_to_supervisor_group_not_company_wide():
     assert by_fio["B1"].final_place == 1  # НЕ 2
     assert by_fio["A2"].final_place == 2
     assert by_fio["B2"].final_place == 2  # НЕ 4
-
-
-KURBANOVA_ROWS = [
-    _group_row("Супервайзер - Курбанова Зарина Рахимджановна"),
-    _employee_row("Сотрудник 1", "", 100, 50, 100, 30, 2, 1, 5, 1000, "inet"),
-    _employee_row("Сотрудник 2", "", 90, 40, 90, 32, 2.2, 1, 5, 900, "inet"),
-    _employee_row("Сотрудник 3", "", 80, 30, 80, 34, 2.4, 1, 5, 800, "inet"),
-    _employee_row("Сотрудник 4", "", 70, 20, 70, 36, 2.6, 1, 5, 700, "inet"),
-]
-
-
-def test_kurbanova_group_splits_into_two_subgroups_alternating_by_file_order():
-    raw = _build_excel_bytes(KURBANOVA_ROWS)
-    employees = parse_weekly_rating_excel(raw)
-    by_fio = {e["fio"]: e for e in employees}
-
-    assert by_fio["Сотрудник 1"]["supervisor"] == "Супервайзер - Курбанова Зарина Рахимджановна — 1"
-    assert by_fio["Сотрудник 2"]["supervisor"] == "Супервайзер - Курбанова Зарина Рахимджановна — 2"
-    assert by_fio["Сотрудник 3"]["supervisor"] == "Супервайзер - Курбанова Зарина Рахимджановна — 1"
-    assert by_fio["Сотрудник 4"]["supervisor"] == "Супервайзер - Курбанова Зарина Рахимджановна — 2"
-    for e in employees:
-        assert e["is_region_uk"] is False  # не Регион УК — полноценная группа супервайзера
-
-
-def test_kurbanova_subgroups_display_name_appends_number_to_cleaned_name():
-    raw = _build_excel_bytes(KURBANOVA_ROWS)
-    employees = parse_weekly_rating_excel(raw)
-    supervisor_1 = employees[0]["supervisor"]
-    supervisor_2 = employees[1]["supervisor"]
-    assert clean_supervisor_name(supervisor_1) == "Курбанова Зарина Рахимджановна — 1"
-    assert display_group_name(supervisor_1) == "Курбанова Зарина Рахимджановна — 1"
-    assert display_group_name(supervisor_2) == "Курбанова Зарина Рахимджановна — 2"
-
-
-def test_kurbanova_subgroups_keep_full_category_set_unlike_region_uk():
-    raw = _build_excel_bytes(KURBANOVA_ROWS)
-    employees = parse_weekly_rating_excel(raw)
-    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
-    by_fio = {r.fio: r for r in results}
-    # В отличие от Региона УК, total_score НЕ урезается — все 5 категорий в scores
-    for fio in by_fio:
-        assert set(by_fio[fio].scores.keys()) == {"c1", "lk", "channel", "time", "errors"}
-
-
-def test_kurbanova_subgroups_have_independent_ladder_groups():
-    # "Места считаются ВНУТРИ подгруппы" = отдельная ЛГ на каждую подгруппу
-    # (как у любых двух разных супервайзеров), а не общий пул категорий —
-    # тот как раз общий (см. тест выше), только ЛГ разная.
-    raw = _build_excel_bytes(KURBANOVA_ROWS)
-    employees = parse_weekly_rating_excel(raw)
-    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
-    by_fio = {r.fio: r for r in results}
-
-    assert by_fio["Сотрудник 1"].tier == 1
-    assert by_fio["Сотрудник 3"].tier == 2  # худший ВНУТРИ подгруппы 1 (двое всего)
-    assert by_fio["Сотрудник 2"].tier == 1
-    assert by_fio["Сотрудник 4"].tier == 2  # худший ВНУТРИ подгруппы 2 (двое всего)
 
 
 def test_channel_falls_back_to_heuristic_and_flags_guess_when_supervisor_unknown():
