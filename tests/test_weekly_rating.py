@@ -391,8 +391,17 @@ def test_na_employees_excluded_from_final_place_and_ladder():
     for fio in ("Новиков Н.", "Зайцева З.", "Морозова М."):
         assert by_fio[fio].is_na is True
         assert by_fio[fio].final_place is None
+    # Зайцева (Отпуск) и Морозова (c1_sum==0, статус пустой) — Н/О, но НЕ
+    # новички: ladder_groups.assign_novice_coefficients их не трогает,
+    # тир/коэффициент остаются None (только assign_tier_coefficients мог бы
+    # их выставить, а он тоже пропускает is_na=True).
+    for fio in ("Зайцева З.", "Морозова М."):
         assert by_fio[fio].tier is None
         assert by_fio[fio].coefficient is None
+    # Новиков Н. ("Новичок 2 неделя") — новичок: получает "теоретический"
+    # коэффициент ЛГ (см. test_novice_coefficient.py-стиль тесты в
+    # test_ladder_groups.py), но final_place/is_na не меняются (проверено выше).
+    assert by_fio["Новиков Н."].coefficient is not None
 
 
 def test_tier_lk_ranks_tier_a_by_lk_pc_desc():
@@ -445,6 +454,34 @@ def test_ladder_groups_assigned_per_supervisor_and_monotonic_with_final_place():
 
     assert by_fio["Комаров К."].tier == 1
     assert by_fio["Комаров К."].coefficient == TIER_COEFFICIENTS[0]
+
+
+def test_novice_theoretical_coefficient_end_to_end_does_not_change_evaluated():
+    """Новиков Н. ("Новичок 2 неделя", группа Иванова) — самые слабые
+    показатели в файле (см. ROWS), но группа Иванова маленькая: 4 оценённых
+    + 1 новичок = 5 -> tier_sizes(5) = [1,1,1,1,1,0,0,0,0,0] -> даже
+    последнее (5-е) теоретическое место попадает в тир 5 (коэффициент 1.05
+    по умолчанию, TIER_COEFFICIENTS[4]) — граничный случай "коэффициент
+    ровно 1.05 остаётся как есть, не 1.0". Полный пайплайн (реальный Excel
+    -> compute_weekly_rating), не изолированный юнит-тест.
+    """
+    by_fio = _compute()
+    novice = by_fio["Новиков Н."]
+    assert novice.final_place is None
+    assert novice.is_na is True
+    assert novice.tier == 5
+    assert novice.coefficient == TIER_COEFFICIENTS[4] == 1.05
+
+    # Присутствие новичка не изменило тиры/коэффициенты оценённых сотрудников
+    # его же группы (сравниваем с уже проверенными значениями выше).
+    assert by_fio["Комаров К."].tier == 1
+    assert by_fio["Комаров К."].coefficient == TIER_COEFFICIENTS[0]
+    for supervisor_fios in (
+        ("Комаров К.", "Петров П.", "Сидоров С.", "Кузнецова К."),
+        ("Волков В.", "Смирнов С.", "Орлова О."),
+    ):
+        evaluated = sorted((by_fio[fio] for fio in supervisor_fios), key=lambda r: r.final_place)
+        assert [r.tier for r in evaluated] == sorted(r.tier for r in evaluated)
 
 
 def test_compute_weekly_rating_passes_through_custom_tier_coefficients():
@@ -591,4 +628,8 @@ def test_build_kpi_rating_row_maps_computed_fields_for_supabase():
     novikov_row = build_kpi_rating_row("upload-123", novikov)
     assert novikov_row["is_na"] is True
     assert novikov_row["final_place"] is None
-    assert novikov_row["tier"] is None
+    # Новичок ("Новичок 2 неделя") теперь получает "теоретический" тир/
+    # коэффициент ЛГ (см. test_novice_theoretical_coefficient_end_to_end_*
+    # выше) — не None, хотя final_place остаётся null.
+    assert novikov_row["tier"] == 5
+    assert novikov_row["coefficient"] == TIER_COEFFICIENTS[4] == 1.05

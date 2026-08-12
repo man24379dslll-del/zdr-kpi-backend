@@ -1329,7 +1329,11 @@ function computeMainRating(groups, prevCoeffMap, tierCoefficients){
     const scored = scoreSlice(g.employees, e => channelFields(e, channel), isNaMain, "c1_sum", true, active);
     out.push(...scored.map(e => ({...e, supervisor: g.supervisor, channel, isRegionUK: !!g.isRegionUK, isPeaks: !!g.isPeaks})));
   }
-  if(periodType === "week"){ assignTierCoefficients(out, tierCoefficients); assignSalary(out, prevCoeffMap); }
+  if(periodType === "week"){
+    assignTierCoefficients(out, tierCoefficients);
+    assignNoviceCoefficients(out, tierCoefficients, "c1_sum");
+    assignSalary(out, prevCoeffMap);
+  }
   return out;
 }
 
@@ -1363,6 +1367,47 @@ function assignTierCoefficients(rows, coefficients){
         idx++;
       }
     });
+  }
+}
+
+// Новички (NOVICE_STATUSES, всегда is_na=true, final_place=null) не входят
+// в официальное место группы, но МОГУТ получить хороший коэффициент ЛГ для
+// ЗП следующей недели, если их показатели достаточно сильные. Точный
+// перенос app/services/ladder_groups.py::assign_novice_coefficients —
+// см. докстринг там для полного объяснения алгоритма. Вызывать ПОСЛЕ
+// assignTierCoefficients (тиры/коэффициенты оценённых уже зафиксированы).
+const NOVICE_MIN_COEFFICIENT = 1.05;
+function assignNoviceCoefficients(rows, coefficients, tieField){
+  const coeffs = (Array.isArray(coefficients) && coefficients.length === 10) ? coefficients : TIER_COEFFICIENTS;
+  const bySupervisor = {};
+  for(const r of rows){
+    (bySupervisor[r.supervisor] ||= []).push(r);
+  }
+  for(const supervisor in bySupervisor){
+    const group = bySupervisor[supervisor];
+    const evaluated = group.filter(r => !r.is_na);
+    const novices = group.filter(r => NOVICE_STATUSES.includes(r.status));
+    if(!novices.length) continue;
+    const sizes = tierSizes(evaluated.length + 1);
+    for(const novice of novices){
+      let place = 1;
+      for(const other of evaluated){
+        if(other.total_score < novice.total_score) place++;
+        else if(
+          other.total_score === novice.total_score
+          && tieField && (other[tieField] || 0) > (novice[tieField] || 0)
+        ) place++;
+      }
+      const idx = place - 1; // 0-based позиция среди evaluated+novice
+      let cumulative = 0, tierIdx = sizes.length - 1;
+      for(let i = 0; i < sizes.length; i++){
+        if(idx < cumulative + sizes[i]){ tierIdx = i; break; }
+        cumulative += sizes[i];
+      }
+      const coeff = coeffs[tierIdx];
+      novice.tier = tierIdx + 1;
+      novice.coefficient = coeff >= NOVICE_MIN_COEFFICIENT ? coeff : 1.0;
+    }
   }
 }
 
@@ -1414,7 +1459,13 @@ function assignSalary(rows, prevCoeffMap){
     const bonus075 = r.bonus075 ?? 0;
     const bonus2 = r.bonus2 ?? 0;
     const prev = prevCoeffMap ? prevCoeffMap[r.fio] : null;
-    const coeff = (prev && prev.coefficient != null) ? prev.coefficient : 1.0;
+    let coeff = (prev && prev.coefficient != null) ? prev.coefficient : 1.0;
+    // Н/О ЭТОЙ недели (любая причина — новичок, отпуск, больничный, тренер,
+    // нулевые продажи) никогда не наказывается заниженным коэффициентом,
+    // заработанным на ПРОШЛОЙ неделе — минимум 1.0. Новичков это фактически
+    // не трогает: их coefficient уже >= 1.0 (см. assignNoviceCoefficients),
+    // floor тут общий, а не специфичный для них.
+    if(r.is_na && coeff < 1.0) coeff = 1.0;
     // Коэффициент умножает ТОЛЬКО сумму бонусов, НЕ часовую ставку —
     // weekBase идёт отдельным слагаемым без умножения на coeff.
     r.salary = weekBase + (bonus075 + bonus2) * coeff;
@@ -1672,6 +1723,23 @@ $("calcBtn").addEventListener("click", async () => {
     const mainRated = computeMainRating(parsedGroups, prevCoeffMap, tierCoefficients);
     const noviceRated = computeGlobalNovices(parsedGroups);
     const supervisorRated = computeSupervisorRating(parsedGroups);
+
+    // "Теоретический" коэффициент ЛГ новичков считается внутри
+    // computeMainRating (там total_score — правильный, посчитанный ВНУТРИ
+    // группы супервайзера, как требует бизнес-логика), а не в
+    // computeGlobalNovices (тот — отдельный общий пул по всей компании,
+    // только для отображения общего места новичков). Но именно строки
+    // noviceRated идут в БД с is_novice=true (см. uploadBtn ниже) — поэтому
+    // переносим уже посчитанный коэффициент туда, сопоставляя по
+    // supervisor+fio.
+    const noviceCoeffByKey = {};
+    for(const r of mainRated){
+      if(r.is_na && r.coefficient != null) noviceCoeffByKey[r.supervisor + "␟" + r.fio] = { tier: r.tier, coefficient: r.coefficient };
+    }
+    for(const r of noviceRated){
+      const found = noviceCoeffByKey[r.supervisor + "␟" + r.fio];
+      if(found){ r.tier = found.tier; r.coefficient = found.coefficient; }
+    }
 
     assignDeltas(mainRated, prevMainMap);
     assignDeltas(noviceRated, prevNoviceMap);
@@ -1943,7 +2011,7 @@ function renderNovices(){
     container.innerHTML = `<div style="color:var(--muted);padding:10px 0;">Новичков в файле нет.</div>`;
     return;
   }
-  container.appendChild(buildDetailTable(currentNoviceRows, true, false, null, true, true));
+  container.appendChild(buildDetailTable(currentNoviceRows, true, periodType === "week", null, true, true));
 }
 
 function renderSupervisors(){

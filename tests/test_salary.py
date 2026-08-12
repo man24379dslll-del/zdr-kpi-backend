@@ -2,8 +2,10 @@ from app.services.rating_engine import EmployeeScore
 from app.services.salary import DEFAULT_HOURS_NORM, DEFAULT_MONTHLY_BASE_RATE, assign_salary
 
 
-def _score(fio, work_hours, bonus075=0, bonus2=0):
-    return EmployeeScore(fio=fio, raw={"work_hours": work_hours, "bonus075": bonus075, "bonus2": bonus2})
+def _score(fio, work_hours, bonus075=0, bonus2=0, is_na=False):
+    return EmployeeScore(
+        fio=fio, raw={"work_hours": work_hours, "bonus075": bonus075, "bonus2": bonus2}, is_na=is_na
+    )
 
 
 def test_salary_uses_previous_week_coefficient():
@@ -77,3 +79,41 @@ def test_salary_defaults_match_documented_values():
     results = [_score("А", work_hours=DEFAULT_HOURS_NORM)]
     assign_salary(results, {})
     assert results[0].salary == DEFAULT_MONTHLY_BASE_RATE
+
+
+# ---------- Н/О этой недели никогда не наказывается заниженным коэффициентом ----------
+# По прямому запросу заказчика: если сотрудник Н/О ЭТОЙ недели (любая
+# причина — отпуск, больничный, тренер, нулевые продажи, новичок), а на
+# ПРОШЛОЙ неделе у него был коэффициент < 1.0 (низкий тир ЛГ), для ЗП этой
+# недели он floor'ится до 1.0, а не применяется как есть.
+
+def test_na_employee_low_previous_coefficient_is_floored_to_one():
+    results = [_score("Отпускник О.", work_hours=40, bonus075=200, bonus2=300, is_na=True)]
+    assign_salary(results, {"Отпускник О.": 0.7}, hours_norm=160, monthly_base_rate=40000)
+    week_base = (40000 / 160) * 40
+    assert results[0].salary == week_base + (200 + 300) * 1.0
+    assert results[0].salary != week_base + (200 + 300) * 0.7
+
+
+def test_non_na_employee_low_previous_coefficient_is_used_as_is():
+    # Тот же низкий коэффициент 0.7, но сотрудник НЕ Н/О этой недели —
+    # floor не применяется, используется реальный коэффициент.
+    results = [_score("Обычный О.", work_hours=40, bonus075=200, bonus2=300, is_na=False)]
+    assign_salary(results, {"Обычный О.": 0.7}, hours_norm=160, monthly_base_rate=40000)
+    week_base = (40000 / 160) * 40
+    assert results[0].salary == week_base + (200 + 300) * 0.7
+
+
+def test_na_employee_high_previous_coefficient_is_not_lowered():
+    # Floor работает только СНИЗУ — хороший коэффициент (>=1.0) не трогаем.
+    results = [_score("Новичков Н.", work_hours=40, bonus075=200, bonus2=300, is_na=True)]
+    assign_salary(results, {"Новичков Н.": 1.4}, hours_norm=160, monthly_base_rate=40000)
+    week_base = (40000 / 160) * 40
+    assert results[0].salary == week_base + (200 + 300) * 1.4
+
+
+def test_na_employee_without_previous_period_data_still_defaults_to_one():
+    results = [_score("Без истории Б.", work_hours=40, bonus075=200, bonus2=300, is_na=True)]
+    assign_salary(results, {}, hours_norm=160, monthly_base_rate=40000)
+    week_base = (40000 / 160) * 40
+    assert results[0].salary == week_base + (200 + 300) * 1.0

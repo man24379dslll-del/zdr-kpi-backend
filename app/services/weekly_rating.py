@@ -12,7 +12,11 @@
                          картам+конверсии ЛК); считается ПОСЛЕ тира
                          канала, использует его финальное место в
                          среднем для тиров Б/В — см. LK_TIER_PLACE_FIELDS
-  - ladder_groups.py  — ЛГ, следующая ступень поверх итогового места
+  - ladder_groups.py  — ЛГ, следующая ступень поверх итогового места;
+                         новичкам (Н/О) отдельно считается "теоретический"
+                         коэффициент ЛГ (assign_novice_coefficients), не
+                         влияющий на их final_place и не меняющий тиры
+                         оценённых сотрудников
 
 Живёт отдельным модулем (не внутри rating_engine.py), чтобы не создавать
 циклический импорт: tier_lk.py уже импортирует rank_standard из
@@ -38,7 +42,7 @@ tests/test_weekly_rating.py::test_category_places_are_scoped_to_supervisor_group
 from __future__ import annotations
 
 from app.services.group_naming import REGION_UK_SCORE_KEYS
-from app.services.ladder_groups import assign_tier_coefficients
+from app.services.ladder_groups import assign_novice_coefficients, assign_tier_coefficients
 from app.services.rating_engine import (
     EmployeeScore,
     RatingCategory,
@@ -158,10 +162,17 @@ def compute_weekly_rating(
             "supervisor": r.raw.get(supervisor_field),
             "final_place": r.final_place,
             "is_na": r.is_na,
+            "is_novice": bool(r.raw.get("is_novice")),
+            "total_score": r.total_score,
+            "tie_break_value": (r.raw.get(tie_break_field) or 0) if tie_break_field else 0,
         }
         for r in results
     ]
     assign_tier_coefficients(ladder_rows, tier_coefficients)
+    # ПОСЛЕ обычных тиров: новичкам (is_novice, уже Н/О — final_place=None
+    # выше) отдельно проставляем "теоретический" коэффициент ЛГ, не трогая
+    # тиры/коэффициенты оценённых сотрудников (см. docstring функции).
+    assign_novice_coefficients(ladder_rows, tier_coefficients)
     for r, ladder_row in zip(results, ladder_rows):
         if "tier" in ladder_row:
             r.tier = ladder_row["tier"]
