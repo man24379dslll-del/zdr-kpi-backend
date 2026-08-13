@@ -425,10 +425,25 @@ def test_tier_lk_ranks_tier_a_by_lk_pc_desc():
         assert by_fio[fio].places["lk"] > 1
 
 
-def test_tier_c_worse_than_tier_b_within_same_supervisor():
+def test_tier_c_worse_than_every_tier_b_person_within_same_supervisor():
+    """СТАЛО: место ВНУТРИ тира В — ранг по количеству карточек ЛК
+    (больше впустую потраченных карт = хуже), сдвиг — максимальное
+    (худшее) фактическое место среди людей тира Б (не просто |Б|) — это
+    гарантирует "любой В хуже любого Б" даже когда у кого-то в тире Б
+    очень плохое среднее по остальным категориям. См. tier_lk.py и
+    tests/test_tier_lk.py::test_tier_c_worse_than_every_tier_b_person_even_if_one_of_them_has_bad_average
+    для изолированной проверки самой гарантии.
+
+    Группа Иванова — реальный кейс, на котором это стало важно: Новиков
+    (тир Б, новичок, слабые места по остальным категориям — среднее 5.0)
+    делает сдвиг тира В существенно больше, чем формула "просто |Б|=2"
+    давала бы — Кузнецова (тир В, единственная в тире -> ранг 1) всё
+    равно должна остаться хуже ОБОИХ представителей тира Б.
+    """
     by_fio = _compute()
-    assert by_fio["Кузнецова К."].places["lk"] > by_fio["Сидоров С."].places["lk"]
     assert by_fio["Орлова О."].places["lk"] > by_fio["Смирнов С."].places["lk"]
+    assert by_fio["Кузнецова К."].places["lk"] > by_fio["Сидоров С."].places["lk"]
+    assert by_fio["Кузнецова К."].places["lk"] > by_fio["Новиков Н."].places["lk"]
 
 
 def test_best_overall_performer_gets_final_place_one():

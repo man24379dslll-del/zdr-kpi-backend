@@ -1199,11 +1199,20 @@ function computeTieredLkPlaces(items){
   // Тир Б: среднее место по остальным категориям (1 обращение, канал,
   // время, ошибки) — БЕЗ сдвига на размер тира A (по прямому запросу
   // заказчика: тир A большого размера не должен "перетягивать" места у
-  // тира Б). Тир В: то же среднее, но со сдвигом на размер тира Б, чтобы
-  // В оставался хуже Б. ВАЖНО: тир A больше НЕ гарантированно лучше
-  // тира Б/В — это осознанное решение, не баг.
+  // тира Б). ВАЖНО: тир A больше НЕ гарантированно лучше тира Б — это
+  // осознанное решение, не баг.
   idxB.forEach(i => { places[i] = avgOthers(i); });
-  idxC.forEach(i => { places[i] = idxB.length + avgOthers(i); });
+  // Тир В: ранг по количеству карточек ЛК — чем БОЛЬШЕ впустую
+  // потрачено карт (при конверсии 0%), тем ХУЖЕ место (та же логика, что
+  // и худший тир канала ниже). Сдвиг — НЕ размер тира Б, а МАКСИМАЛЬНОЕ
+  // (худшее) фактическое место среди людей тира Б: гарантирует, что
+  // ЛЮБОЙ человек тира В строго хуже ЛЮБОГО человека тира Б, даже если
+  // у кого-то в тире Б очень плохое среднее по остальным категориям —
+  // сдвиг на голый РАЗМЕР тира Б такой гарантии не давал. Пусто в тире
+  // Б -> сдвиг 0.
+  const cardsC = idxC.map(i => items[i].lk_cards);
+  const baseC = idxB.length ? Math.max(...idxB.map(i => places[i])) : 0;
+  idxC.forEach(i => { places[i] = baseC + rankAsc(cardsC, items[i].lk_cards); });
 
   return places;
 }
@@ -1769,6 +1778,12 @@ function fmtPct(v){
 function fmtCards(v){
   return (v === null || v === undefined) ? "—" : fmt(v);
 }
+// Округление ТОЛЬКО для отображения дробных "мест" (тир Б/В категории ЛК —
+// среднее/сдвиг могут быть дробными, см. tier_lk.py) — сам расчёт (total_score,
+// итоговое место, ЛГ, ЗП) использует точное значение, эта функция его не трогает.
+function fmtPlace(v){
+  return (v === null || v === undefined) ? "" : Math.round(v);
+}
 function fmtTime(minutes){
   if(minutes === null || minutes === undefined) return "";
   const totalSeconds = Math.round(minutes * 60);
@@ -1906,7 +1921,7 @@ function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvSt
       <td class="col-status block-end">${r.status}</td>
       ${showGroupCol ? `<td class="col-group block-end">${displayGroupName(r.supervisor)}</td>` : ``}
       <td>${fmtCards(r.c1_cards)}</td><td>${fmt(r.c1_sum)}</td><td>${fmt(r.c1_check)}</td><td>${fmtPct(r.c1_conv)}</td><td>${fmt(r.c1_pc)}</td><td class="block-end">${rankBadge(r.c1_place, c1Map(r.c1_place))}</td>
-      <td>${fmtCards(r.lk_cards)}</td><td>${fmt(r.lk_sum)}</td><td>${fmt(r.lk_check)}</td><td>${fmtPct(r.lk_conv)}</td><td>${fmt(r.lk_pc)}</td><td class="block-end">${rankBadge(r.lk_place, lkMap(r.lk_place))}</td>
+      <td>${fmtCards(r.lk_cards)}</td><td>${fmt(r.lk_sum)}</td><td>${fmt(r.lk_check)}</td><td>${fmtPct(r.lk_conv)}</td><td>${fmt(r.lk_pc)}</td><td class="block-end">${rankBadge(fmtPlace(r.lk_place), lkMap(r.lk_place))}</td>
       <td>${fmtCards(r.ch_cards)}</td><td>${fmt(r.ch_sum)}</td><td>${fmt(r.ch_check)}</td><td>${fmtPct(r.ch_conv)}</td><td>${fmt(r.ch_pc)}</td><td class="block-end">${rankBadge(r.ch_place, chMap(r.ch_place))}</td>
       <td>${fmtTime(r.time)}</td><td class="block-end">${rankBadge(r.time_place, timeMap(r.time_place))}</td>
       <td>${fmtCards(r.errors_count)}</td><td>${fmtPct(r.errors_pct)}</td><td class="block-end">${rankBadge(r.errors_place, errMap(r.errors_place))}</td>
@@ -2060,7 +2075,7 @@ function renderSupervisors(){
       <td>${r.channel === "inet" ? "Интернет" : "Радио+ТВ"}</td>
       <td class="block-end">${r.n_evaluated}/${r.n_total}</td>
       <td>${fmtCards(r.c1_cards)}</td><td>${fmt(r.c1_sum)}</td><td>${fmt(r.c1_check)}</td><td>${fmtPct(r.c1_conv)}</td><td>${fmt(r.c1_pc)}</td><td class="block-end">${rankBadge(r.c1_place, c1Map(r.c1_place))}</td>
-      <td>${fmtCards(r.lk_cards)}</td><td>${fmt(r.lk_sum)}</td><td>${fmt(r.lk_check)}</td><td>${fmtPct(r.lk_conv)}</td><td>${fmt(r.lk_pc)}</td><td class="block-end">${rankBadge(r.lk_place, lkMap(r.lk_place))}</td>
+      <td>${fmtCards(r.lk_cards)}</td><td>${fmt(r.lk_sum)}</td><td>${fmt(r.lk_check)}</td><td>${fmtPct(r.lk_conv)}</td><td>${fmt(r.lk_pc)}</td><td class="block-end">${rankBadge(fmtPlace(r.lk_place), lkMap(r.lk_place))}</td>
       <td>${fmtCards(r.ch_cards)}</td><td>${fmt(r.ch_sum)}</td><td>${fmt(r.ch_check)}</td><td>${fmtPct(r.ch_conv)}</td><td>${fmt(r.ch_pc)}</td><td class="block-end">${rankBadge(r.ch_place, chMap(r.ch_place))}</td>
       <td>${fmtTime(r.time)}</td><td class="block-end">${rankBadge(r.time_place, timeMap(r.time_place))}</td>
       <td>${fmtPct(r.errors_pct)}</td><td class="block-end">${rankBadge(r.errors_place, errMap(r.errors_place))}</td>
