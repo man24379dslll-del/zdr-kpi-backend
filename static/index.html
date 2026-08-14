@@ -3352,7 +3352,7 @@ function styleTitleRow(ws, rowIdx, colCount){
 // Двухстрочная шапка: сверху названия блоков (объединённые ячейки), снизу подписи колонок —
 // как на экране (строки "cat" и "sub").
 function categoryHeaderRows(leadLabels, withTier){
-  const totalCols = withTier ? 34 : 27;
+  const totalCols = withTier ? 35 : 27;
   const rowA = new Array(totalCols).fill("");
   const rowB = new Array(totalCols).fill("");
   rowA[0] = leadLabels[0]; rowA[1] = leadLabels[1]; rowA[2] = leadLabels[2];
@@ -3364,9 +3364,9 @@ function categoryHeaderRows(leadLabels, withTier){
   rowA[25] = "Сумма баллов";
   rowA[26] = "Место";
   if(withTier){
-    rowA[27] = "ЛГ"; rowA[28] = "Коэффициент";
-    rowA[29] = "Рабочее время, ч"; rowA[30] = "Кол-во смен";
-    rowA[31] = bonusColumnLabels.bonus075; rowA[32] = bonusColumnLabels.bonus2; rowA[33] = "ЗП";
+    rowA[27] = "ЛГ"; rowA[28] = "Коэффициент"; rowA[29] = "Коэфф. пред. недели (в ЗП)";
+    rowA[30] = "Рабочее время, ч"; rowA[31] = "Кол-во смен";
+    rowA[32] = bonusColumnLabels.bonus075; rowA[33] = bonusColumnLabels.bonus2; rowA[34] = "ЗП";
   }
 
   const subLabels = ["карточек","сумма","ср.чек","конв.,%","с контакта","место"];
@@ -3377,7 +3377,7 @@ function categoryHeaderRows(leadLabels, withTier){
   return { rowA, rowB, totalCols };
 }
 function categoryHeaderMerges(baseRow, totalCols){
-  const vertCols = [0, 1, 2, 25, 26, ...(totalCols > 27 ? [27, 28, 29, 30, 31, 32, 33] : [])];
+  const vertCols = [0, 1, 2, 25, 26, ...(totalCols > 27 ? [27, 28, 29, 30, 31, 32, 33, 34] : [])];
   const merges = vertCols.map(c => ({ s: { r: baseRow, c }, e: { r: baseRow + 1, c } }));
   merges.push({ s: { r: baseRow, c: 3 },  e: { r: baseRow, c: 8 } });
   merges.push({ s: { r: baseRow, c: 9 },  e: { r: baseRow, c: 14 } });
@@ -3424,8 +3424,14 @@ function buildExportSheet(rows, withConvStatus){
 
 function buildGroupedMainSheet(){
   const withTier = periodType === "week";
+  // Тот же текст/логика, что и на экране (buildDetailTable): пусто, если
+  // salaryCoeffUsed нет, иначе значение + пометка "(по умолч.)", если
+  // коэффициент не найден в данных прошлой недели (r.salaryCoeffFromPrev).
+  const salaryCoeffUsedCell = r => r.salaryCoeffUsed == null
+    ? ""
+    : `${r.salaryCoeffUsed}${r.salaryCoeffFromPrev ? "" : " (по умолч.)"}`;
   const rowFn = r => withTier
-    ? [...rowToArray(r), r.tier ?? "", r.coefficient ?? "", r.work_hours ?? "", r.shift_count ?? "", r.bonus075 ?? "", r.bonus2 ?? "", r.salary ?? ""]
+    ? [...rowToArray(r), r.tier ?? "", r.coefficient ?? "", salaryCoeffUsedCell(r), r.work_hours ?? "", r.shift_count ?? "", r.bonus075 ?? "", r.bonus2 ?? "", r.salary ?? ""]
     : rowToArray(r);
   const { rowA, rowB, totalCols } = categoryHeaderRows(["ФИО","Статус","Группа"], withTier);
 
