@@ -46,13 +46,35 @@ assign_novice_coefficients) — floor тут общий, а не специфи�
 Применяется ТОЛЬКО к недельным периодам (period_label вида
 "месяц-неделя"), не к дневным — это тоже решает вызывающая сторона
 (routers/ratings.py), сама функция такого решения не принимает.
+
+ИСКЛЮЧЕНИЕ — группа "Выходы на Пики" (см. group_naming.PEAKS_GROUP_RE,
+supervisor заканчивается на " [Пики]"): у неё часовой ставки НЕТ ВООБЩЕ
+(не 0, а отсутствует как компонент формулы) — salary = (бонус075 +
+бонус2) × coefficient, и всё. work_hours для этой группы игнорируется
+целиком, даже если колонка заполнена. Для ВСЕХ остальных групп (включая
+"Регион УК") формула обычная, с часовой ставкой.
 """
 from __future__ import annotations
 
+from app.services.group_naming import PEAKS_GROUP_RE
 from app.services.rating_engine import EmployeeScore
 
 DEFAULT_MONTHLY_BASE_RATE = 40000
 DEFAULT_HOURS_NORM = 160
+
+
+def _resolve_coefficient(r: EmployeeScore, prev_coefficient_by_fio: dict[str, float]) -> float:
+    coefficient = prev_coefficient_by_fio.get(r.fio)
+    if coefficient is None:
+        return 1.0
+    if r.is_na and coefficient < 1.0:
+        # Н/О ЭТОЙ недели (любая причина — новичок, отпуск, больничный,
+        # тренер, нулевые продажи) никогда не наказывается заниженным
+        # коэффициентом, заработанным на ПРОШЛОЙ неделе — минимум 1.0.
+        # Новичков это фактически не трогает: их coefficient уже >= 1.0
+        # (см. ladder_groups.assign_novice_coefficients), правило общее.
+        return 1.0
+    return coefficient
 
 
 def assign_salary(
@@ -68,21 +90,20 @@ def assign_salary(
     """
     hourly_rate = monthly_base_rate / hours_norm
     for r in results:
+        bonus075 = r.raw.get("bonus075") or 0
+        bonus2 = r.raw.get("bonus2") or 0
+        coefficient = _resolve_coefficient(r, prev_coefficient_by_fio)
+
+        supervisor = r.raw.get("supervisor")
+        if supervisor and PEAKS_GROUP_RE.search(supervisor):
+            # "Выходы на Пики": часовой ставки нет вообще, work_hours не
+            # участвует и не проверяется — только бонусы × коэффициент.
+            r.salary = (bonus075 + bonus2) * coefficient
+            continue
+
         work_hours = r.raw.get("work_hours")
         if work_hours is None:
             r.salary = None
             continue
-        bonus075 = r.raw.get("bonus075") or 0
-        bonus2 = r.raw.get("bonus2") or 0
         week_base = hourly_rate * work_hours
-        coefficient = prev_coefficient_by_fio.get(r.fio)
-        if coefficient is None:
-            coefficient = 1.0
-        elif r.is_na and coefficient < 1.0:
-            # Н/О ЭТОЙ недели (любая причина — новичок, отпуск, больничный,
-            # тренер, нулевые продажи) никогда не наказывается заниженным
-            # коэффициентом, заработанным на ПРОШЛОЙ неделе — минимум 1.0.
-            # Новичков это фактически не трогает: их coefficient уже >= 1.0
-            # (см. ladder_groups.assign_novice_coefficients), правило общее.
-            coefficient = 1.0
         r.salary = week_base + (bonus075 + bonus2) * coefficient

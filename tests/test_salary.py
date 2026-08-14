@@ -2,9 +2,11 @@ from app.services.rating_engine import EmployeeScore
 from app.services.salary import DEFAULT_HOURS_NORM, DEFAULT_MONTHLY_BASE_RATE, assign_salary
 
 
-def _score(fio, work_hours, bonus075=0, bonus2=0, is_na=False):
+def _score(fio, work_hours, bonus075=0, bonus2=0, is_na=False, supervisor="Супервайзер - Иванов И.И."):
     return EmployeeScore(
-        fio=fio, raw={"work_hours": work_hours, "bonus075": bonus075, "bonus2": bonus2}, is_na=is_na
+        fio=fio,
+        raw={"work_hours": work_hours, "bonus075": bonus075, "bonus2": bonus2, "supervisor": supervisor},
+        is_na=is_na,
     )
 
 
@@ -117,3 +119,62 @@ def test_na_employee_without_previous_period_data_still_defaults_to_one():
     assign_salary(results, {}, hours_norm=160, monthly_base_rate=40000)
     week_base = (40000 / 160) * 40
     assert results[0].salary == week_base + (200 + 300) * 1.0
+
+
+# ---------- "Выходы на Пики": часовой ставки нет вообще ----------
+# По прямому запросу заказчика: для группы "операторы без супервизора
+# [Пики]" ЗП = (бонус075 + бонус2) × коэффициент — часовая ставка не
+# компонент формулы вообще (не 0, а отсутствует), work_hours игнорируется
+# полностью, даже если заполнено. Все остальные группы (включая
+# "Регион УК") считаются как обычно, с часовой ставкой.
+
+PEAKS_SUPERVISOR = "операторы без супервизора [Пики]"
+
+
+def test_peaks_group_salary_ignores_hourly_rate_entirely():
+    results = [
+        _score("Пиковый П.", work_hours=40, bonus075=200, bonus2=300, supervisor=PEAKS_SUPERVISOR),
+    ]
+    assign_salary(results, {"Пиковый П.": 1.4}, hours_norm=160, monthly_base_rate=40000)
+    assert results[0].salary == (200 + 300) * 1.4  # БЕЗ week_base
+
+
+def test_peaks_group_salary_ignores_work_hours_even_when_filled():
+    # work_hours=999 намеренно большое — если бы часовая ставка каким-то
+    # образом участвовала, ЗП была бы огромной. Она игнорируется целиком.
+    with_hours = [_score("А", work_hours=999, bonus075=100, bonus2=50, supervisor=PEAKS_SUPERVISOR)]
+    without_hours = [_score("А", work_hours=None, bonus075=100, bonus2=50, supervisor=PEAKS_SUPERVISOR)]
+    assign_salary(with_hours, {"А": 1.0}, hours_norm=160, monthly_base_rate=40000)
+    assign_salary(without_hours, {"А": 1.0}, hours_norm=160, monthly_base_rate=40000)
+    assert with_hours[0].salary == (100 + 50) * 1.0
+    assert with_hours[0].salary == without_hours[0].salary  # work_hours ни на что не влияет
+
+
+def test_peaks_group_salary_is_not_none_when_work_hours_missing():
+    # Для обычных групп work_hours=None -> salary=None. Для Пиков это
+    # правило не применяется (часы для них вообще не нужны).
+    results = [_score("Б", work_hours=None, bonus075=100, bonus2=50, supervisor=PEAKS_SUPERVISOR)]
+    assign_salary(results, {"Б": 1.4}, hours_norm=160, monthly_base_rate=40000)
+    assert results[0].salary == (100 + 50) * 1.4
+    assert results[0].salary is not None
+
+
+def test_non_peaks_group_salary_still_uses_hourly_rate():
+    # Контроль: "Регион УК" (тот же "операторы без супервизора", но БЕЗ
+    # суффикса " [Пики]") и обычные группы — формула не меняется.
+    region_uk = [_score("В", work_hours=40, bonus075=200, bonus2=300, supervisor="операторы без супервизора")]
+    regular = [_score("Г", work_hours=40, bonus075=200, bonus2=300, supervisor="Супервайзер - Петров П.П.")]
+    assign_salary(region_uk, {"В": 1.4}, hours_norm=160, monthly_base_rate=40000)
+    assign_salary(regular, {"Г": 1.4}, hours_norm=160, monthly_base_rate=40000)
+    week_base = (40000 / 160) * 40
+    assert region_uk[0].salary == week_base + (200 + 300) * 1.4
+    assert regular[0].salary == week_base + (200 + 300) * 1.4
+
+
+def test_peaks_group_respects_na_coefficient_floor():
+    # Пики — не исключение из floor-правила (Н/О этой недели -> коэфф >= 1.0).
+    results = [
+        _score("Отпускник Пиков", work_hours=40, bonus075=200, bonus2=300, is_na=True, supervisor=PEAKS_SUPERVISOR),
+    ]
+    assign_salary(results, {"Отпускник Пиков": 0.7}, hours_norm=160, monthly_base_rate=40000)
+    assert results[0].salary == (200 + 300) * 1.0

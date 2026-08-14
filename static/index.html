@@ -1448,6 +1448,10 @@ async function fetchTierCoefficients(){
 // ячейка) — базу посчитать нельзя (это НЕ "0 часов", а "неизвестно"),
 // поэтому salary = null целиком, а не "0 + бонусы" (которое выглядело бы
 // как настоящая заниженная ЗП и могло остаться незамеченным).
+// ИСКЛЮЧЕНИЕ — группа "Выходы на Пики" (r.isPeaks): часовой ставки НЕТ
+// ВООБЩЕ (не 0, а отсутствует как компонент формулы), work_hours не
+// участвует и не проверяется — ЗП = (бонус075 + бонус2) × коэффициент.
+// Для всех остальных групп (включая "Регион УК") — формула как обычно.
 function currentHoursNorm(){
   return parseFloat($("hoursNorm").value) || 160;
 }
@@ -1457,14 +1461,6 @@ function currentMonthlyBaseRate(){
 function assignSalary(rows, prevCoeffMap){
   const hourlyRate = currentMonthlyBaseRate() / currentHoursNorm();
   for(const r of rows){
-    if(r.work_hours == null){
-      r.salary = null;
-      r.salaryBaseUsed = null;
-      r.salaryCoeffUsed = null;
-      r.salaryCoeffFromPrev = false;
-      continue;
-    }
-    const weekBase = hourlyRate * r.work_hours;
     const bonus075 = r.bonus075 ?? 0;
     const bonus2 = r.bonus2 ?? 0;
     const prev = prevCoeffMap ? prevCoeffMap[r.fio] : null;
@@ -1475,6 +1471,26 @@ function assignSalary(rows, prevCoeffMap){
     // не трогает: их coefficient уже >= 1.0 (см. assignNoviceCoefficients),
     // floor тут общий, а не специфичный для них.
     if(r.is_na && coeff < 1.0) coeff = 1.0;
+
+    if(r.isPeaks){
+      // "Выходы на Пики": часовой ставки нет вообще (не 0, а отсутствует
+      // как компонент формулы) — work_hours не участвует и не проверяется,
+      // только бонусы × коэффициент.
+      r.salary = (bonus075 + bonus2) * coeff;
+      r.salaryBaseUsed = null;
+      r.salaryCoeffUsed = coeff;
+      r.salaryCoeffFromPrev = !!(prev && prev.coefficient != null);
+      continue;
+    }
+
+    if(r.work_hours == null){
+      r.salary = null;
+      r.salaryBaseUsed = null;
+      r.salaryCoeffUsed = null;
+      r.salaryCoeffFromPrev = false;
+      continue;
+    }
+    const weekBase = hourlyRate * r.work_hours;
     // Коэффициент умножает ТОЛЬКО сумму бонусов, НЕ часовую ставку —
     // weekBase идёт отдельным слагаемым без умножения на coeff.
     r.salary = weekBase + (bonus075 + bonus2) * coeff;
