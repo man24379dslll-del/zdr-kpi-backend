@@ -975,7 +975,12 @@ function parseWorkbook(arrayBuffer){
 
   const groups = [];
   let current = null;
-  let currentPeaks = null; // "родная" пара для операторов без супервизора: не-ЗДР идут сюда
+  // "родные" пары для операторов без супервизора: ПП/Увеличители идут
+  // каждый в свою — раньше были одной общей группой "Пики", разделены
+  // на две по прямому запросу заказчика (у каждой свой рейтинг/ЛГ, но
+  // те же особые правила, что были у общей "Пики" — см. isPeaks ниже).
+  let currentPeaksPP = null;
+  let currentPeaksUvelichiteli = null;
   const REGION_UK_RE = /операторы\s+без\s+супервизора/i;
 
   for(let r = 1; r < rows.length; r++){
@@ -988,19 +993,27 @@ function parseWorkbook(arrayBuffer){
       current = { supervisor: rawName, employees: [], isRegionUK: isSpecial };
       groups.push(current);
       if(isSpecial){
-        currentPeaks = { supervisor: rawName + " [Пики]", employees: [], isPeaks: true };
-        groups.push(currentPeaks);
+        currentPeaksPP = { supervisor: rawName + " [Пики-ПП]", employees: [], isPeaks: true };
+        currentPeaksUvelichiteli = { supervisor: rawName + " [Пики-Увеличители]", employees: [], isPeaks: true };
+        groups.push(currentPeaksPP, currentPeaksUvelichiteli);
       } else {
-        currentPeaks = null;
+        currentPeaksPP = null;
+        currentPeaksUvelichiteli = null;
       }
       continue;
     }
     if(!current) continue;
-    // "Регион УК" / "Выходы на Пики" — сборная группа из разных ролей (ПП, ЗДР, Увеличители):
-    // ЗДР идёт в "Регион УК", остальные (ПП, Увеличители и т.д.) — в "Выходы на Пики"
+    // "Регион УК" / "ПП" / "Увеличители" — сборная группа из разных ролей:
+    // ЗДР идёт в "Регион УК", ПП — в свою группу "ПП", Увеличители — в
+    // свою группу "Увеличители" (ни ЗДР, ни ПП, ни Увеличители на
+    // практике не встречалось — такую строку пропускаем).
     let target = current;
     if(current.isRegionUK){
-      target = fio.trim().toUpperCase().startsWith("ЗДР") ? current : currentPeaks;
+      const fioUpper = fio.trim().toUpperCase();
+      if(fioUpper.startsWith("ЗДР")) target = current;
+      else if(fioUpper.startsWith("ПП")) target = currentPeaksPP;
+      else if(fioUpper.startsWith("УВЕЛИЧИТЕЛИ")) target = currentPeaksUvelichiteli;
+      else target = null;
     }
     if(!target) continue;
 
@@ -1448,10 +1461,12 @@ async function fetchTierCoefficients(){
 // ячейка) — базу посчитать нельзя (это НЕ "0 часов", а "неизвестно"),
 // поэтому salary = null целиком, а не "0 + бонусы" (которое выглядело бы
 // как настоящая заниженная ЗП и могло остаться незамеченным).
-// ИСКЛЮЧЕНИЕ — группа "Выходы на Пики" (r.isPeaks): часовой ставки НЕТ
-// ВООБЩЕ (не 0, а отсутствует как компонент формулы), work_hours не
-// участвует и не проверяется — ЗП = (бонус075 + бонус2) × коэффициент.
-// Для всех остальных групп (включая "Регион УК") — формула как обычно.
+// ИСКЛЮЧЕНИЕ — группы "ПП" и "Увеличители" (r.isPeaks, бывшая общая
+// "Выходы на Пики", разделена на две — см. parseWorkbook): часовой
+// ставки НЕТ ВООБЩЕ (не 0, а отсутствует как компонент формулы),
+// work_hours не участвует и не проверяется — ЗП = (бонус075 + бонус2) ×
+// коэффициент. Для всех остальных групп (включая "Регион УК") —
+// формула как обычно.
 function currentHoursNorm(){
   return parseFloat($("hoursNorm").value) || 160;
 }
@@ -1473,9 +1488,9 @@ function assignSalary(rows, prevCoeffMap){
     if(r.is_na && coeff < 1.0) coeff = 1.0;
 
     if(r.isPeaks){
-      // "Выходы на Пики": часовой ставки нет вообще (не 0, а отсутствует
-      // как компонент формулы) — work_hours не участвует и не проверяется,
-      // только бонусы × коэффициент.
+      // "ПП"/"Увеличители" (бывшая общая "Выходы на Пики"): часовой ставки
+      // нет вообще (не 0, а отсутствует как компонент формулы) —
+      // work_hours не участвует и не проверяется, только бонусы × коэффициент.
       r.salary = (bonus075 + bonus2) * coeff;
       r.salaryBaseUsed = null;
       r.salaryCoeffUsed = coeff;
@@ -1830,14 +1845,15 @@ function cleanSupervisorName(name){
   return (name || "").replace(/^Супервайзер[.\-–\s]+/i, "").replace(/^Супервизор\s*/i, "").trim();
 }
 function displayGroupName(supervisor){
-  if(/операторы\s+без\s+супервизора\s*\[Пики\]/i.test(supervisor)) return "Выходы на Пики";
+  if(/операторы\s+без\s+супервизора\s*\[Пики-ПП\]/i.test(supervisor)) return "ПП";
+  if(/операторы\s+без\s+супервизора\s*\[Пики-Увеличители\]/i.test(supervisor)) return "Увеличители";
   if(/операторы\s+без\s+супервизора/i.test(supervisor)) return "Регион УК";
   return cleanSupervisorName(supervisor);
 }
 function isSpecialGroup(supervisor){
   return /операторы\s+без\s+супервизора/i.test(supervisor || "");
 }
-// Обычные группы по алфавиту, "Регион УК" и "Выходы на Пики" — всегда в самом конце
+// Обычные группы по алфавиту, "Регион УК"/"ПП"/"Увеличители" — всегда в самом конце
 function compareGroupNames(a, b){
   const aSpecial = isSpecialGroup(a), bSpecial = isSpecialGroup(b);
   if(aSpecial !== bSpecial) return aSpecial ? 1 : -1;

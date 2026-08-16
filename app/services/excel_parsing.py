@@ -82,12 +82,17 @@ _pick_channel() сначала ищет супервайзера в supervisor_c
 
 Особый случай — группа "операторы без супервизора" (сборная солянка
 разных ролей, ФИО-префиксы ЗДР/ПП/Увеличители вперемешку): делится на
-две ВИРТУАЛЬНЫЕ группы по префиксу ФИО "ЗДР" — см. app/services/group_naming.py.
+ТРИ ВИРТУАЛЬНЫЕ группы по префиксу ФИО — см. app/services/group_naming.py.
 Сотрудники с префиксом "ЗДР" остаются в группе "операторы без
 супервизора" (employee['is_region_uk'] = True — их total_score считает
-только по c1/lk/time, см. weekly_rating.py), остальные уходят в группу
-"операторы без супервизора [Пики]" (is_region_uk=False — полный набор
-категорий, как у обычных групп).
+только по c1/lk/time, см. weekly_rating.py); "ПП" уходят в группу
+"операторы без супервизора [Пики-ПП]", "Увеличители" — в "операторы без
+супервизора [Пики-Увеличители]" (обе is_region_uk=False — полный набор
+категорий, как у обычных групп, каждая — свой отдельный рейтинг/ЛГ).
+Раньше "ПП" и "Увеличители" были одной общей группой "Пики" — разделены
+по прямому запросу заказчика, признак PEAKS_GROUP_RE в group_naming.py
+(используется, например, для исключения часовой ставки в ЗП) matches
+ОБЕ подгруппы одинаково.
 """
 from __future__ import annotations
 
@@ -97,7 +102,11 @@ import re
 import pandas as pd
 from fastapi import HTTPException, status
 
-from app.services.group_naming import PEAKS_SUFFIX, REGION_UK_GROUP_RE
+from app.services.group_naming import (
+    PEAKS_PP_SUFFIX,
+    PEAKS_UVELICHITELI_SUFFIX,
+    REGION_UK_GROUP_RE,
+)
 
 FIO_COLUMN = "ФИО"
 STATUS_COLUMN = "Статус (уровень)"
@@ -307,7 +316,8 @@ def parse_weekly_rating_excel(raw: bytes, supervisor_channels: dict[str, str] | 
 
     employees = []
     current_supervisor: str | None = None
-    current_peaks_supervisor: str | None = None
+    current_peaks_pp_supervisor: str | None = None
+    current_peaks_uvelichiteli_supervisor: str | None = None
     current_group_splits_region_uk = False
 
     for _, row in df.iterrows():
@@ -317,14 +327,28 @@ def parse_weekly_rating_excel(raw: bytes, supervisor_channels: dict[str, str] | 
         if fio.lower().startswith(GROUP_ROW_PREFIX):
             current_supervisor = fio[len(GROUP_ROW_PREFIX):].strip()
             current_group_splits_region_uk = bool(REGION_UK_GROUP_RE.search(current_supervisor))
-            current_peaks_supervisor = (
-                current_supervisor + PEAKS_SUFFIX if current_group_splits_region_uk else None
-            )
+            if current_group_splits_region_uk:
+                current_peaks_pp_supervisor = current_supervisor + PEAKS_PP_SUFFIX
+                current_peaks_uvelichiteli_supervisor = current_supervisor + PEAKS_UVELICHITELI_SUFFIX
+            else:
+                current_peaks_pp_supervisor = None
+                current_peaks_uvelichiteli_supervisor = None
             continue
 
         if current_group_splits_region_uk:
-            is_region_uk = fio.upper().startswith("ЗДР")
-            supervisor = current_supervisor if is_region_uk else current_peaks_supervisor
+            fio_upper = fio.upper()
+            is_region_uk = fio_upper.startswith("ЗДР")
+            if is_region_uk:
+                supervisor = current_supervisor
+            elif fio_upper.startswith("ПП"):
+                supervisor = current_peaks_pp_supervisor
+            elif fio_upper.startswith("УВЕЛИЧИТЕЛИ"):
+                supervisor = current_peaks_uvelichiteli_supervisor
+            else:
+                # Ни ЗДР, ни ПП, ни Увеличители — на практике не встречалось
+                # (докстринг модуля), пропускаем строку, а не падаем/теряем
+                # её в случайной группе.
+                continue
         else:
             is_region_uk = False
             supervisor = current_supervisor

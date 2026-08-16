@@ -1,8 +1,11 @@
 """
-"Регион УК" / "Выходы на Пики" — разбиение группы "операторы без
-супервизора" по префиксу ФИО ("ЗДР" -> Регион УК, остальное -> Пики) и
-урезанный набор категорий (c1/lk/time) для "Регион УК" в total_score.
-Тест собирает небольшой реалистичный xlsx и проверяет и парсинг, и расчёт.
+"Регион УК" / "ПП" / "Увеличители" — разбиение группы "операторы без
+супервизора" по префиксу ФИО ("ЗДР" -> Регион УК, "ПП" -> ПП,
+"Увеличители" -> Увеличители, каждая своя отдельная группа со своим
+рейтингом/ЛГ — "ПП" и "Увеличители" раньше были одной общей группой
+"Пики", разделены по прямому запросу заказчика) и урезанный набор
+категорий (c1/lk/time) для "Регион УК" в total_score. Тест собирает
+небольшой реалистичный xlsx и проверяет и парсинг, и расчёт.
 """
 import io
 
@@ -85,8 +88,9 @@ ROWS = [
     _group_row("операторы без супервизора"),
     _row("ЗДР Федотова М. Д.", 100, 50, 200, 20, 1),   # Регион УК
     _row("ЗДР Шпинь В. В.", 90, 40, 180, 25, 2),        # Регион УК
-    _row("ПП Козлов А. А.", 80, 30, 160, 30, 3),        # Пики
-    _row("Увеличители Орлов О. О.", 70, 20, 140, 35, 4),  # Пики
+    _row("ПП Козлов А. А.", 80, 30, 160, 30, 3),        # ПП (бывшая "Пики")
+    _row("ПП Быстров Н. Н.", 60, 15, 120, 45, 8),       # ПП (бывшая "Пики"), хуже Козлова
+    _row("Увеличители Орлов О. О.", 70, 20, 140, 35, 4),  # Увеличители (бывшая "Пики")
 ]
 
 
@@ -97,7 +101,7 @@ def _build_excel_bytes(rows: list[dict]) -> bytes:
     return buf.getvalue()
 
 
-def test_region_uk_prefix_splits_into_two_virtual_groups():
+def test_region_uk_prefix_splits_into_three_virtual_groups():
     raw = _build_excel_bytes(ROWS)
     employees = parse_weekly_rating_excel(raw)
     by_fio = {e["fio"]: e for e in employees}
@@ -107,10 +111,16 @@ def test_region_uk_prefix_splits_into_two_virtual_groups():
     assert by_fio["ЗДР Шпинь В. В."]["supervisor"] == "операторы без супервизора"
     assert by_fio["ЗДР Шпинь В. В."]["is_region_uk"] is True
 
-    assert by_fio["ПП Козлов А. А."]["supervisor"] == "операторы без супервизора [Пики]"
+    assert by_fio["ПП Козлов А. А."]["supervisor"] == "операторы без супервизора [Пики-ПП]"
     assert by_fio["ПП Козлов А. А."]["is_region_uk"] is False
-    assert by_fio["Увеличители Орлов О. О."]["supervisor"] == "операторы без супервизора [Пики]"
+    assert by_fio["ПП Быстров Н. Н."]["supervisor"] == "операторы без супервизора [Пики-ПП]"
+    assert by_fio["ПП Быстров Н. Н."]["is_region_uk"] is False
+
+    assert by_fio["Увеличители Орлов О. О."]["supervisor"] == "операторы без супервизора [Пики-Увеличители]"
     assert by_fio["Увеличители Орлов О. О."]["is_region_uk"] is False
+
+    # "ПП" и "Увеличители" — теперь РАЗНЫЕ группы (раньше были одной "Пики")
+    assert by_fio["ПП Козлов А. А."]["supervisor"] != by_fio["Увеличители Орлов О. О."]["supervisor"]
 
 
 def test_normal_groups_are_unaffected_by_region_uk_logic():
@@ -134,17 +144,27 @@ def test_region_uk_total_score_excludes_channel_and_errors():
     assert set(fedotova.scores.keys()) == {"c1", "lk", "time"}
     assert fedotova.total_score == fedotova.scores["c1"] + fedotova.scores["lk"] + fedotova.scores["time"]
 
-    kozlov = by_fio["ПП Козлов А. А."]  # Пики -> полный набор категорий
+    kozlov = by_fio["ПП Козлов А. А."]  # "ПП" -> полный набор категорий, как у обычных групп
     assert set(kozlov.scores.keys()) == {"c1", "lk", "channel", "time", "errors"}
 
 
-def test_region_uk_and_peaks_get_separate_ladder_groups():
+def test_region_uk_pp_and_uvelichiteli_get_separate_ladder_groups():
     raw = _build_excel_bytes(ROWS)
     employees = parse_weekly_rating_excel(raw)
     results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
     by_fio = {r.fio: r for r in results}
 
-    # Обе виртуальные группы участвуют в ЛГ как обычные супервайзерские группы
-    for fio in ("ЗДР Федотова М. Д.", "ЗДР Шпинь В. В.", "ПП Козлов А. А.", "Увеличители Орлов О. О."):
+    # Все три виртуальные группы участвуют в ЛГ как обычные супервайзерские группы
+    for fio in ("ЗДР Федотова М. Д.", "ЗДР Шпинь В. В.", "ПП Козлов А. А.", "ПП Быстров Н. Н.", "Увеличители Орлов О. О."):
         assert by_fio[fio].tier is not None
         assert by_fio[fio].coefficient is not None
+
+    # "ПП" и "Увеличители" считаются НЕЗАВИСИМО друг от друга (разные
+    # группы супервайзера) — место/тир Козлова не зависит от Орлова и
+    # наоборот. У "ПП" два человека (Козлов лучше Быстрова по всем
+    # категориям), у "Увеличители" — один (Орлов), тиры/места независимы.
+    assert by_fio["ПП Козлов А. А."].final_place == 1
+    assert by_fio["ПП Быстров Н. Н."].final_place == 2
+    assert by_fio["Увеличители Орлов О. О."].final_place == 1
+    assert by_fio["ПП Козлов А. А."].tier == 1
+    assert by_fio["Увеличители Орлов О. О."].tier == 1
