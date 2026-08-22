@@ -2769,6 +2769,9 @@ async function buildTwoStagePayroll(){
       // TODO: реквизиты не подключены к backend (payment_requisites) — подключим отдельно
       paymentType: "",
       requisitesText: "",
+      // Разбивка по неделям [{period_label, sum}, ...] — чисто для отображения
+      // (см. services/payroll.py), формулу расчёта не меняет.
+      weeks: r.weeks || [],
     };
   });
 
@@ -2778,6 +2781,19 @@ async function buildTwoStagePayroll(){
     periodLabel: result.period_label_text,
     matchedUploads: result.matched_uploads,
   };
+}
+
+// "7-3" -> "3" (номер недели внутри месяца) — только для отображения разбивки.
+function weekNumberFromPeriodLabel(periodLabel){
+  const m = /^\d+-(\d+)$/.exec(periodLabel || "");
+  return m ? m[1] : periodLabel;
+}
+// "Неделя 1: 5 000 ₽ + Неделя 2: 5 200 ₽" — компактная строка разбивки по
+// неделям для подсказки/подстроки под итоговой суммой (см. renderPayrollTable).
+function formatWeeksBreakdown(weeks){
+  return (weeks || [])
+    .map(w => `Неделя ${weekNumberFromPeriodLabel(w.period_label)}: ${fmt(Math.round(w.sum))} ₽`)
+    .join(" + ");
 }
 
 async function saveStageAdjustment(row, penaltyInput, premiumInput){
@@ -2851,7 +2867,10 @@ function renderPayrollTable(){
         <td><input type="number" step="0.01" class="payroll-penalty" value="${r.penalty || 0}" style="width:90px;"></td>
         <td><input type="number" step="0.01" class="payroll-premium" value="${r.premium || 0}" style="width:90px;"></td>
         ` : ""}
-        <td style="font-weight:800;color:var(--good);">${fmt(Math.round(r.sum))}</td>
+        <td style="font-weight:800;color:var(--good);" title="${escapeHtml(formatWeeksBreakdown(r.weeks))}">
+          ${fmt(Math.round(r.sum))}
+          ${r.weeks.length > 1 ? `<div style="font-weight:400;font-size:10.5px;color:var(--muted);white-space:normal;">${escapeHtml(formatWeeksBreakdown(r.weeks))}</div>` : ""}
+        </td>
       </tr>`;
     });
     html += `<tr style="font-weight:800;background:var(--panel-2);">
@@ -2907,6 +2926,15 @@ $("downloadPayrollBtn").addEventListener("click", () => {
   const dept = $("payrollDept").value || "";
   const manager = $("payrollManager").value || "";
 
+  // Разбивка по неделям — динамические колонки "Неделя N" рядом с "Сумма
+  // начисления", по одной на каждую неделю, реально встретившуюся хотя бы у
+  // одного сотрудника (union period_label по всем строкам, отсортировано по
+  // номеру недели) — не жёстко 2/3, а сколько реально загружено (см.
+  // services/payroll.py).
+  const weekPeriods = [...new Set(currentPayrollRows.flatMap(r => r.weeks.map(w => w.period_label)))]
+    .sort((a, b) => parseInt(weekNumberFromPeriodLabel(a), 10) - parseInt(weekNumberFromPeriodLabel(b), 10));
+  const weekHeaders = weekPeriods.map(pl => `Неделя ${weekNumberFromPeriodLabel(pl)}`);
+
   const aoa = [
     ["", "Если есть изменения - выделить красным цветом текст"],
     [],
@@ -2914,14 +2942,18 @@ $("downloadPayrollBtn").addEventListener("click", () => {
     ["", "Отдел", dept],
     ["", "Руководитель (ответсвенный)", manager],
     [],
-    ["№ п/п","ФИО","Должность","Комментарий","Способ оплаты","Реквизиты","Период начисления","Ставка","Аванс","Сумма начисления","Валюта начисления","Валюта выплаты","Крайняя дата выплаты","Доп, примечание"],
+    ["№ п/п","ФИО","Должность","Комментарий","Способ оплаты","Реквизиты","Период начисления","Ставка","Аванс",...weekHeaders,"Сумма начисления","Валюта начисления","Валюта выплаты","Крайняя дата выплаты","Доп, примечание"],
   ];
   currentPayrollRows.forEach((r, i) => {
+    const weekByPeriod = {};
+    r.weeks.forEach(w => { weekByPeriod[w.period_label] = w.sum; });
+    const weekCells = weekPeriods.map(pl => pl in weekByPeriod ? Math.round(weekByPeriod[pl]) : "");
     aoa.push([
       i+1, r.fio, r.position, r.comment, r.paymentType, r.requisitesText,
       meta.periodLabel,
       meta.stage === "2" ? "ставка" : "",
       meta.stage === "1" ? "Аванс" : "",
+      ...weekCells,
       Math.round(r.sum),
       "руб", "",
       dueDate ? new Date(dueDate) : "",
@@ -2929,12 +2961,20 @@ $("downloadPayrollBtn").addEventListener("click", () => {
     ]);
   });
   const total = currentPayrollRows.reduce((s, r) => s + r.sum, 0);
-  aoa.push(["","","","","","","","","ИТОГО:",Math.round(total),"","","",""]);
+  const totalCols = 14 + weekPeriods.length;
+  const totalsRow = new Array(totalCols).fill("");
+  totalsRow[8 + weekPeriods.length] = "ИТОГО:";
+  totalsRow[9 + weekPeriods.length] = Math.round(total);
+  aoa.push(totalsRow);
 
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws["!cols"] = [{wch:5},{wch:26},{wch:16},{wch:22},{wch:14},{wch:34},{wch:20},{wch:8},{wch:8},{wch:16},{wch:12},{wch:12},{wch:16},{wch:16}];
+  ws["!cols"] = [
+    {wch:5},{wch:26},{wch:16},{wch:22},{wch:14},{wch:34},{wch:20},{wch:8},{wch:8},
+    ...weekPeriods.map(() => ({wch:12})),
+    {wch:16},{wch:12},{wch:12},{wch:16},{wch:16},
+  ];
   const headerRowIdx = 6;
-  for(let c = 0; c < 14; c++){
+  for(let c = 0; c < totalCols; c++){
     const addr = XLSX.utils.encode_cell({ r: headerRowIdx, c });
     if(ws[addr]) ws[addr].s = { fill:{patternType:"solid", fgColor:{rgb:"FFEEF0FE"}}, font:{bold:true, color:{rgb:"FF4338CA"}} };
   }

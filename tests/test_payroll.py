@@ -60,6 +60,13 @@ def test_build_two_stage_payroll_sums_net_salary_across_weeks():
     assert row["comment"] == "Штраф удержан: 100 ₽"
     assert result["period_label_text"] == "01-15 Июля 2026"
     assert result["weeks"] == [1, 2]
+    # Разбивка по неделям — сумма элементов равна row["sum"], значения net
+    # (за вычетом по-недельного штрафа, как и sum)
+    assert row["weeks"] == [
+        {"period_label": "7-1", "sum": 1000 - 100},
+        {"period_label": "7-2", "sum": 1200 - 0},
+    ]
+    assert sum(w["sum"] for w in row["weeks"]) == row["sum"]
 
 
 def test_build_two_stage_payroll_excludes_novices_and_null_salary():
@@ -98,6 +105,68 @@ def test_build_two_stage_payroll_sorted_by_display_group_name_then_fio():
     # Р), "Супервайзер - Смирнов С.С." -> очищенное "Смирнов С.С." (кириллица
     # С) — "Регион УК" идёт раньше по алфавиту, внутри группы — по fio
     assert fios_in_order == ["ЗДР Борисов Б.Б.", "Антонов А.А.", "Яковлев Я.Я."]
+
+
+# --- разбивка по неделям ("weeks") ---
+
+def test_weeks_breakdown_has_three_entries_for_calc_stage():
+    uploads = [
+        {"id": "u7-3", "period_label": "7-3"},
+        {"id": "u7-4", "period_label": "7-4"},
+        {"id": "u7-5", "period_label": "7-5"},
+    ]
+    ratings_by_upload = {
+        "u7-3": [{"fio": "Иванов И.И.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 1000}],
+        "u7-4": [{"fio": "Иванов И.И.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 1100}],
+        "u7-5": [{"fio": "Иванов И.И.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 1200}],
+    }
+    result = build_two_stage_payroll(uploads, ratings_by_upload, {}, month=7, stage="2", year=2026)
+    row = result["rows"][0]
+    assert row["weeks"] == [
+        {"period_label": "7-3", "sum": 1000},
+        {"period_label": "7-4", "sum": 1100},
+        {"period_label": "7-5", "sum": 1200},
+    ]
+
+
+def test_weeks_breakdown_only_includes_weeks_person_actually_has_salary_for():
+    # Если человек пропустил неделю (не было строки/salary=None) — эта
+    # неделя просто отсутствует в его разбивке, не 0.
+    uploads = [{"id": "u7-3", "period_label": "7-3"}, {"id": "u7-4", "period_label": "7-4"}]
+    ratings_by_upload = {
+        "u7-3": [{"fio": "Иванов И.И.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 1000}],
+        "u7-4": [{"fio": "Иванов И.И.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": None}],
+    }
+    result = build_two_stage_payroll(uploads, ratings_by_upload, {}, month=7, stage="2", year=2026)
+    row = result["rows"][0]
+    assert row["weeks"] == [{"period_label": "7-3", "sum": 1000}]
+
+
+def test_weeks_breakdown_sorted_by_week_number_regardless_of_upload_order():
+    uploads = [{"id": "u7-4", "period_label": "7-4"}, {"id": "u7-3", "period_label": "7-3"}]  # заведомо не по порядку
+    ratings_by_upload = {
+        "u7-4": [{"fio": "Иванов И.И.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 1100}],
+        "u7-3": [{"fio": "Иванов И.И.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 1000}],
+    }
+    result = build_two_stage_payroll(uploads, ratings_by_upload, {}, month=7, stage="2", year=2026)
+    row = result["rows"][0]
+    assert [w["period_label"] for w in row["weeks"]] == ["7-3", "7-4"]
+
+
+def test_weeks_breakdown_unaffected_by_stage_adjustment():
+    # Штраф/премия этапа применяются к итогу ("sum"), НЕ к конкретной
+    # неделе — разбивка "weeks" отражает только по-недельные суммы,
+    # сумма её элементов НЕ обязана совпадать с итоговым "sum" после
+    # применения корректировки этапа.
+    uploads = [{"id": "u7-3", "period_label": "7-3"}]
+    ratings_by_upload = {"u7-3": [{"fio": "Иванов И.И.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 1000}]}
+    result = build_two_stage_payroll(
+        uploads, ratings_by_upload, {}, month=7, stage="2", year=2026,
+        stage_adjustments_by_fio={"Иванов И.И.": {"penalty": 500, "premium": 0}},
+    )
+    row = result["rows"][0]
+    assert row["weeks"] == [{"period_label": "7-3", "sum": 1000}]
+    assert row["sum"] == 500  # 1000 - 500 (корректировка этапа), не в разбивке
 
 
 # --- штраф/премия за этап (payroll_stage_adjustments) ---

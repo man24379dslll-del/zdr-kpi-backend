@@ -11,6 +11,13 @@ salary=None (не было колонки "Рабочее время, ч" в ф�
 такая неделя для этого человека пропускается (см. ниже), а не считается
 за 0.
 
+Каждая строка ответа несёт не только итоговую сумму этапа ("sum"), но и
+разбивку по неделям ("weeks": [{period_label, sum}, ...], по возрастанию
+номера недели) — ЧИСТО для отображения (см. routers/payroll.py,
+static/index.html), саму формулу расчёта не меняет: сумма элементов
+"weeks" равна "sum" ДО штрафа/премии этапа (stage_adjustments), которые
+применяются одним разом на весь этап, а не к конкретной неделе.
+
 payroll_penalties (штрафы) — уже существующая в Supabase таблица, здесь
 не создаётся: id, upload_id, fio, penalty numeric, comment, updated_at,
 unique(upload_id, fio). Колонка суммы штрафа называется "penalty" (не
@@ -46,6 +53,14 @@ RU_MONTHS_GENITIVE = [
     "января", "февраля", "марта", "апреля", "мая", "июня",
     "июля", "августа", "сентября", "октября", "ноября", "декабря",
 ]
+
+
+def _week_number(period_label: str) -> int:
+    """"7-1" -> 1. Используется только для сортировки разбивки по неделям
+    внутри этапа — не путать с periods.py (сравнение периодов между
+    месяцами), тут месяц уже один и тот же (этап всегда внутри 1 месяца)."""
+    m = PERIOD_LABEL_RE.match(period_label)
+    return int(m.group(2)) if m else 0
 
 
 def is_weekly_period_label(period_label: str | None) -> bool:
@@ -110,6 +125,7 @@ def build_two_stage_payroll(
     acc: dict[str, dict] = {}
     for upload in matching_uploads:
         upload_id = upload["id"]
+        period_label = upload["period_label"]
         penalty_map = penalties_by_upload_id.get(upload_id, {})
         for r in ratings_by_upload_id.get(upload_id, []):
             if r.get("is_novice") or r.get("salary") is None:
@@ -120,14 +136,25 @@ def build_two_stage_payroll(
 
             entry = acc.setdefault(fio, {
                 "fio": fio, "supervisor": None, "status": None, "sum": 0.0, "penalty_sum": 0.0,
+                "weeks": {},  # period_label -> сумма ЗП этой недели (net, за вычетом по-недельного штрафа)
             })
             entry["sum"] += net
             entry["penalty_sum"] += penalty
             entry["supervisor"] = r.get("supervisor")
             entry["status"] = r.get("status")
+            entry["weeks"][period_label] = entry["weeks"].get(period_label, 0.0) + net
 
     rows = list(acc.values())
     for entry in rows:
+        # Разбивка по неделям — ТОЛЬКО отображение (см. докстринг функции):
+        # список {period_label, sum} по возрастанию номера недели, сумма
+        # элементов равна entry["sum"] ДО штрафа/премии этапа ниже (та
+        # применяется одним разом на весь этап, не привязана к неделе).
+        entry["weeks"] = [
+            {"period_label": period_label, "sum": week_sum}
+            for period_label, week_sum in sorted(entry["weeks"].items(), key=lambda kv: _week_number(kv[0]))
+        ]
+
         penalty_sum = entry["penalty_sum"]
         penalty_text = int(penalty_sum) if penalty_sum == int(penalty_sum) else penalty_sum
         entry["comment"] = f"Штраф удержан: {penalty_text} ₽" if penalty_sum > 0 else None
