@@ -177,3 +177,33 @@ alter table kpi_ratings add column if not exists errors_count numeric;
 -- колонки исходного Excel, могут быть null.
 alter table kpi_ratings add column if not exists work_hours numeric;
 alter table kpi_ratings add column if not exists shift_count numeric;
+
+-- ============================================================
+-- Несколько групп у одного супервайзера (user_profiles.supervisor_names)
+-- ============================================================
+-- Причина: у одного человека (например, супервайзер Курбанова Зарина)
+-- может быть доступ сразу к НЕСКОЛЬКИМ РАЗНЫМ группам одновременно (её
+-- своя группа + группа другого супервайзера) — не подгруппам одной и той
+-- же группы (то отдельная фича "через одного" в excel_parsing.py, никак
+-- не связана с ролями/доступом). supervisor_name (одна строка) НЕ
+-- удаляем сразу — просто перестаёт быть единственным
+-- источником истины; supervisor_names (массив) становится тем, что
+-- реально читают RLS-политика и бэкенд/фронтенд (app/auth.py,
+-- static/index.html). Для обычного супервайзера с одной группой —
+-- просто массив из одного элемента, вся остальная логика фильтрации
+-- ("входит ли supervisor человека в мои группы") работает так же, как
+-- раньше со сравнением "равен ли моей единственной группе".
+alter table user_profiles add column if not exists supervisor_names text[];
+update user_profiles set supervisor_names = array[supervisor_name]
+  where supervisor_name is not null and supervisor_names is null;
+
+create or replace function my_supervisor_names() returns text[]
+language sql security definer stable as $$
+  select supervisor_names from user_profiles where id = auth.uid();
+$$;
+
+drop policy if exists "ratings_select" on kpi_ratings;
+create policy "ratings_select" on kpi_ratings
+  for select using (
+    is_admin_or_manager() OR supervisor = ANY(my_supervisor_names())
+  );

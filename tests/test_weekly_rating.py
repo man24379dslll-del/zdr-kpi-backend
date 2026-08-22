@@ -192,6 +192,33 @@ def test_category_places_are_scoped_to_supervisor_group_not_company_wide():
     assert by_fio["B2"].final_place == 2  # НЕ 4
 
 
+def test_kurbanova_group_is_a_single_normal_group_not_split():
+    # Группа супервайзера Курбановой Зарины НЕ делится на подгруппы —
+    # ведёт себя как любая обычная группа (было опробовано разбиение
+    # "через одного", затем однозначно отменено заказчиком). Заодно
+    # "Курбанова 2 Анастасия Анатольевна" (другой, отдельный реальный
+    # супервайзер, встречается в реальных данных) — тоже просто обычная
+    # группа, никакого специального распознавания по фамилии в коде нет.
+    rows = [
+        _group_row("Супервайзер - Курбанова Зарина Рахимджановна"),
+        _employee_row("Сотрудник 1", "", 100, 50, 100, 30, 2, 1, 5, 1000, "inet"),
+        _employee_row("Сотрудник 2", "", 90, 40, 90, 32, 2.2, 1, 5, 900, "inet"),
+        _employee_row("Сотрудник 3", "", 80, 30, 80, 34, 2.4, 1, 5, 800, "inet"),
+        _employee_row("Сотрудник 4", "", 70, 20, 70, 36, 2.6, 1, 5, 700, "inet"),
+    ]
+    raw = _build_excel_bytes(rows)
+    employees = parse_weekly_rating_excel(raw)
+    supervisors = {e["supervisor"] for e in employees}
+    assert supervisors == {"Супервайзер - Курбанова Зарина Рахимджановна"}
+
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    by_fio = {r.fio: r for r in results}
+    # Единый пул из 4 человек -> единая ЛГ, все 4 тира разные
+    # (tier_sizes(4) = [1,1,1,1,0,...,0]) — не 2 независимые пары тиров,
+    # как было бы при разбиении на подгруппы по 2 человека.
+    assert {by_fio[f"Сотрудник {i}"].tier for i in range(1, 5)} == {1, 2, 3, 4}
+
+
 def test_channel_falls_back_to_heuristic_and_flags_guess_when_supervisor_unknown():
     # Без записи в supervisor_channels — угадываем по большей сумме и
     # явно помечаем channel_is_guessed=True (фронтенд должен подсветить).

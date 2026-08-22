@@ -1,7 +1,18 @@
 """
 Зависимость FastAPI для проверки авторизации.
 Ожидает заголовок Authorization: Bearer <supabase access_token>,
-достаёт профиль пользователя (роль, supervisor_name) из user_profiles.
+достаёт профиль пользователя (роль, supervisor_names) из user_profiles.
+
+supervisor_names — МАССИВ (не одна строка): у супервайзера может быть
+несколько групп одновременно (например, Курбанова Зарина ведёт свою
+группу "Супервайзер - Курбанова Зарина Рахимджановна" И одновременно
+видит группу другого супервайзера — см. app/db/schema.sql — миграция
+"Несколько групп у одного супервайзера"). Для обычного случая с одной
+группой — массив из одного элемента. Фактическая фильтрация "видит
+только СВОИ группы" делает RLS-политика "ratings_select" на стороне
+Supabase (supervisor = ANY(...)) — здесь этот список только
+прокидывается дальше, явной проверки в Python-коде роутеров нет (и не
+было для старого supervisor_name тоже).
 """
 from __future__ import annotations
 
@@ -18,12 +29,27 @@ class CurrentUser:
     user_id: str
     email: str
     role: str  # 'admin' | 'manager' | 'supervisor'
-    supervisor_name: str | None
+    supervisor_names: list[str] | None
     display_name: str | None
 
     @property
     def is_admin_or_manager(self) -> bool:
         return self.role in ("admin", "manager")
+
+
+def resolve_supervisor_names(profile: dict) -> list[str] | None:
+    """supervisor_names (новое, массив) — источник истины; supervisor_name
+    (старое, одна строка) — фоллбэк, если для конкретного профиля миграция
+    ещё не проставила supervisor_names (см. schema.sql). Один элемент в
+    массиве ведёт себя так же, как раньше со сравнением на равенство
+    (фильтрация делает RLS-политика "supervisor = ANY(my_supervisor_names())",
+    ANY на массиве из 1 элемента эквивалентен "=")."""
+    supervisor_names = profile.get("supervisor_names")
+    if supervisor_names:
+        return supervisor_names
+    if profile.get("supervisor_name"):
+        return [profile["supervisor_name"]]
+    return None
 
 
 async def get_current_user(authorization: str = Header(...)) -> CurrentUser:
@@ -48,7 +74,7 @@ async def get_current_user(authorization: str = Header(...)) -> CurrentUser:
 
     profiles = await client.get(
         "user_profiles",
-        params={"id": f"eq.{user['id']}", "select": "role,supervisor_name,display_name"},
+        params={"id": f"eq.{user['id']}", "select": "role,supervisor_names,supervisor_name,display_name"},
     )
     if not profiles:
         raise HTTPException(
@@ -62,7 +88,7 @@ async def get_current_user(authorization: str = Header(...)) -> CurrentUser:
         user_id=user["id"],
         email=user.get("email", ""),
         role=profile["role"],
-        supervisor_name=profile.get("supervisor_name"),
+        supervisor_names=resolve_supervisor_names(profile),
         display_name=profile.get("display_name"),
     )
 

@@ -574,7 +574,11 @@ const SUPABASE_KEY = "sb_publishable_quhEohvl7S6LP3mp5_WWDg_mf55fuZt";
 
 // ---------- авторизация ----------
 let session = null; // { access_token, user_id, email }
-let profile = null; // { role, supervisor_name, display_name }
+let profile = null; // { role, supervisor_names, display_name } — supervisor_names: string[] | null,
+                     // несколько РАЗНЫХ групп у одного супервайзера (напр. Курбанова Зарина
+                     // видит и свою группу, и группу другого супервайзера), видимость строк
+                     // по факту решает RLS-политика "ratings_select" в Supabase, не этот код
+                     // (см. app/db/schema.sql)
 
 function sbHeaders(extra){
   const token = session ? session.access_token : SUPABASE_KEY;
@@ -591,7 +595,7 @@ async function signIn(email, password){
   if(!res.ok) throw new Error(data.error_description || data.msg || "Неверный email или пароль");
   session = { access_token: data.access_token, user_id: data.user.id, email: data.user.email };
 
-  const profRes = await fetch(`${SUPABASE_URL}/rest/v1/user_profiles?id=eq.${session.user_id}&select=role,supervisor_name,display_name`, {
+  const profRes = await fetch(`${SUPABASE_URL}/rest/v1/user_profiles?id=eq.${session.user_id}&select=role,supervisor_names,supervisor_name,display_name`, {
     headers: sbHeaders(),
   });
   const profRows = await profRes.json();
@@ -599,6 +603,13 @@ async function signIn(email, password){
     throw new Error("Аккаунт есть, но для него не настроен профиль (роль). Обратитесь к администратору.");
   }
   profile = profRows[0];
+  // supervisor_names (массив) — источник истины; supervisor_name (старое,
+  // одна строка) — фоллбэк, если для этого профиля миграция ещё не
+  // проставила supervisor_names (см. app/auth.py::resolve_supervisor_names,
+  // та же логика, здесь не переиспользуема — Python-модуль).
+  if((!profile.supervisor_names || !profile.supervisor_names.length) && profile.supervisor_name){
+    profile.supervisor_names = [profile.supervisor_name];
+  }
 }
 
 function signOut(){
