@@ -111,10 +111,14 @@ GitHub + Railway + Python (FastAPI). База данных остаётся на
   категорий (c1/lk/time) для Регион УК в `weekly_rating.py`,
   человекочитаемое название группы для API. Покрыт тестами
   (`tests/test_group_naming.py`, `tests/test_region_uk.py`).
-- `app/services/payroll.py` — двухэтапная ведомость ЗП (аванс нед.1-2 /
-  расчёт нед.3-5), эндпоинт `GET /payroll/two-stage`; штраф/премию за
-  этап (`payroll_stage_adjustments` — один раз на (месяц, год, ФИО), не
-  по неделям, только для этапа "Расчёт") правит `PUT /payroll/stage-adjustment`.
+- `app/services/payroll.py` — гибкая ведомость ЗП по ЛЮБОМУ отмеченному
+  набору недель (checkbox-список, не привязан к месяцу/этапу), эндпоинт
+  `GET /payroll/flexible?periods=7-5,8-1,8-2`; штраф/премию/оплату за
+  смены (`payroll_stage_adjustments` — один раз на весь набор недель, ключ
+  `(fio, periods_key)`, применяется всегда) правит `PUT /payroll/adjustment`.
+  Доплата за переработку/недоработку часов — по сумме `work_hours` из файла
+  за отмеченные недели относительно `hours_norm` (НЕ масштабируется по
+  числу недель). "Кол-во смен" — автосумма из файла, только справочно.
   Подключено к `static/index.html` (панель "💰 Ведомость ЗП"). Покрыт
   тестами (`tests/test_payroll.py`).
 - `app/services/dashboards.py` — 4 дашборда (сводка, воронка новичков,

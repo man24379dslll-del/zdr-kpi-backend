@@ -336,19 +336,16 @@
       <h2 style="margin:0;">Ведомость ЗП</h2>
       <button class="btn btn-ghost" id="closePayrollBtn" style="padding:7px 14px;font-size:12.5px;">Закрыть ✕</button>
     </div>
-    <div class="sub" style="margin:10px 0 16px;">Двухэтапный расчёт: аванс — недели 1-2 месяца, окончательный расчёт — недели 3-5. Берётся напрямую из Supabase, файл загружать не нужно.</div>
+    <div class="sub" style="margin:10px 0 16px;">Отметьте любой набор недель — итоги считаются по выбранным периодам. Берётся напрямую из Supabase, файл загружать не нужно.</div>
     <div class="panel" style="background:var(--panel-2);padding:18px 20px;margin-bottom:16px;">
+      <label class="field" style="margin:0 0 14px;">
+        <span>Отмеченные недели</span>
+        <div id="payrollPeriodsList" style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px;"></div>
+      </label>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">
         <label class="field" style="margin:0;">
-          <span>Месяц начисления</span>
-          <select id="payrollMonth" class="period-select"></select>
-        </label>
-        <label class="field" style="margin:0;">
-          <span>Этап выплаты</span>
-          <div class="chan-toggle" id="payrollStageToggle" style="display:inline-flex;">
-            <button type="button" data-stage="1" class="active">Аванс (нед. 1-2)</button>
-            <button type="button" data-stage="2">Расчёт (нед. 3-5)</button>
-          </div>
+          <span>Год начисления</span>
+          <input type="number" step="1" id="payrollYear" class="period-select">
         </label>
         <label class="field" style="margin:0;">
           <span>Дата подачи ведомости</span>
@@ -2780,121 +2777,115 @@ async function renderDashAnomalies(){
   c.innerHTML = html;
 }
 
-// ---------- Ведомость ЗП (двухэтапная: аванс нед.1-2, расчёт нед.3-5) ----------
+// ---------- Ведомость ЗП (гибкий выбор недель) ----------
 let currentPayrollRows = null;
 let currentPayrollMeta = null;
+let currentPayrollPeriods = []; // отмеченные period_label, хронологически
 
-(function initPayrollMonthSelect(){
-  const sel = $("payrollMonth");
-  MONTHS.forEach((name, i) => {
-    const opt = document.createElement("option");
-    opt.value = i + 1;
-    opt.textContent = `${i+1} — ${name}`;
-    if(i + 1 === new Date().getMonth() + 1) opt.selected = true;
-    sel.appendChild(opt);
-  });
+(function initPayrollDates(){
   const today = new Date();
   const pad = n => String(n).padStart(2, "0");
   $("payrollSubmitDate").value = `${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
+  $("payrollYear").value = today.getFullYear();
 })();
-$("payrollStageToggle").querySelectorAll("button").forEach(btn => {
-  btn.addEventListener("click", () => {
-    $("payrollStageToggle").querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
-  });
-});
 
+// Заполняет чекбоксы недель актуальным списком загруженных недельных
+// периодов (та же выборка/сортировка, что уже используется для истории —
+// fetchAllUploads("week"), см. выше), по одному чекбоксу на period_label.
+async function loadPayrollPeriodsCheckboxes(){
+  const box = $("payrollPeriodsList");
+  box.innerHTML = `<span style="color:var(--muted);font-size:13px;">Загружаю список недель…</span>`;
+  const checked = new Set(currentPayrollPeriods);
+  const uploads = await fetchAllUploads("week");
+  const labels = [...new Set(uploads.map(u => u.period_label))]
+    .sort((a, b) => periodSortValue("week", a) - periodSortValue("week", b));
+  if(!labels.length){
+    box.innerHTML = `<span style="color:var(--muted);font-size:13px;">Пока нет загруженных недель.</span>`;
+    return;
+  }
+  box.innerHTML = labels.map(label => {
+    const m = /^(\d+)-(\d+)$/.exec(label);
+    const monthName = m ? MONTHS[parseInt(m[1], 10) - 1] : "";
+    const isChecked = checked.has(label);
+    return `<label style="display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:${isChecked ? 700 : 400};">
+      <input type="checkbox" class="payroll-period-checkbox" value="${label}" ${isChecked ? "checked" : ""}>
+      ${monthName}, нед. ${m ? m[2] : label} (${label})
+    </label>`;
+  }).join("");
+}
 
-async function buildTwoStagePayroll(){
-  const month = parseInt($("payrollMonth").value, 10);
-  const stage = $("payrollStageToggle").querySelector(".active").dataset.stage;
-  const year = new Date().getFullYear();
+function getCheckedPayrollPeriods(){
+  return [...document.querySelectorAll(".payroll-period-checkbox:checked")]
+    .map(cb => cb.value)
+    .sort((a, b) => periodSortValue("week", a) - periodSortValue("week", b));
+}
+
+async function buildFlexiblePayroll(){
+  const periods = getCheckedPayrollPeriods();
+  if(!periods.length) throw new Error("Отметьте хотя бы одну неделю");
+  const year = parseInt($("payrollYear").value, 10) || new Date().getFullYear();
   const hoursNorm = parseFloat($("payrollHoursNorm").value) || 0;
   const overtimeRate = parseFloat($("payrollOvertimeRate").value) || 0;
 
-  const result = await apiGet("/payroll/two-stage", { month, stage, year, hours_norm: hoursNorm, overtime_rate: overtimeRate });
-
-  const rows = result.rows.map(r => {
-    // penalty/premium/extraHours/shiftCount/shiftPay — правки ЗА ЭТАП (не по
-    // неделям), только для stage="2"; backend уже применил их к r.sum.
-    // weeklySum — сумма ЗП по неделям БЕЗ ЛЮБЫХ этапных корректировок (та же
-    // роль, что раньше игралась baseSum для штрафа/премии, расширена доп.
-    // часами/сменами) — нужна, чтобы пересчитывать "к выплате" на лету при
-    // редактировании, не делая новый запрос к API.
-    const penalty = stage === "2" ? (r.penalty || 0) : null;
-    const premium = stage === "2" ? (r.premium || 0) : null;
-    const extraHours = stage === "2" ? (r.extra_hours || 0) : null;
-    const shiftCount = stage === "2" ? (r.shift_count || 0) : null;
-    const shiftPay = stage === "2" ? (r.shift_pay || 0) : null;
-    const overtimePay = stage === "2" ? (r.overtime_pay || 0) : null;
-    const workHoursSum = stage === "2" ? (r.work_hours_sum || 0) : null;
-    const weeklySum = stage === "2" ? (r.sum - overtimePay - shiftPay + penalty - premium) : r.sum;
-    return {
-      fio: r.fio,
-      supervisor: r.supervisor,
-      status: r.status,
-      sum: r.sum,
-      weeklySum,
-      penalty,
-      premium,
-      extraHours,
-      shiftCount,
-      shiftPay,
-      overtimePay,
-      workHoursSum,
-      comment: r.comment || "",
-      position: r.status || "",
-      // TODO: реквизиты не подключены к backend (payment_requisites) — подключим отдельно
-      paymentType: "",
-      requisitesText: "",
-      // Разбивка по неделям [{period_label, sum}, ...] — чисто для отображения
-      // (см. services/payroll.py), формулу расчёта не меняет.
-      weeks: r.weeks || [],
-    };
+  const result = await apiGet("/payroll/flexible", {
+    periods: periods.join(","), year, hours_norm: hoursNorm, overtime_rate: overtimeRate,
   });
 
+  const rows = result.rows.map(r => ({
+    fio: r.fio,
+    supervisor: r.supervisor,
+    status: r.status,
+    sum: r.sum,
+    // weeklySum — сумма ЗП по неделям БЕЗ ручных корректировок (штраф/
+    // премия/оплата за смены/доплата за часы) — нужна, чтобы пересчитывать
+    // "к выплате" на лету при редактировании, без нового запроса к API.
+    weeklySum: r.sum - r.overtime_pay - r.shift_pay + r.penalty - r.premium,
+    penalty: r.penalty || 0,
+    premium: r.premium || 0,
+    shiftCount: r.shift_count || 0, // автосумма из файла — только для справки
+    shiftPay: r.shift_pay || 0,
+    overtimePay: r.overtime_pay || 0,
+    workHoursSum: r.work_hours_sum || 0,
+    comment: r.comment || "",
+    position: r.status || "",
+    // TODO: реквизиты не подключены к backend (payment_requisites) — подключим отдельно
+    paymentType: "",
+    requisitesText: "",
+    // Разбивка по неделям [{period_label, sum}, ...] — чисто для отображения
+    // (см. services/payroll.py), формулу расчёта не меняет.
+    weeks: r.weeks || [],
+  }));
+
   return {
-    rows, month, stage, year, hoursNorm, overtimeRate,
-    weeks: result.weeks,
+    rows, periods, year, hoursNorm, overtimeRate,
+    periodsKey: result.periods_key,
     periodLabel: result.period_label_text,
     matchedUploads: result.matched_uploads,
   };
 }
 
-// "7-3" -> "3" (номер недели внутри месяца) — только для отображения разбивки.
-function weekNumberFromPeriodLabel(periodLabel){
-  const m = /^\d+-(\d+)$/.exec(periodLabel || "");
-  return m ? m[1] : periodLabel;
-}
-// "Неделя 1: 5 000 ₽ + Неделя 2: 5 200 ₽" — компактная строка разбивки по
-// неделям для подсказки/подстроки под итоговой суммой (см. renderPayrollTable).
+// "7-3: 5 000 ₽ + 7-4: 5 200 ₽" — компактная строка разбивки по неделям для
+// подсказки/подстроки под итоговой суммой (см. renderPayrollTable).
 function formatWeeksBreakdown(weeks){
   return (weeks || [])
-    .map(w => `Неделя ${weekNumberFromPeriodLabel(w.period_label)}: ${fmt(Math.round(w.sum))} ₽`)
+    .map(w => `${w.period_label}: ${fmt(Math.round(w.sum))} ₽`)
     .join(" + ");
 }
 
-async function saveStageAdjustment(row, inputs){
+async function saveAdjustment(row, inputs){
   const penalty = parseFloat(inputs.penalty.value) || 0;
   const premium = parseFloat(inputs.premium.value) || 0;
-  const extraHours = parseFloat(inputs.extraHours.value) || 0;
-  const shiftCount = parseFloat(inputs.shiftCount.value) || 0;
   const shiftPay = parseFloat(inputs.shiftPay.value) || 0;
   const meta = currentPayrollMeta;
   try{
-    await apiSend("PUT", "/payroll/stage-adjustment", {
-      month: meta.month, year: meta.year, fio: row.fio,
-      penalty, premium, extra_hours: extraHours, shift_count: shiftCount, shift_pay: shiftPay,
+    await apiSend("PUT", "/payroll/adjustment", {
+      fio: row.fio, periods: meta.periods, penalty, premium, shift_pay: shiftPay,
     });
     row.penalty = penalty;
     row.premium = premium;
-    row.extraHours = extraHours;
-    row.shiftCount = shiftCount;
     row.shiftPay = shiftPay;
-    // Доплата за часы — ВЫЧИСЛЯЕМАЯ (зависит от extraHours), пересчитываем
-    // на лету так же, как это делает backend (см. services/payroll.py) —
-    // без нового запроса к API. shiftPay — уже готовая ручная сумма, просто
-    // прибавляется. shiftCount в формулу не входит (только справка).
-    row.overtimePay = (row.workHoursSum + extraHours - meta.hoursNorm) * meta.overtimeRate;
+    // Доплата за часы не зависит от ручных полей — не пересчитывается тут,
+    // берётся как есть (backend уже посчитал её один раз при построении).
     row.sum = row.weeklySum - penalty + premium + row.overtimePay + shiftPay;
     renderPayrollTable(); // локальный перерендер из уже загруженных данных, без сети/перезагрузки страницы
   } catch(err){
@@ -2905,7 +2896,7 @@ async function saveStageAdjustment(row, inputs){
 async function renderDashPayroll(){
   const c = $("dashPayrollContainer");
   const sub = $("dashPayrollSub");
-  c.innerHTML = `<div class="history-empty">Настройте месяц и этап выше, затем нажмите "Сформировать ведомость".</div>`;
+  c.innerHTML = `<div class="history-empty">Отметьте недели выше, затем нажмите "Сформировать ведомость".</div>`;
   sub.textContent = "";
 }
 
@@ -2925,10 +2916,7 @@ function renderPayrollTable(){
   visibleRows.forEach(r => { (byGroup[r.supervisor] ||= []).push(r); });
   const groupNames = Object.keys(byGroup).sort(compareGroupNames);
 
-  // Штраф/премия/доп.часы/оплата за смены за этап — только для "Расчёт"
-  // (stage="2"), у "Аванса" этих полей вообще нет (ни как input, ни как текст).
-  const showAdjustments = result.stage === "2";
-  const totalCols = showAdjustments ? 14 : 9;
+  const totalCols = 12;
 
   let globalIdx = 0;
   let html = "";
@@ -2938,7 +2926,7 @@ function renderPayrollTable(){
     html += `<div class="group-block">`;
     html += `<div class="group-title">${displayGroupName(gname)}<span class="count">${groupRows.length} чел. · ${fmt(Math.round(groupTotal))} ₽</span></div>`;
     html += `<div class="subtable-wrap"><table class="dyn-table"><thead><tr>
-      <th>№</th><th>ФИО</th><th>Должность</th><th>Комментарий</th><th>Способ оплаты</th><th>Реквизиты</th><th>Период начисления</th><th>Ставка</th><th>Аванс</th>${showAdjustments ? "<th>Штраф</th><th>Премия</th><th>Доп. часы</th><th>Кол-во смен</th><th>Оплата за смены</th>" : ""}<th>Сумма начисления</th>
+      <th>№</th><th>ФИО</th><th>Должность</th><th>Комментарий</th><th>Способ оплаты</th><th>Реквизиты</th><th>Период начисления</th><th>Штраф</th><th>Премия</th><th>Кол-во смен</th><th>Оплата за смены</th><th>Сумма начисления</th>
     </tr></thead><tbody>`;
     groupRows.forEach(r => {
       globalIdx++;
@@ -2950,15 +2938,10 @@ function renderPayrollTable(){
         <td style="font-family:var(--sans);">${r.paymentType}</td>
         <td style="font-family:var(--sans);white-space:normal;max-width:220px;${r.requisitesText ? "" : "color:var(--err);"}">${r.requisitesText || "нет реквизитов"}</td>
         <td style="font-family:var(--sans);">${result.periodLabel}</td>
-        <td style="font-family:var(--sans);">${result.stage === "2" ? "ставка" : ""}</td>
-        <td style="font-family:var(--sans);">${result.stage === "1" ? "Аванс" : ""}</td>
-        ${showAdjustments ? `
         <td><input type="number" step="0.01" class="payroll-penalty" value="${r.penalty || 0}" style="width:90px;"></td>
         <td><input type="number" step="0.01" class="payroll-premium" value="${r.premium || 0}" style="width:90px;"></td>
-        <td><input type="number" step="0.01" class="payroll-extra-hours" value="${r.extraHours || 0}" style="width:80px;" title="Может быть отрицательным (недоработка часов)"></td>
-        <td><input type="number" step="0.01" class="payroll-shift-count" value="${r.shiftCount || 0}" style="width:80px;" title="Только для справки — в сумму не входит"></td>
+        <td style="font-family:var(--sans);text-align:center;" title="Автосумма из файла — только для справки, в сумму не входит">${r.shiftCount || 0}</td>
         <td><input type="number" step="0.01" class="payroll-shift-pay" value="${r.shiftPay || 0}" style="width:90px;"></td>
-        ` : ""}
         <td style="font-weight:800;color:var(--good);" title="${escapeHtml(formatWeeksBreakdown(r.weeks))}">
           ${fmt(Math.round(r.sum))}
           ${r.weeks.length > 1 ? `<div style="font-weight:400;font-size:10.5px;color:var(--muted);white-space:normal;">${escapeHtml(formatWeeksBreakdown(r.weeks))}</div>` : ""}
@@ -2978,21 +2961,17 @@ function renderPayrollTable(){
   </div>`;
   c.innerHTML = html;
 
-  if(showAdjustments){
-    c.querySelectorAll("tr[data-fio]").forEach(tr => {
-      const row = visibleRows.find(r => r.fio === tr.dataset.fio);
-      if(!row) return;
-      const inputs = {
-        penalty: tr.querySelector(".payroll-penalty"),
-        premium: tr.querySelector(".payroll-premium"),
-        extraHours: tr.querySelector(".payroll-extra-hours"),
-        shiftCount: tr.querySelector(".payroll-shift-count"),
-        shiftPay: tr.querySelector(".payroll-shift-pay"),
-      };
-      const save = () => saveStageAdjustment(row, inputs);
-      Object.values(inputs).forEach(input => input.addEventListener("blur", save));
-    });
-  }
+  c.querySelectorAll("tr[data-fio]").forEach(tr => {
+    const row = visibleRows.find(r => r.fio === tr.dataset.fio);
+    if(!row) return;
+    const inputs = {
+      penalty: tr.querySelector(".payroll-penalty"),
+      premium: tr.querySelector(".payroll-premium"),
+      shiftPay: tr.querySelector(".payroll-shift-pay"),
+    };
+    const save = () => saveAdjustment(row, inputs);
+    Object.values(inputs).forEach(input => input.addEventListener("blur", save));
+  });
 }
 $("payrollSearchBox").addEventListener("input", renderPayrollTable);
 
@@ -3001,11 +2980,11 @@ $("buildPayrollBtn").addEventListener("click", async () => {
   const sub = $("dashPayrollSub");
   c.innerHTML = `<div class="history-empty">Считаю…</div>`;
   try{
-    const result = await buildTwoStagePayroll();
+    const result = await buildFlexiblePayroll();
     currentPayrollRows = result.rows;
     currentPayrollMeta = result;
-    const stageLabel = result.stage === "1" ? "Аванс (недели 1-2)" : "Расчёт (недели 3-5)";
-    sub.textContent = `${stageLabel} · период "${result.periodLabel}" · найдено загрузок: ${result.matchedUploads} · сотрудников: ${result.rows.length}`;
+    currentPayrollPeriods = result.periods;
+    sub.textContent = `Недели: ${result.periodLabel} · найдено загрузок: ${result.matchedUploads} · сотрудников: ${result.rows.length}`;
     $("payrollSearchBox").value = "";
     $("wrap").classList.add("wide");
     renderPayrollTable();
@@ -3022,14 +3001,13 @@ $("downloadPayrollBtn").addEventListener("click", () => {
   const dept = $("payrollDept").value || "";
   const manager = $("payrollManager").value || "";
 
-  // Разбивка по неделям — динамические колонки "Неделя N" рядом с "Сумма
-  // начисления", по одной на каждую неделю, реально встретившуюся хотя бы у
-  // одного сотрудника (union period_label по всем строкам, отсортировано по
-  // номеру недели) — не жёстко 2/3, а сколько реально загружено (см.
-  // services/payroll.py).
+  // Разбивка по неделям — динамические колонки по одной на каждую отмеченную
+  // неделю, реально встретившуюся хотя бы у одного сотрудника (union
+  // period_label по всем строкам, в хронологическом порядке — недели могут
+  // быть из разных месяцев, см. services/payroll.py).
   const weekPeriods = [...new Set(currentPayrollRows.flatMap(r => r.weeks.map(w => w.period_label)))]
-    .sort((a, b) => parseInt(weekNumberFromPeriodLabel(a), 10) - parseInt(weekNumberFromPeriodLabel(b), 10));
-  const weekHeaders = weekPeriods.map(pl => `Неделя ${weekNumberFromPeriodLabel(pl)}`);
+    .sort((a, b) => periodSortValue("week", a) - periodSortValue("week", b));
+  const weekHeaders = weekPeriods.map(pl => `Неделя ${pl}`);
 
   const aoa = [
     ["", "Если есть изменения - выделить красным цветом текст"],
@@ -3038,7 +3016,7 @@ $("downloadPayrollBtn").addEventListener("click", () => {
     ["", "Отдел", dept],
     ["", "Руководитель (ответсвенный)", manager],
     [],
-    ["№ п/п","ФИО","Должность","Комментарий","Способ оплаты","Реквизиты","Период начисления","Ставка","Аванс",...weekHeaders,"Сумма начисления","Валюта начисления","Валюта выплаты","Крайняя дата выплаты","Доп, примечание"],
+    ["№ п/п","ФИО","Должность","Комментарий","Способ оплаты","Реквизиты","Период начисления",...weekHeaders,"Сумма начисления","Валюта начисления","Валюта выплаты","Крайняя дата выплаты","Доп, примечание"],
   ];
   currentPayrollRows.forEach((r, i) => {
     const weekByPeriod = {};
@@ -3047,8 +3025,6 @@ $("downloadPayrollBtn").addEventListener("click", () => {
     aoa.push([
       i+1, r.fio, r.position, r.comment, r.paymentType, r.requisitesText,
       meta.periodLabel,
-      meta.stage === "2" ? "ставка" : "",
-      meta.stage === "1" ? "Аванс" : "",
       ...weekCells,
       Math.round(r.sum),
       "руб", "",
@@ -3057,15 +3033,15 @@ $("downloadPayrollBtn").addEventListener("click", () => {
     ]);
   });
   const total = currentPayrollRows.reduce((s, r) => s + r.sum, 0);
-  const totalCols = 14 + weekPeriods.length;
+  const totalCols = 12 + weekPeriods.length;
   const totalsRow = new Array(totalCols).fill("");
-  totalsRow[8 + weekPeriods.length] = "ИТОГО:";
-  totalsRow[9 + weekPeriods.length] = Math.round(total);
+  totalsRow[6 + weekPeriods.length] = "ИТОГО:";
+  totalsRow[7 + weekPeriods.length] = Math.round(total);
   aoa.push(totalsRow);
 
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws["!cols"] = [
-    {wch:5},{wch:26},{wch:16},{wch:22},{wch:14},{wch:34},{wch:20},{wch:8},{wch:8},
+    {wch:5},{wch:26},{wch:16},{wch:22},{wch:14},{wch:34},{wch:20},
     ...weekPeriods.map(() => ({wch:12})),
     {wch:16},{wch:12},{wch:12},{wch:16},{wch:16},
   ];
@@ -3076,8 +3052,7 @@ $("downloadPayrollBtn").addEventListener("click", () => {
   }
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Ведомость ЗП");
-  const stageWord = meta.stage === "1" ? "Аванс" : "Расчет";
-  XLSX.writeFile(wb, `Ведомость_ЗП_${MONTHS[meta.month-1]}_${stageWord}.xlsx`);
+  XLSX.writeFile(wb, `Ведомость_ЗП_${meta.periodsKey.replace(/,/g, "_")}.xlsx`);
 });
 const DASH_RENDERERS = { summary: renderDashSummary, funnel: renderDashFunnel, channels: renderDashChannels, anomalies: renderDashAnomalies };
 async function loadActiveDashboard(){
@@ -3216,6 +3191,7 @@ $("openPayrollBtn").addEventListener("click", () => {
   $("payrollPanel").style.display = "block";
   $("payrollPanel").scrollIntoView({ behavior: "smooth", block: "start" });
   renderDashPayroll();
+  loadPayrollPeriodsCheckboxes();
 });
 $("closePayrollBtn").addEventListener("click", () => { $("payrollPanel").style.display = "none"; });
 

@@ -225,3 +225,23 @@ create policy "ratings_select" on kpi_ratings
 alter table payroll_stage_adjustments add column if not exists extra_hours numeric not null default 0;
 alter table payroll_stage_adjustments add column if not exists shift_count numeric not null default 0;
 alter table payroll_stage_adjustments add column if not exists shift_pay numeric not null default 0;
+
+-- ============================================================
+-- Ведомость ЗП: гибкий выбор недель вместо (месяц, этап)
+-- ============================================================
+-- Понятие "этап" (Аванс недели 1-2 / Расчёт недели 3-5) убрано целиком —
+-- ведомость теперь строится по ЛЮБОМУ отмеченному набору недель (см.
+-- services/payroll.py::build_flexible_payroll). Ключ штрафа/премии/
+-- оплаты за смены (payroll_stage_adjustments) меняется с (month, year,
+-- fio) на (fio, periods_key), где periods_key — отсортированные
+-- period_label через запятую (например "7-5,8-1,8-2").
+--
+-- ВНИМАНИЕ: уже сохранённые записи (были на момент миграции — штраф
+-- 500 ₽ и премия 78000 ₽ за август 2026) НЕ мигрируются автоматически:
+-- их periods_key останется NULL, они не совпадут ни с одним новым
+-- набором недель и просто перестанут отображаться (не удаляются).
+alter table payroll_stage_adjustments add column if not exists periods_key text;
+alter table payroll_stage_adjustments alter column month drop not null;
+alter table payroll_stage_adjustments alter column year drop not null;
+alter table payroll_stage_adjustments drop constraint if exists payroll_stage_adjustments_month_year_fio_key;
+alter table payroll_stage_adjustments add constraint payroll_stage_adjustments_fio_periods_key_key unique (fio, periods_key);
