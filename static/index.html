@@ -1537,6 +1537,43 @@ function computeGlobalNovices(groups){
   return scoreSlice(all, e => channelFields(e, e.channel), isNaNovice, "c1_sum", true);
 }
 
+// ---------- "Коэффициент" в "Рейтинг супервайзеров" (ПОКА ТОЛЬКО ОТОБРАЖЕНИЕ,
+// не привязан ни к какой формуле ЗП — отдельная будущая задача) ----------
+// Курбанова (Зарина) и Клюйко (Анатолий) — особые случаи: не участвуют в
+// ОБЫЧНОМ вычисляемом ранжировании (как если бы их вообще не было в общем
+// списке при расчёте мест ДРУГИХ супервайзеров — см. naFn у scoreSlice
+// ниже, тот же принцип, что уже используется для новичков/Н/О), но
+// остаются в таблице отдельной строкой со статус-меткой вместо места и
+// фиксированным коэффициентом 1.3. "курбанова зарина", а НЕ голое
+// "курбанова" — есть ДРУГОЙ супервайзер "Курбанова 2 Анастасия
+// Анатольевна", её это правило не касается.
+const KURBANOVA_ZARINA_RE = /курбанова\s+зарина/i;
+const KLYUIKO_RE = /клюйко/i;
+const SPECIAL_SUPERVISOR_COEFFICIENT = 1.3;
+function specialSupervisorLabel(supervisor){
+  if(KURBANOVA_ZARINA_RE.test(supervisor || "")) return "Лидер";
+  if(KLYUIKO_RE.test(supervisor || "")) return "Старший тренер";
+  return null;
+}
+function isSpecialSupervisor(supervisor){
+  return specialSupervisorLabel(supervisor) !== null;
+}
+// Среди супервайзеров БЕЗ Курбановой/Клюйко (обычное вычисляемое место,
+// 1..N): линейная убывающая шкала — лучшее место 1.3, худшее 1.0.
+// N=1 (единственный супервайзер в обычном ранжировании) -> 1.3, деление
+// на ноль недопустимо, обрабатывается отдельно.
+function assignSupervisorCoefficients(rows){
+  const normal = rows.filter(r => !r.is_na);
+  const n = normal.length;
+  normal.forEach(r => {
+    r.coefficient = n <= 1 ? SPECIAL_SUPERVISOR_COEFFICIENT : 1.3 - ((r.final_place - 1) / (n - 1)) * 0.3;
+  });
+  rows.filter(r => r.is_na).forEach(r => {
+    r.coefficient = SPECIAL_SUPERVISOR_COEFFICIENT;
+    r.statusLabel = specialSupervisorLabel(r.supervisor);
+  });
+}
+
 function computeSupervisorRating(groups){
   const groupStats = groups
     .filter(g => !g.isRegionUK && !g.isPeaks)
@@ -1566,7 +1603,9 @@ function computeSupervisorRating(groups){
     };
   }).filter(s => s.n_evaluated > 0);
 
-  return scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc}), () => false, "c1_sum");
+  const rows = scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc}), e => isSpecialSupervisor(e.supervisor), "c1_sum");
+  assignSupervisorCoefficients(rows);
+  return rows;
 }
 
 // Пересборка "Рейтинга супервайзеров" из уже сохранённых в Supabase строк
@@ -1592,7 +1631,9 @@ function computeSupervisorRatingFromRows(mainRows){
       time: avg("time"), errors_pct: avg("errors_pct"),
     };
   }).filter(Boolean);
-  return scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc}), () => false, "c1_sum");
+  const rows = scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc}), e => isSpecialSupervisor(e.supervisor), "c1_sum");
+  assignSupervisorCoefficients(rows);
+  return rows;
 }
 
 function toDbRow(e, isNovice){
@@ -2093,6 +2134,7 @@ function renderSupervisors(){
         <th colspan="2" class="block-end">% ошибок</th>
         <th rowspan="2">Сумма баллов</th>
         <th rowspan="2">Место</th>
+        <th rowspan="2">Коэффициент</th>
       </tr>
       <tr class="sub">
         <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
@@ -2123,7 +2165,8 @@ function renderSupervisors(){
       <td>${fmtTime(r.time)}</td><td class="block-end">${rankBadge(r.time_place, timeMap(r.time_place))}</td>
       <td>${fmtPct(r.errors_pct)}</td><td class="block-end">${rankBadge(r.errors_place, errMap(r.errors_place))}</td>
       <td>${fmt(r.total_score)}</td>
-      <td class="place-cell">${rankBadge(r.final_place, finalMap(r.final_place))}</td>
+      <td class="place-cell">${rankBadge(r.final_place, finalMap(r.final_place), r.statusLabel)}</td>
+      <td style="font-weight:700;">${fmt(r.coefficient)}</td>
     `;
     tbody.appendChild(tr);
   }
@@ -3536,6 +3579,13 @@ function buildGroupedMainSheet(){
 
 function buildSupervisorExportSheet(rows){
   const { rowA, rowB, totalCols } = categoryHeaderRows(["Супервайзер","Канал","Оценено/Всего"], false);
+  // "Коэффициент" — локальная, единственная для этого листа колонка (пока
+  // только отображение, см. computeSupervisorRating/assignSupervisorCoefficients),
+  // добавлена ТУТ, а не в общий categoryHeaderRows, чтобы не задеть листы
+  // "Рейтинг"/"Новички" — их эта задача не касается.
+  rowA.push("Коэффициент");
+  rowB.push("");
+  const finalCols = totalCols + 1;
   const sorted = sortByPlace(rows);
   const arr = sorted.map(r => [
     cleanSupervisorName(r.supervisor), r.channel === "inet" ? "Интернет" : "Радио+ТВ", `${r.n_evaluated}/${r.n_total}`,
@@ -3544,13 +3594,15 @@ function buildSupervisorExportSheet(rows){
     r.ch_cards ?? "", r.ch_sum, r.ch_check, r.ch_conv, r.ch_pc, r.ch_place,
     fmtTime(r.time), r.time_place,
     "", r.errors_pct, r.errors_place,
-    r.total_score, r.final_place,
+    r.total_score, r.statusLabel ?? r.final_place,
+    r.coefficient,
   ]);
   const ws = XLSX.utils.aoa_to_sheet([rowA, rowB, ...arr]);
   ws["!merges"] = categoryHeaderMerges(0, totalCols);
+  ws["!merges"].push({ s: { r: 0, c: finalCols - 1 }, e: { r: 1, c: finalCols - 1 } });
   applyPlaceGradients(ws, sorted, PLACE_COLS_SUP, 2);
-  styleHeaderRow(ws, totalCols, 0, "cat");
-  styleHeaderRow(ws, totalCols, 1, "sub");
+  styleHeaderRow(ws, finalCols, 0, "cat");
+  styleHeaderRow(ws, finalCols, 1, "sub");
   return ws;
 }
 
