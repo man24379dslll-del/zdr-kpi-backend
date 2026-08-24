@@ -366,6 +366,14 @@
           <span>Руководитель (ответственный)</span>
           <input type="text" id="payrollManager" value="Олефир Вадим">
         </label>
+        <label class="field" style="margin:0;">
+          <span>Норма часов (для доплаты за переработку)</span>
+          <input type="number" step="1" id="payrollHoursNorm" value="160">
+        </label>
+        <label class="field" style="margin:0;">
+          <span>Доплата за час переработки, ₽</span>
+          <input type="number" step="1" id="payrollOvertimeRate" value="150">
+        </label>
       </div>
       <div class="row" style="margin-top:14px;">
         <button class="btn btn-primary" id="buildPayrollBtn">Сформировать ведомость</button>
@@ -2800,24 +2808,39 @@ async function buildTwoStagePayroll(){
   const month = parseInt($("payrollMonth").value, 10);
   const stage = $("payrollStageToggle").querySelector(".active").dataset.stage;
   const year = new Date().getFullYear();
+  const hoursNorm = parseFloat($("payrollHoursNorm").value) || 0;
+  const overtimeRate = parseFloat($("payrollOvertimeRate").value) || 0;
 
-  const result = await apiGet("/payroll/two-stage", { month, stage, year });
+  const result = await apiGet("/payroll/two-stage", { month, stage, year, hours_norm: hoursNorm, overtime_rate: overtimeRate });
 
   const rows = result.rows.map(r => {
-    // penalty/premium — штраф/премия ЗА ЭТАП (не по неделям), только для
-    // stage="2"; backend уже вычёл/добавил их в r.sum, baseSum — сумма ДО
-    // корректировки, нужна, чтобы пересчитывать sum на лету при редактировании.
+    // penalty/premium/extraHours/shiftCount/shiftPay — правки ЗА ЭТАП (не по
+    // неделям), только для stage="2"; backend уже применил их к r.sum.
+    // weeklySum — сумма ЗП по неделям БЕЗ ЛЮБЫХ этапных корректировок (та же
+    // роль, что раньше игралась baseSum для штрафа/премии, расширена доп.
+    // часами/сменами) — нужна, чтобы пересчитывать "к выплате" на лету при
+    // редактировании, не делая новый запрос к API.
     const penalty = stage === "2" ? (r.penalty || 0) : null;
     const premium = stage === "2" ? (r.premium || 0) : null;
-    const baseSum = stage === "2" ? (r.sum + penalty - premium) : r.sum;
+    const extraHours = stage === "2" ? (r.extra_hours || 0) : null;
+    const shiftCount = stage === "2" ? (r.shift_count || 0) : null;
+    const shiftPay = stage === "2" ? (r.shift_pay || 0) : null;
+    const overtimePay = stage === "2" ? (r.overtime_pay || 0) : null;
+    const workHoursSum = stage === "2" ? (r.work_hours_sum || 0) : null;
+    const weeklySum = stage === "2" ? (r.sum - overtimePay - shiftPay + penalty - premium) : r.sum;
     return {
       fio: r.fio,
       supervisor: r.supervisor,
       status: r.status,
       sum: r.sum,
-      baseSum,
+      weeklySum,
       penalty,
       premium,
+      extraHours,
+      shiftCount,
+      shiftPay,
+      overtimePay,
+      workHoursSum,
       comment: r.comment || "",
       position: r.status || "",
       // TODO: реквизиты не подключены к backend (payment_requisites) — подключим отдельно
@@ -2830,7 +2853,7 @@ async function buildTwoStagePayroll(){
   });
 
   return {
-    rows, month, stage, year,
+    rows, month, stage, year, hoursNorm, overtimeRate,
     weeks: result.weeks,
     periodLabel: result.period_label_text,
     matchedUploads: result.matched_uploads,
@@ -2850,20 +2873,32 @@ function formatWeeksBreakdown(weeks){
     .join(" + ");
 }
 
-async function saveStageAdjustment(row, penaltyInput, premiumInput){
-  const penalty = parseFloat(penaltyInput.value) || 0;
-  const premium = parseFloat(premiumInput.value) || 0;
+async function saveStageAdjustment(row, inputs){
+  const penalty = parseFloat(inputs.penalty.value) || 0;
+  const premium = parseFloat(inputs.premium.value) || 0;
+  const extraHours = parseFloat(inputs.extraHours.value) || 0;
+  const shiftCount = parseFloat(inputs.shiftCount.value) || 0;
+  const shiftPay = parseFloat(inputs.shiftPay.value) || 0;
   const meta = currentPayrollMeta;
   try{
     await apiSend("PUT", "/payroll/stage-adjustment", {
-      month: meta.month, year: meta.year, fio: row.fio, penalty, premium,
+      month: meta.month, year: meta.year, fio: row.fio,
+      penalty, premium, extra_hours: extraHours, shift_count: shiftCount, shift_pay: shiftPay,
     });
     row.penalty = penalty;
     row.premium = premium;
-    row.sum = row.baseSum - penalty + premium;
+    row.extraHours = extraHours;
+    row.shiftCount = shiftCount;
+    row.shiftPay = shiftPay;
+    // Доплата за часы — ВЫЧИСЛЯЕМАЯ (зависит от extraHours), пересчитываем
+    // на лету так же, как это делает backend (см. services/payroll.py) —
+    // без нового запроса к API. shiftPay — уже готовая ручная сумма, просто
+    // прибавляется. shiftCount в формулу не входит (только справка).
+    row.overtimePay = (row.workHoursSum + extraHours - meta.hoursNorm) * meta.overtimeRate;
+    row.sum = row.weeklySum - penalty + premium + row.overtimePay + shiftPay;
     renderPayrollTable(); // локальный перерендер из уже загруженных данных, без сети/перезагрузки страницы
   } catch(err){
-    alert(`Не удалось сохранить штраф/премию для ${row.fio}: ${err.message}`);
+    alert(`Не удалось сохранить корректировку для ${row.fio}: ${err.message}`);
   }
 }
 
@@ -2890,10 +2925,10 @@ function renderPayrollTable(){
   visibleRows.forEach(r => { (byGroup[r.supervisor] ||= []).push(r); });
   const groupNames = Object.keys(byGroup).sort(compareGroupNames);
 
-  // Штраф/премия за этап — только для "Расчёт" (stage="2"), у "Аванса" этих
-  // полей вообще нет (ни как input, ни как текст).
+  // Штраф/премия/доп.часы/оплата за смены за этап — только для "Расчёт"
+  // (stage="2"), у "Аванса" этих полей вообще нет (ни как input, ни как текст).
   const showAdjustments = result.stage === "2";
-  const totalCols = showAdjustments ? 11 : 9;
+  const totalCols = showAdjustments ? 14 : 9;
 
   let globalIdx = 0;
   let html = "";
@@ -2903,7 +2938,7 @@ function renderPayrollTable(){
     html += `<div class="group-block">`;
     html += `<div class="group-title">${displayGroupName(gname)}<span class="count">${groupRows.length} чел. · ${fmt(Math.round(groupTotal))} ₽</span></div>`;
     html += `<div class="subtable-wrap"><table class="dyn-table"><thead><tr>
-      <th>№</th><th>ФИО</th><th>Должность</th><th>Комментарий</th><th>Способ оплаты</th><th>Реквизиты</th><th>Период начисления</th><th>Ставка</th><th>Аванс</th>${showAdjustments ? "<th>Штраф</th><th>Премия</th>" : ""}<th>Сумма начисления</th>
+      <th>№</th><th>ФИО</th><th>Должность</th><th>Комментарий</th><th>Способ оплаты</th><th>Реквизиты</th><th>Период начисления</th><th>Ставка</th><th>Аванс</th>${showAdjustments ? "<th>Штраф</th><th>Премия</th><th>Доп. часы</th><th>Кол-во смен</th><th>Оплата за смены</th>" : ""}<th>Сумма начисления</th>
     </tr></thead><tbody>`;
     groupRows.forEach(r => {
       globalIdx++;
@@ -2920,6 +2955,9 @@ function renderPayrollTable(){
         ${showAdjustments ? `
         <td><input type="number" step="0.01" class="payroll-penalty" value="${r.penalty || 0}" style="width:90px;"></td>
         <td><input type="number" step="0.01" class="payroll-premium" value="${r.premium || 0}" style="width:90px;"></td>
+        <td><input type="number" step="0.01" class="payroll-extra-hours" value="${r.extraHours || 0}" style="width:80px;" title="Может быть отрицательным (недоработка часов)"></td>
+        <td><input type="number" step="0.01" class="payroll-shift-count" value="${r.shiftCount || 0}" style="width:80px;" title="Только для справки — в сумму не входит"></td>
+        <td><input type="number" step="0.01" class="payroll-shift-pay" value="${r.shiftPay || 0}" style="width:90px;"></td>
         ` : ""}
         <td style="font-weight:800;color:var(--good);" title="${escapeHtml(formatWeeksBreakdown(r.weeks))}">
           ${fmt(Math.round(r.sum))}
@@ -2944,11 +2982,15 @@ function renderPayrollTable(){
     c.querySelectorAll("tr[data-fio]").forEach(tr => {
       const row = visibleRows.find(r => r.fio === tr.dataset.fio);
       if(!row) return;
-      const penaltyInput = tr.querySelector(".payroll-penalty");
-      const premiumInput = tr.querySelector(".payroll-premium");
-      const save = () => saveStageAdjustment(row, penaltyInput, premiumInput);
-      penaltyInput.addEventListener("blur", save);
-      premiumInput.addEventListener("blur", save);
+      const inputs = {
+        penalty: tr.querySelector(".payroll-penalty"),
+        premium: tr.querySelector(".payroll-premium"),
+        extraHours: tr.querySelector(".payroll-extra-hours"),
+        shiftCount: tr.querySelector(".payroll-shift-count"),
+        shiftPay: tr.querySelector(".payroll-shift-pay"),
+      };
+      const save = () => saveStageAdjustment(row, inputs);
+      Object.values(inputs).forEach(input => input.addEventListener("blur", save));
     });
   }
 }

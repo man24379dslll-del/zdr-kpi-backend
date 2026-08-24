@@ -207,3 +207,21 @@ create policy "ratings_select" on kpi_ratings
   for select using (
     is_admin_or_manager() OR supervisor = ANY(my_supervisor_names())
   );
+
+-- ============================================================
+-- Ведомость ЗП: доплата за часы + оплата за смены (поверх штрафа/премии)
+-- ============================================================
+-- Та же таблица payroll_stage_adjustments (тот же принцип: один раз на
+-- весь этап "Расчёт" — месяц/год/ФИО, не по неделям, применяется ТОЛЬКО
+-- к stage="2", см. services/payroll.py):
+--   extra_hours — ручные доп. часы, УЧАСТВУЮТ в формуле доплаты за
+--     переработку/недоработку (work_hours_за_этап + extra_hours −
+--     hours_norm) × overtime_rate
+--   shift_count — кол-во смен, ТОЛЬКО для справки рядом с суммой, в
+--     формулу итога НЕ входит
+--   shift_pay — готовая ИТОГОВАЯ сумма оплаты за смены, введена вручную
+--     (ставка за смену разная у разных людей, формулы "кол-во × ставка"
+--     внутри системы нет) — прибавляется к итогу как есть
+alter table payroll_stage_adjustments add column if not exists extra_hours numeric not null default 0;
+alter table payroll_stage_adjustments add column if not exists shift_count numeric not null default 0;
+alter table payroll_stage_adjustments add column if not exists shift_pay numeric not null default 0;

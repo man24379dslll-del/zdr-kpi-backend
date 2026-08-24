@@ -28,7 +28,8 @@ payroll_stage_adjustments (см. app/db/schema.sql) — штраф/премия 
 на весь этап (месяц, год, ФИО), не по неделям. Применяется ТОЛЬКО к
 stage="2" (Расчёт, недели 3-5) — у "Аванса" этих полей нет вообще, даже
 если stage_adjustments_by_fio передан, для stage="1" build_two_stage_payroll
-его игнорирует.
+его игнорирует. Та же таблица (те же 3 условия) хранит ещё 3 поля —
+доплату за часы и оплату за смены, см. ниже.
 
 payment_requisites (должность/реквизиты на человека) — намеренно НЕ
 подмешивается: таблицы в Python-версии ещё нет (сказали, что можно
@@ -38,6 +39,31 @@ period_label (например "7-1") не содержит год, поэтом
 отдельным параметром в format_payroll_period_label — это не бизнес-
 правило, а просто недостающий кусок данных, который period_label не
 кодирует.
+
+ДОПОЛНИТЕЛЬНЫЕ СЛАГАЕМЫЕ ИТОГА ЭТАПА (поверх существующей формулы —
+ничего в ней не меняется, только добавляется), оба ТОЛЬКО для stage="2":
+
+  доплата_за_часы = (work_hours_за_этап + extra_hours − hours_norm) × overtime_rate
+    - work_hours_за_этап — сумма work_hours из kpi_ratings по всем неделям
+      этапа (то же самое поле, что уже используется для часовой ставки
+      в services/salary.py — просто просуммировано по неделям этапа)
+    - extra_hours — ручное поле на весь этап (payroll_stage_adjustments,
+      как штраф/премия)
+    - hours_norm — ТОТ ЖЕ параметр, что и в services/salary.py
+      (DEFAULT_HOURS_NORM=160), передаётся вызывающей стороной, не
+      дублируется здесь как отдельная константа
+    - overtime_rate — настраиваемая ставка доплаты за час (по умолчанию
+      150), НЕ per-человек — общий параметр расчёта (как hours_norm),
+      не таблица
+    - Может быть ОТРИЦАТЕЛЬНОЙ (недоработка часов) — осознанно, не
+      защищаем от минуса.
+
+  оплата_за_смены (shift_pay) — ПОЛНОСТЬЮ ВРУЧНУЮ введённая ИТОГОВАЯ
+    сумма (ставка за смену разная у разных людей, формулы "кол-во ×
+    ставка" внутри системы нет) — ручное поле на весь этап, как штраф/
+    премия, прибавляется к итогу как есть. shift_count (кол-во смен) —
+    тоже ручное поле, но ТОЛЬКО для справки рядом с суммой, в саму
+    формулу итога НЕ входит.
 """
 from __future__ import annotations
 
@@ -45,6 +71,9 @@ import calendar
 import re
 
 from app.services.group_naming import display_group_name
+from app.services.salary import DEFAULT_HOURS_NORM
+
+DEFAULT_OVERTIME_RATE = 150
 
 WEEKS_BY_STAGE = {"1": (1, 2), "2": (3, 4, 5)}
 PERIOD_LABEL_RE = re.compile(r"^(\d+)-(\d+)$")
@@ -106,19 +135,28 @@ def build_two_stage_payroll(
     stage: str,
     year: int,
     stage_adjustments_by_fio: dict[str, dict] | None = None,
+    hours_norm: float = DEFAULT_HOURS_NORM,
+    overtime_rate: float = DEFAULT_OVERTIME_RATE,
 ) -> dict:
     """
     uploads: строки kpi_uploads (нужны id и period_label); можно передать
              как есть (уже отфильтрованными filter_uploads_for_stage, или
              нет — тут они переотфильтруются)
     ratings_by_upload_id: upload_id -> сырые строки kpi_ratings этой загрузки
+             (нужны salary И work_hours — последний для доплаты за часы)
     penalties_by_upload_id: upload_id -> {fio: сумма штрафа} из payroll_penalties
                              (по-недельный штраф, уже учтён в "sum" ниже)
-    stage_adjustments_by_fio: {fio: {"penalty":.., "premium":..}} из
-             payroll_stage_adjustments — по одному разу на весь этап.
-             Применяется ТОЛЬКО когда stage == '2' (Расчёт); для stage == '1'
-             (Аванс) полностью игнорируется, даже если передан — в rows не
-             появятся ключи 'penalty'/'premium' вовсе.
+    stage_adjustments_by_fio: {fio: {"penalty":.., "premium":.., "extra_hours":..,
+             "shift_count":.., "shift_pay":..}} из payroll_stage_adjustments —
+             по одному разу на весь этап. Применяется ТОЛЬКО когда stage == '2'
+             (Расчёт); для stage == '1' (Аванс) полностью игнорируется, даже
+             если передан — в rows не появятся эти ключи вовсе.
+    hours_norm: та же настройка, что в services/salary.py — импортируется
+             оттуда же (DEFAULT_HOURS_NORM), не дублируется тут как
+             отдельная константа. Нужна только для доплаты за часы
+             (stage == '2'); при stage == '1' не используется.
+    overtime_rate: ставка доплаты за час переработки/недоработки (см.
+             докстринг модуля) — по умолчанию DEFAULT_OVERTIME_RATE (150).
     """
     matching_uploads = filter_uploads_for_stage(uploads, month, stage)
 
@@ -137,12 +175,14 @@ def build_two_stage_payroll(
             entry = acc.setdefault(fio, {
                 "fio": fio, "supervisor": None, "status": None, "sum": 0.0, "penalty_sum": 0.0,
                 "weeks": {},  # period_label -> сумма ЗП этой недели (net, за вычетом по-недельного штрафа)
+                "work_hours_sum": 0.0,
             })
             entry["sum"] += net
             entry["penalty_sum"] += penalty
             entry["supervisor"] = r.get("supervisor")
             entry["status"] = r.get("status")
             entry["weeks"][period_label] = entry["weeks"].get(period_label, 0.0) + net
+            entry["work_hours_sum"] += r.get("work_hours") or 0
 
     rows = list(acc.values())
     for entry in rows:
@@ -163,9 +203,24 @@ def build_two_stage_payroll(
             adjustment = (stage_adjustments_by_fio or {}).get(entry["fio"], {})
             penalty = adjustment.get("penalty") or 0
             premium = adjustment.get("premium") or 0
+            extra_hours = adjustment.get("extra_hours") or 0
+            shift_count = adjustment.get("shift_count") or 0
+            shift_pay = adjustment.get("shift_pay") or 0
+            overtime_pay = (entry["work_hours_sum"] + extra_hours - hours_norm) * overtime_rate
+
             entry["penalty"] = penalty
             entry["premium"] = premium
-            entry["sum"] = entry["sum"] - penalty + premium
+            entry["extra_hours"] = extra_hours
+            entry["shift_count"] = shift_count
+            entry["shift_pay"] = shift_pay
+            entry["overtime_pay"] = overtime_pay
+            entry["sum"] = entry["sum"] - penalty + premium + overtime_pay + shift_pay
+            # work_hours_sum остаётся в ответе ТОЛЬКО для stage="2" — фронтенду
+            # нужен этот компонент, чтобы пересчитывать overtime_pay на лету
+            # при редактировании extra_hours, не делая новый запрос к API
+            # (см. static/index.html::saveStageAdjustment).
+        else:
+            del entry["work_hours_sum"]
 
     rows.sort(key=lambda e: (display_group_name(e["supervisor"]), e["fio"]))
 
