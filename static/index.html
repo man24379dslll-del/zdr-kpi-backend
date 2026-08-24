@@ -2940,7 +2940,7 @@ function renderPayrollTable(){
         <td style="font-family:var(--sans);">${result.periodLabel}</td>
         <td><input type="number" step="0.01" class="payroll-penalty" value="${r.penalty || 0}" style="width:90px;"></td>
         <td><input type="number" step="0.01" class="payroll-premium" value="${r.premium || 0}" style="width:90px;"></td>
-        <td style="font-family:var(--sans);text-align:center;" title="Автосумма из файла — только для справки, в сумму не входит">${r.shiftCount || 0}</td>
+        <td style="font-family:var(--sans);text-align:center;" title="Автосумма из файла — только для справки, в сумму не входит">${fmt(r.shiftCount || 0)}</td>
         <td><input type="number" step="0.01" class="payroll-shift-pay" value="${r.shiftPay || 0}" style="width:90px;"></td>
         <td style="font-weight:800;color:var(--good);" title="${escapeHtml(formatWeeksBreakdown(r.weeks))}">
           ${fmt(Math.round(r.sum))}
