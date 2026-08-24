@@ -278,8 +278,10 @@ def test_overtime_pay_positive_when_hours_exceed_norm():
     assert row["sum"] == 1000 + 750
 
 
-def test_overtime_pay_negative_when_hours_below_norm():
-    # Осознанно НЕ защищаем от минуса — недоработка уменьшает итог.
+def test_overtime_pay_clamped_to_zero_when_hours_below_norm():
+    # Недоработку по часам людям в минус не ставим — доплата просто 0,
+    # itog не уменьшается (штраф за недоработку — отдельная ручная
+    # история через поле "Штраф", не автоматика по часам).
     uploads = [{"id": "u7-3", "period_label": "7-3"}]
     ratings_by_upload = {
         "u7-3": [{"fio": "Иванов И.И.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 1000, "work_hours": 30}],
@@ -288,9 +290,8 @@ def test_overtime_pay_negative_when_hours_below_norm():
         uploads, ratings_by_upload, {}, periods=["7-3"], year=2026, hours_norm=40, overtime_rate=150,
     )
     row = result["rows"][0]
-    assert row["overtime_pay"] == (30 - 40) * 150  # = -1500
-    assert row["overtime_pay"] < 0
-    assert row["sum"] == 1000 - 1500
+    assert row["overtime_pay"] == 0
+    assert row["sum"] == 1000
 
 
 def test_overtime_pay_zero_when_hours_exactly_match_norm():
