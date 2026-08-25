@@ -634,6 +634,15 @@ function onLoggedIn(){
   const roleLabel = { admin: "Администратор", manager: "Руководитель", supervisor: "Супервайзер" }[profile.role] || profile.role;
   $("whoAmI").textContent = `${profile.display_name || session.email} · ${roleLabel}`;
 
+  // Панель "Моя группа" (buildSupervisorViewer) вставляется в DOM динамически
+  // и не удаляется сама при выходе — без этой очистки повторный вход в той
+  // же вкладке (или вход другой ролью следом за supervisor) оставлял бы
+  // старый узел висеть в #wrap, накапливая дубликаты. Чистим здесь, ДО
+  // ветвления по роли — актуально для обеих ролей: и при повторном входе
+  // супервайзером, и при переключении с supervisor на admin/manager.
+  const staleViewer = document.getElementById("supervisorViewerPanel");
+  if(staleViewer) staleViewer.remove();
+
   if(profile.role === "supervisor"){
     // супервайзер: только просмотр своей группы, без загрузки файлов и БЕЗ
     // доступа к ведомости ЗП (ни просмотр, ни скачивание) — ни на экране,
@@ -672,7 +681,14 @@ function dbRowToDisplayRow(r){
 }
 
 async function buildSupervisorViewer(){
+  // Идемпотентность на случай прямого повторного вызова (защита от
+  // накопления дублей в дополнение к очистке в onLoggedIn выше) — панель
+  // всегда пересоздаётся с нуля, а не вставляется поверх старой.
+  const existingPanel = document.getElementById("supervisorViewerPanel");
+  if(existingPanel) existingPanel.remove();
+
   const panel = document.createElement("div");
+  panel.id = "supervisorViewerPanel";
   panel.className = "panel";
   panel.innerHTML = `
     <h2>Моя группа</h2>
