@@ -468,6 +468,8 @@
     <label class="field" id="dayPeriodField" style="display:none;">
       <span>Дата отчёта</span>
       <input type="date" id="periodDate" class="period-select" style="width:auto;">
+      <div id="occupiedDaysHint" style="margin-top:8px;font-size:12px;color:var(--muted);"></div>
+      <div id="occupiedDaysChips" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;"></div>
     </label>
 
     <div id="existingPeriodNotice" style="display:none;background:var(--accent-dim);border:1px solid var(--accent);border-radius:10px;padding:12px 16px;margin-bottom:18px;font-size:13.5px;"></div>
@@ -667,9 +669,12 @@ async function buildSupervisorViewer(){
   panel.className = "panel";
   panel.innerHTML = `
     <h2>Моя группа</h2>
-    <div class="chan-toggle" id="viewerTypeToggle" style="display:inline-flex;margin-bottom:16px;">
-      <button type="button" data-type="week" class="active">Недельный</button>
-      <button type="button" data-type="day">Ежедневный</button>
+    <div class="row" style="gap:14px;flex-wrap:wrap;margin-bottom:16px;align-items:center;">
+      <div class="chan-toggle" id="viewerTypeToggle" style="display:inline-flex;">
+        <button type="button" data-type="week" class="active">Недельный</button>
+        <button type="button" data-type="day">Ежедневный</button>
+      </div>
+      <select id="viewerPeriodSelect" class="period-select" style="min-width:220px;"></select>
     </div>
     <div id="viewerLog" class="log"></div>
     <div id="viewerContainer"></div>
@@ -677,6 +682,28 @@ async function buildSupervisorViewer(){
   $("wrap").insertBefore(panel, $("channelPanel"));
   $("channelPanel").style.display = "none";
   $("resultsPanel").style.display = "none";
+
+  // Список периодов (недель/дней), за которые реально есть загрузка —
+  // тот же принцип, что у #dashPeriodSelect в дашбордах админа/руководителя
+  // (populateDashPeriodSelect): дропдаун по построению содержит ТОЛЬКО
+  // периоды с данными, поэтому отдельная "подсветка занятых дат" тут не
+  // нужна — раскрывающийся список сам по себе уже это гарантирует (в
+  // отличие от нативного календаря/date-picker, где такой гарантии нет).
+  let viewerUploadsDesc = []; // от новых к старым
+
+  async function populatePeriodSelect(vType){
+    const uploads = await fetchAllUploads(vType); // по возрастанию
+    viewerUploadsDesc = [...uploads].reverse();
+    const sel = panel.querySelector("#viewerPeriodSelect");
+    sel.innerHTML = "";
+    viewerUploadsDesc.forEach(u => {
+      const opt = document.createElement("option");
+      opt.value = u.id;
+      const when = u.uploaded_at ? new Date(u.uploaded_at).toLocaleDateString("ru") : "";
+      opt.textContent = `${u.period_label}${when ? " · загружен " + when : ""}`;
+      sel.appendChild(opt);
+    });
+  }
 
   async function load(){
     const vType = panel.querySelector("#viewerTypeToggle .active").dataset.type;
@@ -687,11 +714,12 @@ async function buildSupervisorViewer(){
     containerEl.innerHTML = "";
     log("Загружаю данные вашей группы…", null, logEl2);
     try{
-      const latest = await fetchLatestUpload(vType);
-      if(!latest){
+      if(!viewerUploadsDesc.length){
         log("Пока нет ни одной загрузки такого типа.", "warn", logEl2);
         return;
       }
+      const selectedId = panel.querySelector("#viewerPeriodSelect").value;
+      const latest = viewerUploadsDesc.find(u => u.id === selectedId) || viewerUploadsDesc[0];
       const rowsRaw = await sbGet(`kpi_ratings?upload_id=eq.${latest.id}&select=*`);
       const rows = rowsRaw.map(dbRowToDisplayRow);
 
@@ -716,12 +744,15 @@ async function buildSupervisorViewer(){
   }
 
   panel.querySelector("#viewerTypeToggle").querySelectorAll("button").forEach(btn => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
       panel.querySelector("#viewerTypeToggle").querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
+      await populatePeriodSelect(btn.dataset.type);
       load();
     });
   });
+  panel.querySelector("#viewerPeriodSelect").addEventListener("change", load);
 
+  await populatePeriodSelect("week");
   load();
 }
 
@@ -789,9 +820,45 @@ $("periodTypeToggle").querySelectorAll("button").forEach(btn => {
     $("periodTypeToggle").querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
     $("weekPeriodField").style.display = periodType === "week" ? "block" : "none";
     $("dayPeriodField").style.display = periodType === "day" ? "block" : "none";
+    if(periodType === "day") loadOccupiedDaysChips();
     checkExistingPeriod();
   });
 });
+
+// Чипы с уже занятыми датами (дневные загрузки) под #periodDate — нативный
+// <input type="date"> не умеет подсвечивать конкретные даты в самом
+// календаре (ограничение платформы), поэтому вместо этого показываем
+// список кликабельных чипов рядом с полем.
+async function loadOccupiedDaysChips(){
+  const chipsEl = $("occupiedDaysChips");
+  const hintEl = $("occupiedDaysHint");
+  chipsEl.innerHTML = "";
+  hintEl.textContent = "Загружаю даты с данными…";
+  try{
+    const uploads = await fetchAllUploads("day"); // по возрастанию
+    if(!uploads.length){
+      hintEl.textContent = "Пока нет ни одной дневной загрузки.";
+      return;
+    }
+    hintEl.textContent = "Есть данные за:";
+    [...uploads].reverse().forEach(u => { // от новых к старым
+      const m = /^\d{4}-(\d{2})-(\d{2})$/.exec(u.period_label);
+      if(!m) return;
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.textContent = `${parseInt(m[2], 10)} ${MONTHS[parseInt(m[1], 10) - 1].slice(0, 3)}`;
+      chip.title = u.period_label;
+      chip.style.cssText = "font-family:var(--mono);font-size:12px;font-weight:700;color:var(--accent-text);background:var(--accent-dim);border:none;padding:4px 10px;border-radius:14px;cursor:pointer;";
+      chip.addEventListener("click", () => {
+        $("periodDate").value = u.period_label;
+        checkExistingPeriod();
+      });
+      chipsEl.appendChild(chip);
+    });
+  } catch(err){
+    hintEl.textContent = "";
+  }
+}
 function currentPeriodValue(){
   if(periodType === "day") return $("periodDate").value;
   return `${$("periodMonth").value}-${$("periodWeek").value}`;
