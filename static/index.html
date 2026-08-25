@@ -1581,7 +1581,7 @@ function assignSupervisorCoefficients(rows){
 
 function computeSupervisorRating(groups){
   const groupStats = groups
-    .filter(g => !g.isRegionUK && !g.isPeaks)
+    .filter(g => !isSpecialGroup(g.supervisor))
     .map(g => {
     const channel = groupChannels[g.supervisor] || "radio";
     const evaluated = g.employees.filter(e => !isNaMain(e));
@@ -1618,7 +1618,7 @@ function computeSupervisorRating(groups){
 function computeSupervisorRatingFromRows(mainRows){
   const bySupervisor = {};
   for(const r of mainRows){
-    if(/операторы\s+без\s+супервизора/i.test(r.supervisor)) continue;
+    if(isSpecialGroup(r.supervisor)) continue;
     (bySupervisor[r.supervisor] ||= []).push(r);
   }
   const groupStats = Object.keys(bySupervisor).map(sup => {
@@ -1907,8 +1907,15 @@ function displayGroupName(supervisor){
   if(/операторы\s+без\s+супервизора/i.test(supervisor)) return "Регион УК";
   return cleanSupervisorName(supervisor);
 }
+// "Васько" — обычная отдельная группа (своя строка "ГРУППА:", НЕ часть
+// "операторы без супервизора"), но административно та же обработка, что у
+// Регион УК/Пики: в самом низу списка/таблицы и не участвует в "Рейтинге
+// супервайзеров" (см. computeSupervisorRating/computeSupervisorRatingFromRows
+// ниже). Сам расчёт внутри группы — ОБЫЧНЫЙ (полный набор категорий, обычная
+// формула ЗП), это только сортировка/исключение из общего сравнения.
+const VASKO_RE = /васько/i;
 function isSpecialGroup(supervisor){
-  return /операторы\s+без\s+супервизора/i.test(supervisor || "");
+  return /операторы\s+без\s+супервизора/i.test(supervisor || "") || VASKO_RE.test(supervisor || "");
 }
 // Обычные группы по алфавиту, "Регион УК"/"ПП"/"Увеличители" — всегда в самом конце
 function compareGroupNames(a, b){
