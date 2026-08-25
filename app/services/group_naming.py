@@ -77,5 +77,9 @@ def display_group_name(supervisor: str | None) -> str:
     if PEAKS_UVELICHITELI_GROUP_RE.search(supervisor):
         return "Увеличители"
     if REGION_UK_GROUP_RE.search(supervisor):
-        return "Регион УК"
+        # Отображаемое название переименовано ("Регион УК" -> "Уволенные/
+        # Нераспределенные") — сама группа/регулярка/особое поведение
+        # (низ списка, исключение из рейтинга супервайзеров, урезанный
+        # набор категорий) не изменились, поменялась только эта строка.
+        return "Уволенные/Нераспределенные"
     return clean_supervisor_name(supervisor)

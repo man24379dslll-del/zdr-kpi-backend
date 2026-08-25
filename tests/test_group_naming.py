@@ -19,13 +19,13 @@ def test_normal_supervisor_is_not_region_uk():
 
 
 def test_display_group_name_maps_virtual_groups():
-    assert display_group_name("операторы без супервизора") == "Регион УК"
+    assert display_group_name("операторы без супервизора") == "Уволенные/Нераспределенные"
     assert display_group_name("операторы без супервизора [Пики-ПП]") == "ПП"
     assert display_group_name("операторы без супервизора [Пики-Увеличители]") == "Увеличители"
 
 
 def test_display_group_name_is_case_insensitive():
-    assert display_group_name("ОПЕРАТОРЫ БЕЗ СУПЕРВИЗОРА") == "Регион УК"
+    assert display_group_name("ОПЕРАТОРЫ БЕЗ СУПЕРВИЗОРА") == "Уволенные/Нераспределенные"
     assert display_group_name("Операторы Без Супервизора [пики-пп]") == "ПП"
     assert display_group_name("Операторы Без Супервизора [пики-увеличители]") == "Увеличители"
 

@@ -1904,7 +1904,7 @@ function cleanSupervisorName(name){
 function displayGroupName(supervisor){
   if(/операторы\s+без\s+супервизора\s*\[Пики-ПП\]/i.test(supervisor)) return "ПП";
   if(/операторы\s+без\s+супервизора\s*\[Пики-Увеличители\]/i.test(supervisor)) return "Увеличители";
-  if(/операторы\s+без\s+супервизора/i.test(supervisor)) return "Регион УК";
+  if(/операторы\s+без\s+супервизора/i.test(supervisor)) return "Уволенные/Нераспределенные";
   return cleanSupervisorName(supervisor);
 }
 // "Васько" — обычная отдельная группа (своя строка "ГРУППА:", НЕ часть
@@ -2575,7 +2575,7 @@ async function renderDashSummary(){
   let html = `<div style="margin-bottom:14px;color:var(--muted);font-size:13px;">Период: <b style="color:var(--text);">${latest.period_label}</b>${prev ? ` (сравнение с ${prev.period_label})` : ""}</div>`;
   html += `<div class="stats">`;
   html += statCard(s.total_in_rating, "всего в рейтинге");
-  html += statCard(s.without_region_uk, "без Регион УК / Пиков");
+  html += statCard(s.without_region_uk, "без Уволенные/Нераспределенные / Пиков");
   html += statCard(s.evaluated_count, "оценено (не Н/О)");
   html += statCard((s.avg_score ?? 0).toFixed(1), "средний балл");
   if(vType === "week") html += statCard(fmt(Math.round(s.salary_fund ?? 0)), "фонд ЗП, ₽");
