@@ -635,10 +635,17 @@ function onLoggedIn(){
   $("whoAmI").textContent = `${profile.display_name || session.email} · ${roleLabel}`;
 
   if(profile.role === "supervisor"){
-    // супервайзер: только просмотр своей группы, без загрузки файлов
+    // супервайзер: только просмотр своей группы, без загрузки файлов и БЕЗ
+    // доступа к ведомости ЗП (ни просмотр, ни скачивание) — ни на экране,
+    // ни на бэкенде (GET /payroll/flexible — admin/manager-only, см.
+    // routers/payroll.py). "Скачать Excel" рейтинга при этом ДОСТУПЕН —
+    // см. buildSupervisorViewer, экспортирует только их же уже
+    // отфильтрованные RLS-ом данные.
     $("adminOnlyPanel1").style.display = "none";
     $("openConstructorBtn").style.display = "none";
-    $("pageTitle").textContent = "Моя группа — рейтинг и ЗП";
+    $("openPayrollBtn").style.display = "none";
+    $("openRequisitesBtn").style.display = "none";
+    $("pageTitle").textContent = "Моя группа — рейтинг";
     $("pageSub").textContent = "Здесь показаны только сотрудники вашей группы. Данные обновляет администратор/руководитель после загрузки очередного отчёта.";
     buildSupervisorViewer();
   } else {
@@ -675,6 +682,7 @@ async function buildSupervisorViewer(){
         <button type="button" data-type="day">Ежедневный</button>
       </div>
       <select id="viewerPeriodSelect" class="period-select" style="min-width:220px;"></select>
+      <button class="btn btn-ghost" id="viewerExportBtn" style="padding:7px 14px;font-size:12.5px;">Скачать Excel</button>
     </div>
     <div id="viewerLog" class="log"></div>
     <div id="viewerContainer"></div>
@@ -690,6 +698,7 @@ async function buildSupervisorViewer(){
   // нужна — раскрывающийся список сам по себе уже это гарантирует (в
   // отличие от нативного календаря/date-picker, где такой гарантии нет).
   let viewerUploadsDesc = []; // от новых к старым
+  let currentViewerPeriodLabel = null; // для имени файла при экспорте
 
   async function populatePeriodSelect(vType){
     const uploads = await fetchAllUploads(vType); // по возрастанию
@@ -734,6 +743,7 @@ async function buildSupervisorViewer(){
 
       currentRows = rows.filter(r => !r.is_novice);
       currentNoviceRows = rows.filter(r => r.is_novice);
+      currentViewerPeriodLabel = latest.period_label;
 
       clearLog(logEl2);
       log(`Период: ${latest.period_label} · сотрудников: ${currentRows.length}`, "ok", logEl2);
@@ -742,6 +752,21 @@ async function buildSupervisorViewer(){
       log("Ошибка: " + err.message, "err", logEl2);
     }
   }
+
+  // "Скачать Excel" — то же самое, что уже видно на экране (buildDetailTable
+  // выше), просто в файле: рейтинг + новички ТОЛЬКО по группе(ам)
+  // супервайзера — currentRows/currentNoviceRows уже отфильтрованы RLS-ом
+  // на бэкенде при загрузке (load() выше), дополнительно фильтровать не
+  // нужно. Лист "Супервайзеры" (сравнение между ВСЕМИ группами компании,
+  // см. exportBtn в админ-панели) сюда НЕ включаем — это межгрупповое
+  // сравнение, супервайзер его и на экране не видит.
+  panel.querySelector("#viewerExportBtn").addEventListener("click", () => {
+    if(!currentRows || !currentRows.length) return;
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, buildGroupedMainSheet(), "Рейтинг");
+    XLSX.utils.book_append_sheet(wb, buildExportSheet(currentNoviceRows, true), "Новички");
+    XLSX.writeFile(wb, `Рейтинг_${currentViewerPeriodLabel}.xlsx`);
+  });
 
   panel.querySelector("#viewerTypeToggle").querySelectorAll("button").forEach(btn => {
     btn.addEventListener("click", async () => {
