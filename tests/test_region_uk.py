@@ -1,11 +1,13 @@
 """
-"Регион УК" / "ПП" / "Увеличители" — разбиение группы "операторы без
-супервизора" по префиксу ФИО ("ЗДР" -> Регион УК, "ПП" -> ПП,
-"Увеличители" -> Увеличители, каждая своя отдельная группа со своим
-рейтингом/ЛГ — "ПП" и "Увеличители" раньше были одной общей группой
-"Пики", разделены по прямому запросу заказчика) и урезанный набор
-категорий (c1/lk/time) для "Регион УК" в total_score. Тест собирает
-небольшой реалистичный xlsx и проверяет и парсинг, и расчёт.
+"Регион УК" (Уволенные/Нераспределенные) / "ПП" / "Увеличители" —
+разбиение группы "операторы без супервизора" по префиксу ФИО ("ЗДР" ->
+Регион УК, "ПП" -> ПП, "Увеличители" -> Увеличители, каждая своя
+отдельная группа со своим рейтингом/ЛГ — "ПП" и "Увеличители" раньше
+были одной общей группой "Пики", разделены по прямому запросу
+заказчика), урезанный набор категорий (c1/lk/time) для "Регион УК" в
+total_score, и зеркальный случай для "ПП"/"Увеличители" (total_score
+ТОЛЬКО по channel). Тест собирает небольшой реалистичный xlsx и
+проверяет и парсинг, и расчёт.
 """
 import io
 
@@ -130,7 +132,7 @@ def test_normal_groups_are_unaffected_by_region_uk_logic():
     assert employees[0]["is_region_uk"] is False
 
 
-def test_region_uk_total_score_excludes_channel_and_errors():
+def test_region_uk_and_peaks_have_mirrored_score_key_restrictions():
     raw = _build_excel_bytes(ROWS)
     employees = parse_weekly_rating_excel(raw)
     results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
@@ -144,8 +146,19 @@ def test_region_uk_total_score_excludes_channel_and_errors():
     assert set(fedotova.scores.keys()) == {"c1", "lk", "time"}
     assert fedotova.total_score == fedotova.scores["c1"] + fedotova.scores["lk"] + fedotova.scores["time"]
 
-    kozlov = by_fio["ПП Козлов А. А."]  # "ПП" -> полный набор категорий, как у обычных групп
-    assert set(kozlov.scores.keys()) == {"c1", "lk", "channel", "time", "errors"}
+    kozlov = by_fio["ПП Козлов А. А."]  # "ПП" -> total_score ТОЛЬКО по каналу
+    # Места по остальным категориям всё равно посчитаны (нужны тиру ЛК,
+    # видны в таблице) ...
+    assert "c1" in kozlov.places
+    assert "time" in kozlov.places
+    assert "errors" in kozlov.places
+    # ... но НЕ идут в total_score
+    assert set(kozlov.scores.keys()) == {"channel"}
+    assert kozlov.total_score == kozlov.scores["channel"]
+
+    uvelichiteli = by_fio["Увеличители Орлов О. О."]  # "Увеличители" -> тот же принцип
+    assert set(uvelichiteli.scores.keys()) == {"channel"}
+    assert uvelichiteli.total_score == uvelichiteli.scores["channel"]
 
 
 def test_region_uk_pp_and_uvelichiteli_get_separate_ladder_groups():

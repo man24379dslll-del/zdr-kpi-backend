@@ -1363,7 +1363,14 @@ function computeMainRating(groups, prevCoeffMap, tierCoefficients){
   const out = [];
   for(const g of groups){
     const channel = groupChannels[g.supervisor] || "radio";
-    const active = g.isRegionUK ? { c1:true, lk:true, ch:false, time:true, errors:false } : undefined;
+    // "ПП"/"Увеличители" (g.isPeaks) — total_score ТОЛЬКО по каналу, места
+    // по остальным 4 категориям по-прежнему считаются и показываются в
+    // таблице, просто не входят в сумму (тот же принцип, что у Региона УК
+    // выше, набор категорий другой — см. group_naming.py::PEAKS_SCORE_KEYS
+    // в Python-версии).
+    const active = g.isRegionUK ? { c1:true, lk:true, ch:false, time:true, errors:false }
+      : g.isPeaks ? { c1:false, lk:false, ch:true, time:false, errors:false }
+      : undefined;
     const scored = scoreSlice(g.employees, e => channelFields(e, channel), isNaMain, "c1_sum", true, active);
     out.push(...scored.map(e => ({...e, supervisor: g.supervisor, channel, isRegionUK: !!g.isRegionUK, isPeaks: !!g.isPeaks})));
   }
