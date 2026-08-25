@@ -706,6 +706,7 @@ async function buildSupervisorViewer(){
   $("wrap").insertBefore(panel, $("channelPanel"));
   $("channelPanel").style.display = "none";
   $("resultsPanel").style.display = "none";
+  $("wrap").classList.add("wide"); // та же ширина, что у основной таблицы "По группам" (renderResults)
 
   // Список периодов (недель/дней), за которые реально есть загрузка —
   // тот же принцип, что у #dashPeriodSelect в дашбордах админа/руководителя
@@ -763,7 +764,11 @@ async function buildSupervisorViewer(){
 
       clearLog(logEl2);
       log(`Период: ${latest.period_label} · сотрудников: ${currentRows.length}`, "ok", logEl2);
-      containerEl.appendChild(buildDetailTable(currentRows, false, vType === "week", null, false, true));
+      // hideFinalPay=true — супервайзер не видит бонусы и итоговую ЗП
+      // (0.75% за офор., 2% за дост., ЗП), но видит ЛГ/коэффициенты/часы/
+      // смены как есть. Сам расчёт не меняется, только видимость колонок
+      // в таблице (см. buildDetailTable/detailTableHead).
+      containerEl.appendChild(buildDetailTable(currentRows, false, vType === "week", null, false, true, true));
     } catch(err){
       log("Ошибка: " + err.message, "err", logEl2);
     }
@@ -2079,7 +2084,7 @@ function rankBadge(value, hex, extraText){
   return `<span class="rank-badge" style="background:${bg};color:${fg};">${value}</span>`;
 }
 
-function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showDelta){
+function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay){
   return `
     <thead>
       <tr class="cat">
@@ -2094,7 +2099,7 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
         <th rowspan="2">Сумма баллов</th>
         <th rowspan="2">Место</th>
         ${showDelta ? `<th rowspan="2" class="${showTier ? '' : 'block-end'}">Δ к пред. периоду</th>` : ``}
-        ${showTier ? `<th rowspan="2">ЛГ</th><th rowspan="2">Коэфф. (эта неделя)</th><th rowspan="2">Коэфф. пред. недели (в ЗП)</th><th rowspan="2">Рабочее время, ч</th><th rowspan="2">Кол-во смен</th><th rowspan="2">${escapeHtml(bonusColumnLabels.bonus075)}</th><th rowspan="2">${escapeHtml(bonusColumnLabels.bonus2)}</th><th rowspan="2">ЗП</th>` : ``}
+        ${showTier ? `<th rowspan="2">ЛГ</th><th rowspan="2">Коэфф. (эта неделя)</th><th rowspan="2">Коэфф. пред. недели (в ЗП)</th><th rowspan="2">Рабочее время, ч</th><th rowspan="2">Кол-во смен</th>${hideFinalPay ? `` : `<th rowspan="2">${escapeHtml(bonusColumnLabels.bonus075)}</th><th rowspan="2">${escapeHtml(bonusColumnLabels.bonus2)}</th><th rowspan="2">ЗП</th>`}` : ``}
         ${showConvStatus ? `<th rowspan="2">Статус по сумме с контакта</th>` : ``}
       </tr>
       <tr class="sub">
@@ -2107,13 +2112,13 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
     </thead>`;
 }
 
-function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvStatus, showDelta){
+function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay){
   const sorted = sortByPlace(rows);
   const wrap = document.createElement("div");
   wrap.className = "subtable-wrap";
   const table = document.createElement("table");
   table.className = "detail";
-  table.innerHTML = detailTableHead(showGroupCol, showTier, channelLabel, showConvStatus, showDelta) + `<tbody></tbody>`;
+  table.innerHTML = detailTableHead(showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay) + `<tbody></tbody>`;
   const tbody = table.querySelector("tbody");
 
   const c1Map = gradientMap(rows, "c1_place");
@@ -2139,7 +2144,7 @@ function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvSt
       <td>${fmt(r.total_score)}</td>
       <td class="place-cell">${r.is_na ? "Н/О" : rankBadge(r.final_place, finalMap(r.final_place))}</td>
       ${showDelta ? `<td class="${showTier ? '' : 'block-end'}">${deltaBadge(r.deltaPlace)}</td>` : ``}
-      ${showTier ? `<td>${r.tier ?? ""}</td><td style="font-weight:700;">${r.coefficient ?? ""}</td><td>${r.salaryCoeffUsed ?? ""}${r.salaryCoeffFromPrev ? "" : " (по умолч.)"}</td><td>${fmtCards(r.work_hours)}</td><td>${fmtCards(r.shift_count)}</td><td>${fmtCards(r.bonus075)}</td><td>${fmtCards(r.bonus2)}</td><td style="font-weight:800;color:var(--good);">${fmt(r.salary)}</td>` : ``}
+      ${showTier ? `<td>${r.tier ?? ""}</td><td style="font-weight:700;">${r.coefficient ?? ""}</td><td>${r.salaryCoeffUsed ?? ""}${r.salaryCoeffFromPrev ? "" : " (по умолч.)"}</td><td>${fmtCards(r.work_hours)}</td><td>${fmtCards(r.shift_count)}</td>${hideFinalPay ? `` : `<td>${fmtCards(r.bonus075)}</td><td>${fmtCards(r.bonus2)}</td><td style="font-weight:800;color:var(--good);">${fmt(r.salary)}</td>`}` : ``}
       ${showConvStatus ? `<td>${convBadge(r.c1_pc)}</td>` : ``}
     `;
     tbody.appendChild(tr);
