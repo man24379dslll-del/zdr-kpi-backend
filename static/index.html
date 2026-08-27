@@ -2953,18 +2953,22 @@ function buildLevelsTableRow(entry, isTotal){
     <td>${fmtLevelAvg(entry.final_place_avg)}</td>
     <td>${fmtLevelAvg(entry.tier_avg)}</td><td>${fmtLevelAvg(entry.coefficient_avg, 2)}</td><td>${fmtLevelAvg(entry.prev_week_coefficient_avg, 2)}</td>
     <td>${fmtLevelSum(entry.work_hours)}</td><td>${fmtLevelSum(entry.shift_count)}</td>
-    <td>${fmtLevelSum(entry.bonus075)}</td><td>${fmtLevelSum(entry.bonus2)}</td>
-    <td style="font-weight:800;color:var(--good);">${fmtLevelSum(entry.salary)} ${dc("salary", "", false)}</td>
   </tr>`;
 }
 
 function buildLevelsSection(upload, data){
   const wrap = document.createElement("div");
-  wrap.style.marginBottom = "40px";
+  // Чёткая граница между блоками разных периодов — толстая линия сверху +
+  // отступ + подсвеченная "шапка" с названием среза, чтобы при быстром
+  // скролле сразу было видно, где кончается одна неделя и начинается
+  // следующая.
+  wrap.style.cssText = "margin-bottom:32px;padding-top:28px;border-top:3px solid var(--accent);";
   const groupsText = data.included_groups.length ? data.included_groups.map(escapeHtml).join(", ") : "—";
 
-  let html = `<div class="sub-title" style="margin-top:10px;">Срез: ${escapeHtml(upload.period_label)}</div>`;
-  html += `<div style="font-size:12.5px;color:var(--muted);margin:4px 0 10px;">Учтены только группы: ${groupsText}</div>`;
+  let html = `<div style="background:var(--accent-dim);border-radius:10px;padding:12px 18px;margin-bottom:14px;">
+    <div style="font-family:var(--mono);font-size:15px;font-weight:800;color:var(--accent-text);">Срез: ${escapeHtml(upload.period_label)}</div>
+    <div style="font-size:12.5px;color:var(--muted);margin-top:4px;">Учтены только группы: ${groupsText}</div>
+  </div>`;
   html += `<div class="subtable-wrap"><table class="dyn-table"><thead>
     <tr class="cat">
       <th rowspan="2">Уровень</th><th rowspan="2" class="block-end">Кол-во чел.</th>
@@ -2977,8 +2981,6 @@ function buildLevelsSection(upload, data){
       <th rowspan="2">Место, Ø</th>
       <th rowspan="2">ЛГ, Ø</th><th rowspan="2">Коэфф., Ø</th><th rowspan="2">Коэфф. пред. недели, Ø</th>
       <th rowspan="2">Рабочее время, ч</th><th rowspan="2">Кол-во смен</th>
-      <th rowspan="2">${escapeHtml(bonusColumnLabels.bonus075)}</th><th rowspan="2">${escapeHtml(bonusColumnLabels.bonus2)}</th>
-      <th rowspan="2">ЗП, ₽</th>
     </tr>
     <tr class="sub">
       <th>карточек</th><th>сумма,₽</th><th>ср.чек,Ø</th><th>конв.,%Ø</th><th>с конт.,Ø</th><th class="block-end">место,Ø</th>
@@ -2988,7 +2990,7 @@ function buildLevelsSection(upload, data){
       <th>кол-во</th><th>%,Ø</th><th class="block-end">место,Ø</th>
     </tr>
   </thead><tbody>
-    <tr style="background:var(--panel-2);"><td colspan="30" style="font-weight:800;font-family:var(--sans);padding:8px 10px;">ИТОГО ПО ОТДЕЛУ</td></tr>
+    <tr style="background:var(--panel-2);"><td colspan="33" style="font-weight:800;font-family:var(--sans);padding:8px 10px;">ИТОГО ПО ОТДЕЛУ</td></tr>
     ${data.levels.map(entry => buildLevelsTableRow(entry, false)).join("")}
     ${buildLevelsTableRow(data.total, true)}
   </tbody></table></div>`;
@@ -3040,6 +3042,7 @@ async function loadNextLevelsBatch(){
 async function renderDashByStatus(){
   const c = $("dashByStatusContainer");
   c.innerHTML = `<div class="history-empty">Загружаю список недель…</div>`;
+  $("wrap").classList.add("wide"); // таблицы среза широкие, на всю ширину экрана
   if(levelsObserver){ levelsObserver.disconnect(); levelsObserver = null; }
 
   levelsAllUploads = await fetchAllUploads("week"); // по возрастанию
