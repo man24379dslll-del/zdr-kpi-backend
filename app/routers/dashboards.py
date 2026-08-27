@@ -16,6 +16,7 @@ from app.auth import CurrentUser, get_current_user
 from app.services.dashboards import (
     build_anomalies_dashboard,
     build_channels_dashboard,
+    build_levels_dashboard,
     build_newcomer_funnel,
     build_summary_dashboard,
 )
@@ -64,6 +65,21 @@ async def get_newcomer_funnel_dashboard(
 async def get_channels_dashboard(upload_id: str, user: CurrentUser = Depends(get_current_user)):
     client = as_user(user.access_token)
     return build_channels_dashboard(await _load_ratings(client, upload_id))
+
+
+@router.get("/levels")
+async def get_levels_dashboard(
+    upload_id: str,
+    previous_upload_id: str | None = None,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Детальный срез "По уровням" — см. services/dashboards.py::
+    build_levels_dashboard. Только для недельных периодов, вызывающая
+    сторона (фронтенд) сама решает, какой upload_id передать."""
+    client = as_user(user.access_token)
+    ratings = await _load_ratings(client, upload_id)
+    previous_ratings = await _load_ratings(client, previous_upload_id) if previous_upload_id else None
+    return build_levels_dashboard(ratings, previous_ratings)
 
 
 @router.get("/anomalies")
