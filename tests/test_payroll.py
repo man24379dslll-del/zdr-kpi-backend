@@ -1,8 +1,11 @@
 from app.services.payroll import (
     build_flexible_payroll,
+    build_half_payroll,
     filter_uploads_for_periods,
     format_payroll_periods_text,
+    half_payroll_periods,
     make_periods_key,
+    month_close_periods,
     sort_periods,
 )
 
@@ -394,3 +397,80 @@ def test_overtime_and_shift_use_default_rate_and_hours_norm_when_not_passed():
     result = build_flexible_payroll(uploads, ratings_by_upload, {}, periods=["7-3"], year=2026)
     row = result["rows"][0]
     assert row["overtime_pay"] == 1 * DEFAULT_OVERTIME_RATE
+
+
+# --- полу-ведомость (недели 1-2 месяца, возврат к календарной структуре) ---
+
+def test_half_payroll_periods_is_always_weeks_1_and_2():
+    assert half_payroll_periods(8) == ["8-1", "8-2"]
+
+
+def test_month_close_periods_is_weeks_1_to_4():
+    assert month_close_periods(8) == ["8-1", "8-2", "8-3", "8-4"]
+
+
+def test_half_payroll_uses_only_weeks_1_and_2_ignores_3_and_4():
+    uploads = [
+        {"id": "u8-1", "period_label": "8-1"},
+        {"id": "u8-2", "period_label": "8-2"},
+        {"id": "u8-3", "period_label": "8-3"},
+        {"id": "u8-4", "period_label": "8-4"},
+    ]
+    ratings_by_upload = {
+        "u8-1": [{"fio": "Иванов И.И.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 1000}],
+        "u8-2": [{"fio": "Иванов И.И.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 1200}],
+        "u8-3": [{"fio": "Иванов И.И.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 99999}],
+        "u8-4": [{"fio": "Иванов И.И.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 99999}],
+    }
+    result = build_half_payroll(uploads, ratings_by_upload, {}, month=8, year=2026, hours_norm=0)
+    assert result["matched_uploads"] == 2
+    assert result["periods"] == ["8-1", "8-2"]
+    row = result["rows"][0]
+    assert row["sum"] == 1000 + 1200  # недели 3-4 не участвуют
+
+
+def test_half_payroll_excludes_weekly_pay_fios_completely():
+    uploads = [{"id": "u8-1", "period_label": "8-1"}]
+    ratings_by_upload = {
+        "u8-1": [
+            {"fio": "Обычный О.О.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 1000},
+            {"fio": "Еженедельный Е.Е.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 2000},
+        ],
+    }
+    result = build_half_payroll(
+        uploads, ratings_by_upload, {}, month=8, year=2026,
+        weekly_pay_fios={"Еженедельный Е.Е."}, hours_norm=0,
+    )
+    fios = {r["fio"] for r in result["rows"]}
+    assert fios == {"Обычный О.О."}  # "Еженедельный Е.Е." не попал вообще
+
+
+def test_half_payroll_no_weekly_pay_fios_means_everyone_included():
+    uploads = [{"id": "u8-1", "period_label": "8-1"}]
+    ratings_by_upload = {
+        "u8-1": [{"fio": "А. А.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 1000}],
+    }
+    result = build_half_payroll(uploads, ratings_by_upload, {}, month=8, year=2026, hours_norm=0)
+    assert {r["fio"] for r in result["rows"]} == {"А. А."}
+
+
+def test_half_payroll_applies_penalty_premium_shift_pay_adjustments():
+    uploads = [{"id": "u8-1", "period_label": "8-1"}, {"id": "u8-2", "period_label": "8-2"}]
+    ratings_by_upload = {
+        u["id"]: [{"fio": "Иванов И.И.", "supervisor": "С", "status": "Профи", "is_novice": False, "salary": 1000}]
+        for u in uploads
+    }
+    result = build_half_payroll(
+        uploads, ratings_by_upload, {}, month=8, year=2026,
+        adjustments_by_fio={"Иванов И.И.": {"penalty": 300, "premium": 100, "shift_pay": 500}},
+        hours_norm=0,
+    )
+    row = result["rows"][0]
+    assert row["sum"] == 2000 - 300 + 100 + 500
+
+
+def test_half_payroll_response_includes_month_and_year():
+    result = build_half_payroll([], {}, {}, month=8, year=2026)
+    assert result["month"] == 8
+    assert result["year"] == 2026
+    assert result["periods_key"] == "8-1,8-2"

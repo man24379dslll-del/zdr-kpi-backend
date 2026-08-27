@@ -338,13 +338,13 @@
       <h2 style="margin:0;">Ведомость ЗП</h2>
       <button class="btn btn-ghost" id="closePayrollBtn" style="padding:7px 14px;font-size:12.5px;">Закрыть ✕</button>
     </div>
-    <div class="sub" style="margin:10px 0 16px;">Отметьте любой набор недель — итоги считаются по выбранным периодам. Берётся напрямую из Supabase, файл загружать не нужно.</div>
+    <div class="sub" style="margin:10px 0 16px;">Полу-ведомость за недели 1-2 месяца. Неделя 1 сама по себе в ведомость не подаётся (только фиксация показателей рейтинга). Берётся напрямую из Supabase, файл загружать не нужно.</div>
     <div class="panel" style="background:var(--panel-2);padding:18px 20px;margin-bottom:16px;">
-      <label class="field" style="margin:0 0 14px;">
-        <span>Отмеченные недели</span>
-        <div id="payrollPeriodsList" style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px;"></div>
-      </label>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">
+        <label class="field" style="margin:0;">
+          <span>Месяц начисления</span>
+          <select id="payrollMonth" class="period-select"></select>
+        </label>
         <label class="field" style="margin:0;">
           <span>Год начисления</span>
           <input type="number" step="1" id="payrollYear" class="period-select">
@@ -375,9 +375,20 @@
         </label>
       </div>
       <div class="row" style="margin-top:14px;">
-        <button class="btn btn-primary" id="buildPayrollBtn">Сформировать ведомость</button>
+        <button class="btn btn-primary" id="buildPayrollBtn">Сформировать полу-ведомость (нед. 1-2)</button>
+        <button class="btn btn-ghost" id="openPayrollMarkersBtn" style="padding:7px 14px;font-size:12.5px;">Маркеры сотрудников</button>
       </div>
     </div>
+
+    <div class="panel" id="payrollMarkersPanel" style="background:var(--panel-2);padding:18px 20px;margin-bottom:16px;display:none;">
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <div style="font-weight:700;">Маркеры сотрудников</div>
+        <button class="btn btn-ghost" id="closePayrollMarkersBtn" style="padding:5px 10px;font-size:12px;">Закрыть ✕</button>
+      </div>
+      <div style="font-size:12.5px;color:var(--muted);margin-bottom:10px;">"Месяц работы" (с 3-го — обычный расчёт по рейтингу, без гарантий) и "Еженедельная оплата" (Да — не попадает в ведомость, оплата отдельно вне системы). Значения переносятся между периодами автоматически. Список — сотрудники, встретившиеся за выбранный месяц (недели 1-4).</div>
+      <div id="payrollMarkersContainer"></div>
+    </div>
+
     <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:10px;">
       <div id="dashPayrollSub" style="font-size:13px;color:var(--muted);"></div>
       <button class="btn btn-ghost" id="downloadPayrollBtn" style="padding:7px 14px;font-size:12.5px;">Скачать ведомость (Excel)</button>
@@ -3096,7 +3107,6 @@ async function renderDashAnomalies(){
 // ---------- Ведомость ЗП (гибкий выбор недель) ----------
 let currentPayrollRows = null;
 let currentPayrollMeta = null;
-let currentPayrollPeriods = []; // отмеченные period_label, хронологически
 
 (function initPayrollDates(){
   const today = new Date();
@@ -3105,46 +3115,27 @@ let currentPayrollPeriods = []; // отмеченные period_label, хроно
   $("payrollYear").value = today.getFullYear();
 })();
 
-// Заполняет чекбоксы недель актуальным списком загруженных недельных
-// периодов (та же выборка/сортировка, что уже используется для истории —
-// fetchAllUploads("week"), см. выше), по одному чекбоксу на period_label.
-async function loadPayrollPeriodsCheckboxes(){
-  const box = $("payrollPeriodsList");
-  box.innerHTML = `<span style="color:var(--muted);font-size:13px;">Загружаю список недель…</span>`;
-  const checked = new Set(currentPayrollPeriods);
-  const uploads = await fetchAllUploads("week");
-  const labels = [...new Set(uploads.map(u => u.period_label))]
-    .sort((a, b) => periodSortValue("week", a) - periodSortValue("week", b));
-  if(!labels.length){
-    box.innerHTML = `<span style="color:var(--muted);font-size:13px;">Пока нет загруженных недель.</span>`;
-    return;
-  }
-  box.innerHTML = labels.map(label => {
-    const m = /^(\d+)-(\d+)$/.exec(label);
-    const monthName = m ? MONTHS[parseInt(m[1], 10) - 1] : "";
-    const isChecked = checked.has(label);
-    return `<label style="display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:${isChecked ? 700 : 400};">
-      <input type="checkbox" class="payroll-period-checkbox" value="${label}" ${isChecked ? "checked" : ""}>
-      ${monthName}, нед. ${m ? m[2] : label} (${label})
-    </label>`;
-  }).join("");
+function populatePayrollMonthSelect(){
+  const sel = $("payrollMonth");
+  if(sel.options.length) return; // уже заполнен, не пересоздаём при повторном открытии панели
+  const now = new Date();
+  MONTHS.forEach((name, i) => {
+    const opt = document.createElement("option");
+    opt.value = i + 1;
+    opt.textContent = `${i+1} — ${name}`;
+    if(i + 1 === now.getMonth() + 1) opt.selected = true;
+    sel.appendChild(opt);
+  });
 }
 
-function getCheckedPayrollPeriods(){
-  return [...document.querySelectorAll(".payroll-period-checkbox:checked")]
-    .map(cb => cb.value)
-    .sort((a, b) => periodSortValue("week", a) - periodSortValue("week", b));
-}
-
-async function buildFlexiblePayroll(){
-  const periods = getCheckedPayrollPeriods();
-  if(!periods.length) throw new Error("Отметьте хотя бы одну неделю");
+async function buildHalfPayroll(){
+  const month = parseInt($("payrollMonth").value, 10);
   const year = parseInt($("payrollYear").value, 10) || new Date().getFullYear();
   const hoursNorm = parseFloat($("payrollHoursNorm").value) || 0;
   const overtimeRate = parseFloat($("payrollOvertimeRate").value) || 0;
 
-  const result = await apiGet("/payroll/flexible", {
-    periods: periods.join(","), year, hours_norm: hoursNorm, overtime_rate: overtimeRate,
+  const result = await apiGet("/payroll/half", {
+    month, year, hours_norm: hoursNorm, overtime_rate: overtimeRate,
   });
 
   const rows = result.rows.map(r => ({
@@ -3173,7 +3164,8 @@ async function buildFlexiblePayroll(){
   }));
 
   return {
-    rows, periods, year, hoursNorm, overtimeRate,
+    rows, month, year, hoursNorm, overtimeRate,
+    periods: result.periods,
     periodsKey: result.periods_key,
     periodLabel: result.period_label_text,
     matchedUploads: result.matched_uploads,
@@ -3212,9 +3204,90 @@ async function saveAdjustment(row, inputs){
 async function renderDashPayroll(){
   const c = $("dashPayrollContainer");
   const sub = $("dashPayrollSub");
-  c.innerHTML = `<div class="history-empty">Отметьте недели выше, затем нажмите "Сформировать ведомость".</div>`;
+  c.innerHTML = `<div class="history-empty">Выберите месяц выше, затем нажмите "Сформировать полу-ведомость".</div>`;
   sub.textContent = "";
 }
+
+// ---------- Маркеры сотрудников ("Месяц работы" / "Еженедельная оплата") ----------
+// По ФИО (не по периоду) — переносятся между периодами автоматически, см.
+// payroll_employee_markers (app/db/schema.sql). Список — все fio,
+// встретившиеся за выбранный месяц (недели 1-4), включая тех, у кого
+// "Еженедельная оплата"=Да (они исключены из полу-ведомости САМОЙ
+// ведомостью, но должны быть видны и редактируемы здесь).
+async function loadPayrollMarkersPanel(){
+  const container = $("payrollMarkersContainer");
+  container.innerHTML = `<div class="history-empty">Загружаю…</div>`;
+  const month = parseInt($("payrollMonth").value, 10);
+  try{
+    const periods = [1, 2, 3, 4].map(w => `${month}-${w}`);
+    const uploads = await sbGet(`kpi_uploads?period_label=in.(${periods.join(",")})&select=id`);
+    if(!uploads.length){
+      container.innerHTML = `<div class="history-empty">Нет загруженных недель за этот месяц.</div>`;
+      return;
+    }
+    const uploadIds = uploads.map(u => u.id).join(",");
+    const ratingsRows = await sbGet(`kpi_ratings?upload_id=in.(${uploadIds})&select=fio,status`);
+    const statusByFio = new Map();
+    ratingsRows.forEach(r => { if(r.fio) statusByFio.set(r.fio, r.status || ""); });
+    const fios = [...statusByFio.keys()].sort((a, b) => a.localeCompare(b, "ru"));
+
+    if(!fios.length){
+      container.innerHTML = `<div class="history-empty">Нет сотрудников за этот месяц.</div>`;
+      return;
+    }
+
+    const markers = await apiGet("/payroll/employee-markers");
+    const markerByFio = {};
+    markers.forEach(m => { markerByFio[m.fio] = m; });
+
+    let html = `<div class="subtable-wrap"><table class="dyn-table"><thead><tr>
+      <th>ФИО</th><th>Статус</th><th>Месяц работы</th><th>Еженедельная оплата</th>
+    </tr></thead><tbody>`;
+    fios.forEach(fio => {
+      const m = markerByFio[fio] || { work_month: 1, weekly_pay: false };
+      html += `<tr data-fio="${escapeHtml(fio)}">
+        <td style="font-family:var(--sans);font-weight:600;">${escapeHtml(fio)}</td>
+        <td style="font-family:var(--sans);">${escapeHtml(statusByFio.get(fio) || "")}</td>
+        <td>
+          <select class="payroll-marker-month">
+            <option value="1" ${m.work_month === 1 ? "selected" : ""}>1</option>
+            <option value="2" ${m.work_month === 2 ? "selected" : ""}>2</option>
+            <option value="3" ${m.work_month === 3 ? "selected" : ""}>3+ (по рейтингу)</option>
+          </select>
+        </td>
+        <td style="text-align:center;">
+          <input type="checkbox" class="payroll-marker-weekly" ${m.weekly_pay ? "checked" : ""}>
+        </td>
+      </tr>`;
+    });
+    html += `</tbody></table></div>`;
+    container.innerHTML = html;
+
+    container.querySelectorAll("tr[data-fio]").forEach(tr => {
+      const fio = tr.dataset.fio;
+      const monthSel = tr.querySelector(".payroll-marker-month");
+      const weeklyChk = tr.querySelector(".payroll-marker-weekly");
+      const save = async () => {
+        try{
+          await apiSend("PUT", "/payroll/employee-marker", {
+            fio, work_month: parseInt(monthSel.value, 10), weekly_pay: weeklyChk.checked,
+          });
+        } catch(err){
+          alert(`Не удалось сохранить маркер для ${fio}: ${err.message}`);
+        }
+      };
+      monthSel.addEventListener("change", save);
+      weeklyChk.addEventListener("change", save);
+    });
+  } catch(err){
+    container.innerHTML = `<div class="history-empty">Ошибка: ${err.message}</div>`;
+  }
+}
+$("openPayrollMarkersBtn").addEventListener("click", () => {
+  $("payrollMarkersPanel").style.display = "block";
+  loadPayrollMarkersPanel();
+});
+$("closePayrollMarkersBtn").addEventListener("click", () => { $("payrollMarkersPanel").style.display = "none"; });
 
 function renderPayrollTable(){
   const c = $("dashPayrollContainer");
@@ -3297,11 +3370,10 @@ $("buildPayrollBtn").addEventListener("click", async () => {
   const sub = $("dashPayrollSub");
   c.innerHTML = `<div class="history-empty">Считаю…</div>`;
   try{
-    const result = await buildFlexiblePayroll();
+    const result = await buildHalfPayroll();
     currentPayrollRows = result.rows;
     currentPayrollMeta = result;
-    currentPayrollPeriods = result.periods;
-    sub.textContent = `Недели: ${result.periodLabel} · найдено загрузок: ${result.matchedUploads} · сотрудников: ${result.rows.length}`;
+    sub.textContent = `Полу-ведомость, недели: ${result.periodLabel} · найдено загрузок: ${result.matchedUploads} · сотрудников: ${result.rows.length}`;
     $("payrollSearchBox").value = "";
     $("wrap").classList.add("wide");
     renderPayrollTable();
@@ -3508,7 +3580,7 @@ $("openPayrollBtn").addEventListener("click", () => {
   $("payrollPanel").style.display = "block";
   $("payrollPanel").scrollIntoView({ behavior: "smooth", block: "start" });
   renderDashPayroll();
-  loadPayrollPeriodsCheckboxes();
+  populatePayrollMonthSelect();
 });
 $("closePayrollBtn").addEventListener("click", () => { $("payrollPanel").style.display = "none"; });
 

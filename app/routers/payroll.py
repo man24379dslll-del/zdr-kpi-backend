@@ -14,6 +14,8 @@ from app.auth import CurrentUser, get_current_user
 from app.services.payroll import (
     DEFAULT_OVERTIME_RATE,
     build_flexible_payroll,
+    build_half_payroll,
+    half_payroll_periods,
     is_weekly_period_label,
     make_periods_key,
 )
@@ -49,6 +51,71 @@ async def _load_adjustments(client, periods_key: str) -> dict[str, dict]:
         }
         for row in rows
     }
+
+
+async def _load_markers(client) -> dict[str, dict]:
+    rows = await client.get("payroll_employee_markers", params={"select": "fio,work_month,weekly_pay"})
+    return {row["fio"]: row for row in rows}
+
+
+async def _load_uploads_and_ratings(client, periods: list[str]):
+    """Общая часть для /payroll/half и /payroll/close (следующий коммит):
+    находит загрузки, чьи period_label входят в periods, и подтягивает их
+    kpi_ratings/payroll_penalties."""
+    all_uploads = await client.get("kpi_uploads", params={"select": "id,period_label"})
+    period_set = set(periods)
+    matching_uploads = [u for u in all_uploads if (u.get("period_label") or "") in period_set]
+
+    ratings_by_upload_id: dict[str, list[dict]] = {}
+    penalties_by_upload_id: dict[str, dict[str, float]] = {}
+    for upload in matching_uploads:
+        upload_id = upload["id"]
+        ratings_by_upload_id[upload_id] = await client.get(
+            "kpi_ratings",
+            params={
+                "upload_id": f"eq.{upload_id}",
+                "select": "fio,supervisor,status,is_novice,salary,work_hours,shift_count",
+            },
+        )
+        penalty_rows = await client.get(
+            "payroll_penalties",
+            params={"upload_id": f"eq.{upload_id}", "select": "fio,penalty"},
+        )
+        penalties_by_upload_id[upload_id] = {row["fio"]: row["penalty"] for row in penalty_rows}
+    return matching_uploads, ratings_by_upload_id, penalties_by_upload_id
+
+
+@router.get("/half")
+async def get_half_payroll(
+    month: int,
+    year: int,
+    hours_norm: float = DEFAULT_HOURS_NORM,
+    overtime_rate: float = DEFAULT_OVERTIME_RATE,
+    user: CurrentUser = Depends(get_current_user),
+):
+    """"Полу-ведомость" за недели 1-2 месяца (см. services/payroll.py::
+    build_half_payroll) — сотрудники с "Еженедельная оплата"=Да
+    (payroll_employee_markers.weekly_pay) исключены полностью."""
+    if not user.is_admin_or_manager:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Только admin/manager могут смотреть ведомость ЗП")
+    if not 1 <= month <= 12:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "month должен быть от 1 до 12")
+
+    client = as_user(user.access_token)
+    periods = half_payroll_periods(month)
+    matching_uploads, ratings_by_upload_id, penalties_by_upload_id = await _load_uploads_and_ratings(client, periods)
+
+    markers = await _load_markers(client)
+    weekly_pay_fios = {fio for fio, m in markers.items() if m.get("weekly_pay")}
+
+    periods_key = make_periods_key(periods)
+    adjustments_by_fio = await _load_adjustments(client, periods_key)
+
+    return build_half_payroll(
+        matching_uploads, ratings_by_upload_id, penalties_by_upload_id, month, year,
+        weekly_pay_fios=weekly_pay_fios, adjustments_by_fio=adjustments_by_fio,
+        hours_norm=hours_norm, overtime_rate=overtime_rate,
+    )
 
 
 @router.get("/flexible")

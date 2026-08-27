@@ -216,3 +216,110 @@ def build_flexible_payroll(
         "period_label_text": format_payroll_periods_text(periods, year),
         "matched_uploads": len(matching_uploads),
     }
+
+
+# ============================================================
+# Возврат к календарной структуре (месяц, недели 1-4) — отменяет
+# произвольный выбор недель выше (build_flexible_payroll остаётся пока
+# нетронутым, будет убран отдельным коммитом). Неделя 1 сама по себе
+# никогда не подаётся в ведомость — только фиксация показателей рейтинга
+# (обычный недельный расчёт, без изменений).
+# ============================================================
+
+def half_payroll_periods(month: int) -> list[str]:
+    """Недели 1-2 месяца — "полу-ведомость" (см. build_half_payroll)."""
+    return [f"{month}-1", f"{month}-2"]
+
+
+def month_close_periods(month: int) -> list[str]:
+    """Недели 1-4 месяца — "закрытие месяца" (см. build_month_close_payroll,
+    следующий коммит)."""
+    return [f"{month}-{w}" for w in (1, 2, 3, 4)]
+
+
+def build_half_payroll(
+    uploads: list[dict],
+    ratings_by_upload_id: dict[str, list[dict]],
+    penalties_by_upload_id: dict[str, dict[str, float]],
+    month: int,
+    year: int,
+    weekly_pay_fios: set[str] | None = None,
+    adjustments_by_fio: dict[str, dict] | None = None,
+    hours_norm: float = DEFAULT_HOURS_NORM,
+    overtime_rate: float = DEFAULT_OVERTIME_RATE,
+) -> dict:
+    """"Полу-ведомость" за недели 1-2 месяца (см. half_payroll_periods).
+    Сотрудники из weekly_pay_fios ("Еженедельная оплата" = Да, см.
+    payroll_employee_markers) ПОЛНОСТЬЮ исключены из rows — они получают
+    оплату отдельно, вне этой системы; их показатели по-прежнему
+    фиксируются обычным недельным расчётом (routers/ratings.py), просто
+    не участвуют здесь. Для остальных — тот же принцип, что раньше был у
+    build_flexible_payroll (штраф/премия/оплата за смены/доплата за
+    переработку), периоды теперь всегда ровно [месяц-1, месяц-2]."""
+    periods = half_payroll_periods(month)
+    matching_uploads = filter_uploads_for_periods(uploads, periods)
+    weekly_pay_fios = weekly_pay_fios or set()
+
+    acc: dict[str, dict] = {}
+    for upload in matching_uploads:
+        upload_id = upload["id"]
+        period_label = upload["period_label"]
+        penalty_map = penalties_by_upload_id.get(upload_id, {})
+        for r in ratings_by_upload_id.get(upload_id, []):
+            if r.get("is_novice") or r.get("salary") is None:
+                continue
+            fio = r["fio"]
+            if fio in weekly_pay_fios:
+                continue
+            penalty = penalty_map.get(fio) or 0
+            net = (r.get("salary") or 0) - penalty
+
+            entry = acc.setdefault(fio, {
+                "fio": fio, "supervisor": None, "status": None, "sum": 0.0, "penalty_sum": 0.0,
+                "weeks": {}, "work_hours_sum": 0.0, "shift_count_sum": 0.0,
+            })
+            entry["sum"] += net
+            entry["penalty_sum"] += penalty
+            entry["supervisor"] = r.get("supervisor")
+            entry["status"] = r.get("status")
+            entry["weeks"][period_label] = entry["weeks"].get(period_label, 0.0) + net
+            entry["work_hours_sum"] += r.get("work_hours") or 0
+            entry["shift_count_sum"] += r.get("shift_count") or 0
+
+    rows = list(acc.values())
+    for entry in rows:
+        entry["weeks"] = [
+            {"period_label": period_label, "sum": week_sum}
+            for period_label, week_sum in sorted(
+                entry["weeks"].items(), key=lambda kv: period_sort_value("week", kv[0])
+            )
+        ]
+
+        penalty_sum = entry["penalty_sum"]
+        penalty_text = int(penalty_sum) if penalty_sum == int(penalty_sum) else penalty_sum
+        entry["comment"] = f"Штраф удержан: {penalty_text} ₽" if penalty_sum > 0 else None
+
+        adjustment = (adjustments_by_fio or {}).get(entry["fio"], {})
+        penalty = adjustment.get("penalty") or 0
+        premium = adjustment.get("premium") or 0
+        shift_pay = adjustment.get("shift_pay") or 0
+        overtime_pay = max(0.0, (entry["work_hours_sum"] - hours_norm) * overtime_rate)
+
+        entry["penalty"] = penalty
+        entry["premium"] = premium
+        entry["shift_pay"] = shift_pay
+        entry["shift_count"] = entry.pop("shift_count_sum")
+        entry["overtime_pay"] = overtime_pay
+        entry["sum"] = entry["sum"] - penalty + premium + overtime_pay + shift_pay
+
+    rows.sort(key=lambda e: (display_group_name(e["supervisor"]), e["fio"]))
+
+    return {
+        "rows": rows,
+        "month": month,
+        "year": year,
+        "periods": periods,
+        "periods_key": make_periods_key(periods),
+        "period_label_text": format_payroll_periods_text(periods, year),
+        "matched_uploads": len(matching_uploads),
+    }
