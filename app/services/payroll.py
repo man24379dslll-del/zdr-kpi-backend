@@ -80,6 +80,8 @@ from app.services.periods import WEEK_LABEL_RE, period_sort_value
 from app.services.salary import DEFAULT_HOURS_NORM
 
 DEFAULT_OVERTIME_RATE = 150
+DEFAULT_GUARANTEED_BASE = 40000  # "гарантированная" — 1-й/2-й месяц работы
+DEFAULT_MONTH2_TRAINING_BONUS = 5000  # доплата за период обучения, только 2-й месяц
 
 RU_MONTHS_GENITIVE = [
     "января", "февраля", "марта", "апреля", "мая", "июня",
@@ -311,6 +313,136 @@ def build_half_payroll(
         entry["shift_count"] = entry.pop("shift_count_sum")
         entry["overtime_pay"] = overtime_pay
         entry["sum"] = entry["sum"] - penalty + premium + overtime_pay + shift_pay
+
+    rows.sort(key=lambda e: (display_group_name(e["supervisor"]), e["fio"]))
+
+    return {
+        "rows": rows,
+        "month": month,
+        "year": year,
+        "periods": periods,
+        "periods_key": make_periods_key(periods),
+        "period_label_text": format_payroll_periods_text(periods, year),
+        "matched_uploads": len(matching_uploads),
+    }
+
+
+def build_month_close_payroll(
+    uploads: list[dict],
+    ratings_by_upload_id: dict[str, list[dict]],
+    penalties_by_upload_id: dict[str, dict[str, float]],
+    month: int,
+    year: int,
+    markers_by_fio: dict[str, dict] | None = None,
+    adjustments_by_fio: dict[str, dict] | None = None,
+    half_sum_by_fio: dict[str, float] | None = None,
+    hours_norm: float = DEFAULT_HOURS_NORM,
+    overtime_rate: float = DEFAULT_OVERTIME_RATE,
+    guaranteed_base: float = DEFAULT_GUARANTEED_BASE,
+    month2_bonus: float = DEFAULT_MONTH2_TRAINING_BONUS,
+) -> dict:
+    """"Закрытие месяца" — недели 1-4 (см. month_close_periods). Для КАЖДОГО
+    сотрудника (включая weekly_pay=true, см. ниже) считается:
+
+      work_month 1 или 2 (payroll_employee_markers.work_month):
+        guaranteed_pay = guaranteed_base × (work_hours_за_4нед / hours_norm)
+                          [+ month2_bonus, если work_month == 2]
+        base = MAX(guaranteed_pay, rating_sum)  — rating_sum = обычная
+               сумма по системе рейтинга (ставка+бонусы×коэфф.) за 4 недели
+
+      work_month 3+ (или нет маркера — по умолчанию work_month=1, см.
+      payroll_employee_markers.work_month default):
+        base = rating_sum, БЕЗ сравнения с гарантией
+
+    Дальше ВСЕГДА, независимо от work_month:
+      sum = base − штраф(adjustment) + премия(adjustment)
+                 + доплата за переработку (за все 4 недели)
+                 + оплата за смены(adjustment)
+                 − half_sum_by_fio[fio] (уже выплаченная полу-ведомость за
+                   недели 1-2 — 0 для weekly_pay=true: у них полу-ведомости
+                   никогда не было, см. build_half_payroll, осознанный
+                   компромисс — их месячный расчёт от этого занижен, они
+                   получают оплату отдельно, вне этой системы)
+
+    Штраф/премия/оплата за смены здесь — ОТДЕЛЬНАЯ запись
+    payroll_stage_adjustments от той, что у полу-ведомости (свой
+    periods_key на весь месяц, см. month_close_periods)."""
+    periods = month_close_periods(month)
+    matching_uploads = filter_uploads_for_periods(uploads, periods)
+    markers_by_fio = markers_by_fio or {}
+    half_sum_by_fio = half_sum_by_fio or {}
+
+    acc: dict[str, dict] = {}
+    for upload in matching_uploads:
+        upload_id = upload["id"]
+        period_label = upload["period_label"]
+        penalty_map = penalties_by_upload_id.get(upload_id, {})
+        for r in ratings_by_upload_id.get(upload_id, []):
+            if r.get("is_novice") or r.get("salary") is None:
+                continue
+            fio = r["fio"]
+            penalty = penalty_map.get(fio) or 0
+            net = (r.get("salary") or 0) - penalty
+
+            entry = acc.setdefault(fio, {
+                "fio": fio, "supervisor": None, "status": None, "rating_sum": 0.0, "penalty_sum": 0.0,
+                "weeks": {}, "work_hours_sum": 0.0, "shift_count_sum": 0.0,
+            })
+            entry["rating_sum"] += net
+            entry["penalty_sum"] += penalty
+            entry["supervisor"] = r.get("supervisor")
+            entry["status"] = r.get("status")
+            entry["weeks"][period_label] = entry["weeks"].get(period_label, 0.0) + net
+            entry["work_hours_sum"] += r.get("work_hours") or 0
+            entry["shift_count_sum"] += r.get("shift_count") or 0
+
+    rows = list(acc.values())
+    for entry in rows:
+        entry["weeks"] = [
+            {"period_label": period_label, "sum": week_sum}
+            for period_label, week_sum in sorted(
+                entry["weeks"].items(), key=lambda kv: period_sort_value("week", kv[0])
+            )
+        ]
+
+        penalty_sum = entry["penalty_sum"]
+        penalty_text = int(penalty_sum) if penalty_sum == int(penalty_sum) else penalty_sum
+        entry["comment"] = f"Штраф удержан: {penalty_text} ₽" if penalty_sum > 0 else None
+
+        fio = entry["fio"]
+        marker = markers_by_fio.get(fio) or {}
+        work_month = marker.get("work_month") or 1
+        weekly_pay = bool(marker.get("weekly_pay"))
+
+        rating_sum = entry["rating_sum"]
+        if work_month in (1, 2):
+            guaranteed_pay = guaranteed_base * (entry["work_hours_sum"] / hours_norm) if hours_norm else 0.0
+            if work_month == 2:
+                guaranteed_pay += month2_bonus
+            base = max(guaranteed_pay, rating_sum)
+        else:
+            guaranteed_pay = None
+            base = rating_sum
+
+        adjustment = (adjustments_by_fio or {}).get(fio, {})
+        penalty = adjustment.get("penalty") or 0
+        premium = adjustment.get("premium") or 0
+        shift_pay = adjustment.get("shift_pay") or 0
+        overtime_pay = max(0.0, (entry["work_hours_sum"] - hours_norm) * overtime_rate)
+        half_deduction = 0.0 if weekly_pay else (half_sum_by_fio.get(fio) or 0.0)
+
+        entry["work_month"] = work_month
+        entry["weekly_pay"] = weekly_pay
+        entry["guaranteed_pay"] = guaranteed_pay
+        entry["rating_sum"] = rating_sum
+        entry["base"] = base
+        entry["penalty"] = penalty
+        entry["premium"] = premium
+        entry["shift_pay"] = shift_pay
+        entry["shift_count"] = entry.pop("shift_count_sum")
+        entry["overtime_pay"] = overtime_pay
+        entry["half_deduction"] = half_deduction
+        entry["sum"] = base - penalty + premium + overtime_pay + shift_pay - half_deduction
 
     rows.sort(key=lambda e: (display_group_name(e["supervisor"]), e["fio"]))
 

@@ -338,8 +338,15 @@
       <h2 style="margin:0;">Ведомость ЗП</h2>
       <button class="btn btn-ghost" id="closePayrollBtn" style="padding:7px 14px;font-size:12.5px;">Закрыть ✕</button>
     </div>
-    <div class="sub" style="margin:10px 0 16px;">Полу-ведомость за недели 1-2 месяца. Неделя 1 сама по себе в ведомость не подаётся (только фиксация показателей рейтинга). Берётся напрямую из Supabase, файл загружать не нужно.</div>
+    <div class="sub" style="margin:10px 0 16px;">Неделя 1 сама по себе в ведомость не подаётся (только фиксация показателей рейтинга). Берётся напрямую из Supabase, файл загружать не нужно.</div>
     <div class="panel" style="background:var(--panel-2);padding:18px 20px;margin-bottom:16px;">
+      <label class="field" style="margin:0 0 14px;">
+        <span>Этап</span>
+        <div class="chan-toggle" id="payrollStageToggle" style="display:inline-flex;">
+          <button type="button" data-stage="half" class="active">Полу-ведомость (нед. 1-2)</button>
+          <button type="button" data-stage="close">Закрытие месяца (нед. 1-4)</button>
+        </div>
+      </label>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">
         <label class="field" style="margin:0;">
           <span>Месяц начисления</span>
@@ -372,6 +379,14 @@
         <label class="field" style="margin:0;">
           <span>Доплата за час переработки, ₽</span>
           <input type="number" step="1" id="payrollOvertimeRate" value="150">
+        </label>
+        <label class="field" style="margin:0;" id="payrollGuaranteedBaseField">
+          <span>Гарантия 1-й/2-й месяц, ₽/мес (закрытие месяца)</span>
+          <input type="number" step="1" id="payrollGuaranteedBase" value="40000">
+        </label>
+        <label class="field" style="margin:0;" id="payrollMonth2BonusField">
+          <span>Доплата за обучение, 2-й месяц, ₽ (закрытие месяца)</span>
+          <input type="number" step="1" id="payrollMonth2Bonus" value="5000">
         </label>
       </div>
       <div class="row" style="margin-top:14px;">
@@ -3169,6 +3184,54 @@ async function buildHalfPayroll(){
     periodsKey: result.periods_key,
     periodLabel: result.period_label_text,
     matchedUploads: result.matched_uploads,
+    isMonthClose: false,
+  };
+}
+
+async function buildMonthClosePayroll(){
+  const month = parseInt($("payrollMonth").value, 10);
+  const year = parseInt($("payrollYear").value, 10) || new Date().getFullYear();
+  const hoursNorm = parseFloat($("payrollHoursNorm").value) || 0;
+  const overtimeRate = parseFloat($("payrollOvertimeRate").value) || 0;
+  const guaranteedBase = parseFloat($("payrollGuaranteedBase").value) || 0;
+  const month2Bonus = parseFloat($("payrollMonth2Bonus").value) || 0;
+
+  const result = await apiGet("/payroll/close", {
+    month, year, hours_norm: hoursNorm, overtime_rate: overtimeRate,
+    guaranteed_base: guaranteedBase, month2_bonus: month2Bonus,
+  });
+
+  const rows = result.rows.map(r => ({
+    fio: r.fio,
+    supervisor: r.supervisor,
+    status: r.status,
+    sum: r.sum,
+    workMonth: r.work_month,
+    weeklyPay: r.weekly_pay,
+    guaranteedPay: r.guaranteed_pay, // null для work_month>=3 (без сравнения)
+    ratingSum: r.rating_sum,
+    base: r.base, // MAX(guaranteedPay, ratingSum) либо просто ratingSum
+    halfDeduction: r.half_deduction, // уже выплаченная полу-ведомость за нед.1-2 (0 у "еженедельных")
+    penalty: r.penalty || 0,
+    premium: r.premium || 0,
+    shiftCount: r.shift_count || 0,
+    shiftPay: r.shift_pay || 0,
+    overtimePay: r.overtime_pay || 0,
+    workHoursSum: r.work_hours_sum || 0,
+    comment: r.comment || "",
+    position: r.status || "",
+    paymentType: "",
+    requisitesText: "",
+    weeks: r.weeks || [],
+  }));
+
+  return {
+    rows, month, year, hoursNorm, overtimeRate, guaranteedBase, month2Bonus,
+    periods: result.periods,
+    periodsKey: result.periods_key,
+    periodLabel: result.period_label_text,
+    matchedUploads: result.matched_uploads,
+    isMonthClose: true,
   };
 }
 
@@ -3194,7 +3257,12 @@ async function saveAdjustment(row, inputs){
     row.shiftPay = shiftPay;
     // Доплата за часы не зависит от ручных полей — не пересчитывается тут,
     // берётся как есть (backend уже посчитал её один раз при построении).
-    row.sum = row.weeklySum - penalty + premium + row.overtimePay + shiftPay;
+    // Закрытие месяца: sum = base (MAX гарантии/рейтинга либо просто
+    // рейтинг) минус вычет уже выплаченной полу-ведомости — та же
+    // формула, что и на бэкенде (services/payroll.py::build_month_close_payroll).
+    row.sum = meta.isMonthClose
+      ? row.base - penalty + premium + row.overtimePay + shiftPay - row.halfDeduction
+      : row.weeklySum - penalty + premium + row.overtimePay + shiftPay;
     renderPayrollTable(); // локальный перерендер из уже загруженных данных, без сети/перезагрузки страницы
   } catch(err){
     alert(`Не удалось сохранить корректировку для ${row.fio}: ${err.message}`);
@@ -3305,7 +3373,9 @@ function renderPayrollTable(){
   visibleRows.forEach(r => { (byGroup[r.supervisor] ||= []).push(r); });
   const groupNames = Object.keys(byGroup).sort(compareGroupNames);
 
-  const totalCols = 13;
+  const isMonthClose = !!result.isMonthClose;
+  const totalCols = isMonthClose ? 18 : 13;
+  const workMonthLabel = wm => wm >= 3 ? "3+ (по рейтингу)" : String(wm);
 
   let globalIdx = 0;
   let html = "";
@@ -3315,7 +3385,7 @@ function renderPayrollTable(){
     html += `<div class="group-block">`;
     html += `<div class="group-title">${displayGroupName(gname)}<span class="count">${groupRows.length} чел. · ${fmt(Math.round(groupTotal))} ₽</span></div>`;
     html += `<div class="subtable-wrap"><table class="dyn-table"><thead><tr>
-      <th>№</th><th>ФИО</th><th>Должность</th><th>Комментарий</th><th>Способ оплаты</th><th>Реквизиты</th><th>Период начисления</th><th>Часы</th><th>Штраф</th><th>Премия</th><th>Кол-во смен</th><th>Оплата за смены</th><th>Сумма начисления</th>
+      <th>№</th><th>ФИО</th><th>Должность</th><th>Комментарий</th><th>Способ оплаты</th><th>Реквизиты</th><th>Период начисления</th><th>Часы</th>${isMonthClose ? `<th>Месяц работы</th><th>По рейтингу</th><th>Гарантия</th><th>База (MAX)</th>` : ``}<th>Штраф</th><th>Премия</th><th>Кол-во смен</th><th>Оплата за смены</th>${isMonthClose ? `<th>Вычет полу-вед.</th>` : ``}<th>Сумма начисления</th>
     </tr></thead><tbody>`;
     groupRows.forEach(r => {
       globalIdx++;
@@ -3328,10 +3398,17 @@ function renderPayrollTable(){
         <td style="font-family:var(--sans);white-space:normal;max-width:220px;${r.requisitesText ? "" : "color:var(--err);"}">${r.requisitesText || "нет реквизитов"}</td>
         <td style="font-family:var(--sans);">${result.periodLabel}</td>
         <td style="font-family:var(--sans);text-align:center;" title="Автосумма из файла по отмеченным неделям — участвует в доплате за переработку (часы − норма) × ставка">${fmt(r.workHoursSum || 0)}</td>
+        ${isMonthClose ? `
+        <td style="font-family:var(--sans);text-align:center;" title="${r.weeklyPay ? 'Еженедельная оплата — оплачивается отдельно, вне этой системы' : ''}">${workMonthLabel(r.workMonth)}${r.weeklyPay ? ' 💰' : ''}</td>
+        <td>${fmt(Math.round(r.ratingSum))}</td>
+        <td>${r.guaranteedPay == null ? '—' : fmt(Math.round(r.guaranteedPay))}</td>
+        <td style="font-weight:700;">${fmt(Math.round(r.base))}</td>
+        ` : ``}
         <td><input type="number" step="0.01" class="payroll-penalty" value="${r.penalty || 0}" style="width:90px;"></td>
         <td><input type="number" step="0.01" class="payroll-premium" value="${r.premium || 0}" style="width:90px;"></td>
         <td style="font-family:var(--sans);text-align:center;" title="Автосумма из файла — только для справки, в сумму не входит">${fmt(r.shiftCount || 0)}</td>
         <td><input type="number" step="0.01" class="payroll-shift-pay" value="${r.shiftPay || 0}" style="width:90px;"></td>
+        ${isMonthClose ? `<td title="Уже выплаченная полу-ведомость за недели 1-2 (0 — для еженедельной оплаты)">${fmt(Math.round(r.halfDeduction || 0))}</td>` : ``}
         <td style="font-weight:800;color:var(--good);" title="${escapeHtml(formatWeeksBreakdown(r.weeks))}">
           ${fmt(Math.round(r.sum))}
           ${r.weeks.length > 1 ? `<div style="font-weight:400;font-size:10.5px;color:var(--muted);white-space:normal;">${escapeHtml(formatWeeksBreakdown(r.weeks))}</div>` : ""}
@@ -3365,15 +3442,25 @@ function renderPayrollTable(){
 }
 $("payrollSearchBox").addEventListener("input", renderPayrollTable);
 
+$("payrollStageToggle").querySelectorAll("button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    $("payrollStageToggle").querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
+    const isClose = btn.dataset.stage === "close";
+    $("buildPayrollBtn").textContent = isClose ? "Сформировать закрытие месяца (нед. 1-4)" : "Сформировать полу-ведомость (нед. 1-2)";
+  });
+});
+
 $("buildPayrollBtn").addEventListener("click", async () => {
   const c = $("dashPayrollContainer");
   const sub = $("dashPayrollSub");
+  const isClose = $("payrollStageToggle").querySelector(".active").dataset.stage === "close";
   c.innerHTML = `<div class="history-empty">Считаю…</div>`;
   try{
-    const result = await buildHalfPayroll();
+    const result = isClose ? await buildMonthClosePayroll() : await buildHalfPayroll();
     currentPayrollRows = result.rows;
     currentPayrollMeta = result;
-    sub.textContent = `Полу-ведомость, недели: ${result.periodLabel} · найдено загрузок: ${result.matchedUploads} · сотрудников: ${result.rows.length}`;
+    const label = isClose ? "Закрытие месяца" : "Полу-ведомость";
+    sub.textContent = `${label}, недели: ${result.periodLabel} · найдено загрузок: ${result.matchedUploads} · сотрудников: ${result.rows.length}`;
     $("payrollSearchBox").value = "";
     $("wrap").classList.add("wide");
     renderPayrollTable();
