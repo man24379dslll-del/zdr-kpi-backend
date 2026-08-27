@@ -273,3 +273,38 @@ create policy "ratings_select" on kpi_ratings
 -- миграции, проверено read-only перед миграцией.
 update user_profiles set supervisor_names = array['*']
   where id = '06624315-d338-474b-af6c-5ddbedcde8c7';
+
+-- ============================================================
+-- Ведомость ЗП: возврат к календарной структуре (месяц, недели 1-4)
+-- ============================================================
+-- Отменяет гибкий выбор произвольных недель (payroll_stage_adjustments
+-- с ключом periods_key НЕ трогаем — механизм переиспользуется как есть,
+-- только с каноническими наборами недель "месяц-1,месяц-2" (полу-
+-- ведомость) и "месяц-1..месяц-4" (закрытие месяца) вместо произвольных).
+--
+-- Два новых маркера ПО СОТРУДНИКУ (не по периоду — переносятся между
+-- периодами, редактируются вручную при необходимости, как штраф/премия,
+-- но не привязаны к конкретной ведомости):
+--   work_month — "Месяц работы": 1, 2 или 3 (3 = "3-й и далее", просто
+--     обычный расчёт по рейтингу без гарантий/сравнений)
+--   weekly_pay — "Еженедельная оплата": true — сотрудник получает
+--     оплату отдельно, вне этой системы, каждую неделю; НЕ попадает в
+--     полу-ведомость (недели 1-2), но участвует в закрытии месяца (без
+--     вычета за недели 1-2 — их там никогда не было, осознанный
+--     компромисс, см. app/services/payroll.py)
+create table if not exists payroll_employee_markers (
+  fio text primary key,
+  work_month int not null default 1 check (work_month between 1 and 3),
+  weekly_pay boolean not null default false,
+  updated_at timestamptz not null default now()
+);
+
+alter table payroll_employee_markers enable row level security;
+
+drop policy if exists "payroll_markers_select" on payroll_employee_markers;
+create policy "payroll_markers_select" on payroll_employee_markers
+  for select using (is_admin_or_manager());
+
+drop policy if exists "payroll_markers_write" on payroll_employee_markers;
+create policy "payroll_markers_write" on payroll_employee_markers
+  for all using (is_admin_or_manager()) with check (is_admin_or_manager());

@@ -139,3 +139,46 @@ async def upsert_adjustment(payload: AdjustmentIn, user: CurrentUser = Depends(g
         prefer="resolution=merge-duplicates,return=representation",
     )
     return rows[0]
+
+
+class EmployeeMarkerOut(BaseModel):
+    fio: str
+    work_month: int
+    weekly_pay: bool
+    updated_at: str | None = None
+
+
+class EmployeeMarkerIn(BaseModel):
+    fio: str
+    work_month: int = 1
+    weekly_pay: bool = False
+
+
+@router.get("/employee-markers", response_model=list[EmployeeMarkerOut])
+async def list_employee_markers(user: CurrentUser = Depends(get_current_user)):
+    """"Месяц работы"/"Еженедельная оплата" — маркеры ПО СОТРУДНИКУ (не по
+    периоду, см. app/db/schema.sql), переносятся между периодами
+    автоматически. Читает admin/manager, для отображения/редактирования
+    в ведомости ЗП (недели 1-4 — MAX-логика; недели 1-2 — исключение
+    weekly_pay=true, см. services/payroll.py)."""
+    if not user.is_admin_or_manager:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Только admin/manager могут смотреть маркеры сотрудников")
+    client = as_user(user.access_token)
+    return await client.get("payroll_employee_markers", params={"select": "*"})
+
+
+@router.put("/employee-marker", response_model=EmployeeMarkerOut)
+async def upsert_employee_marker(payload: EmployeeMarkerIn, user: CurrentUser = Depends(get_current_user)):
+    """Заводит новую запись или обновляет существующую (fio — ключ)."""
+    if not user.is_admin_or_manager:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Только admin/manager могут менять маркеры сотрудников")
+    if not 1 <= payload.work_month <= 3:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "work_month должен быть 1, 2 или 3")
+
+    client = as_user(user.access_token)
+    rows = await client.post(
+        "payroll_employee_markers?on_conflict=fio",
+        payload.model_dump(),
+        prefer="resolution=merge-duplicates,return=representation",
+    )
+    return rows[0]
