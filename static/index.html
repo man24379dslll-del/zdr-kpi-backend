@@ -674,9 +674,9 @@ function onLoggedIn(){
   if(profile.role === "supervisor"){
     // супервайзер: только просмотр своей группы, без загрузки файлов и БЕЗ
     // доступа к ведомости ЗП (ни просмотр, ни скачивание) — ни на экране,
-    // ни на бэкенде (GET /payroll/flexible — admin/manager-only, см.
-    // routers/payroll.py). "Скачать Excel" рейтинга при этом ДОСТУПЕН —
-    // см. buildSupervisorViewer, экспортирует только их же уже
+    // ни на бэкенде (GET /payroll/half и /payroll/close — admin/manager-
+    // only, см. routers/payroll.py). "Скачать Excel" рейтинга при этом
+    // ДОСТУПЕН — см. buildSupervisorViewer, экспортирует только их же уже
     // отфильтрованные RLS-ом данные.
     $("adminOnlyPanel1").style.display = "none";
     $("openConstructorBtn").style.display = "none";

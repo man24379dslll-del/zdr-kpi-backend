@@ -1,9 +1,9 @@
 """
-Гибкая ведомость ЗП — см. services/payroll.py. Читает kpi_uploads/
-kpi_ratings/payroll_penalties (по-недельные штрафы) и
-payroll_stage_adjustments (штраф/премия/оплата за смены один раз на весь
-набор отмеченных недель) из Supabase; сама агрегация — чистая функция,
-тестируется без сети.
+Ведомость ЗП — см. services/payroll.py (календарная структура: месяц,
+недели 1-4). Читает kpi_uploads/kpi_ratings/payroll_penalties
+(по-недельные штрафы) и payroll_stage_adjustments (штраф/премия/оплата
+за смены один раз на весь период) из Supabase; сама агрегация — чистая
+функция, тестируется без сети.
 """
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from app.services.payroll import (
     DEFAULT_GUARANTEED_BASE,
     DEFAULT_MONTH2_TRAINING_BONUS,
     DEFAULT_OVERTIME_RATE,
-    build_flexible_payroll,
     build_half_payroll,
     build_month_close_payroll,
     half_payroll_periods,
@@ -27,19 +26,6 @@ from app.services.salary import DEFAULT_HOURS_NORM
 from app.supabase_client import as_user
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
-
-
-def _parse_periods(periods: str) -> list[str]:
-    parsed = [p.strip() for p in periods.split(",") if p.strip()]
-    if not parsed:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "periods не должен быть пустым")
-    invalid = [p for p in parsed if not is_weekly_period_label(p)]
-    if invalid:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            f"periods должен состоять из недельных period_label вида 'месяц-неделя', некорректные: {invalid}",
-        )
-    return parsed
 
 
 async def _load_adjustments(client, periods_key: str) -> dict[str, dict]:
@@ -63,8 +49,8 @@ async def _load_markers(client) -> dict[str, dict]:
 
 
 async def _load_uploads_and_ratings(client, periods: list[str]):
-    """Общая часть для /payroll/half и /payroll/close (следующий коммит):
-    находит загрузки, чьи period_label входят в periods, и подтягивает их
+    """Общая часть для /payroll/half и /payroll/close: находит загрузки,
+    чьи period_label входят в periods, и подтягивает их
     kpi_ratings/payroll_penalties."""
     all_uploads = await client.get("kpi_uploads", params={"select": "id,period_label"})
     period_set = set(periods)
@@ -170,56 +156,6 @@ async def get_month_close_payroll(
         half_sum_by_fio=half_sum_by_fio,
         hours_norm=hours_norm, overtime_rate=overtime_rate,
         guaranteed_base=guaranteed_base, month2_bonus=month2_bonus,
-    )
-
-
-@router.get("/flexible")
-async def get_flexible_payroll(
-    periods: str,
-    year: int,
-    hours_norm: float = DEFAULT_HOURS_NORM,
-    overtime_rate: float = DEFAULT_OVERTIME_RATE,
-    user: CurrentUser = Depends(get_current_user),
-):
-    """periods: недельные period_label через запятую, например "7-5,8-1,8-2"
-    (любое количество, из любых месяцев). year — только для текста периода
-    начисления, period_label его не содержит. hours_norm/overtime_rate —
-    параметры доплаты за переработку/недоработку часов (см.
-    services/payroll.py) — применяются всегда, ко всему набору недель."""
-    if not user.is_admin_or_manager:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Только admin/manager могут смотреть ведомость ЗП")
-
-    parsed_periods = _parse_periods(periods)
-
-    client = as_user(user.access_token)
-    all_uploads = await client.get("kpi_uploads", params={"select": "id,period_label"})
-    period_set = set(parsed_periods)
-    matching_uploads = [u for u in all_uploads if (u.get("period_label") or "") in period_set]
-
-    ratings_by_upload_id: dict[str, list[dict]] = {}
-    penalties_by_upload_id: dict[str, dict[str, float]] = {}
-    for upload in matching_uploads:
-        upload_id = upload["id"]
-        ratings_by_upload_id[upload_id] = await client.get(
-            "kpi_ratings",
-            params={
-                "upload_id": f"eq.{upload_id}",
-                "select": "fio,supervisor,status,is_novice,salary,work_hours,shift_count",
-            },
-        )
-        penalty_rows = await client.get(
-            "payroll_penalties",
-            params={"upload_id": f"eq.{upload_id}", "select": "fio,penalty"},
-        )
-        penalties_by_upload_id[upload_id] = {row["fio"]: row["penalty"] for row in penalty_rows}
-
-    periods_key = make_periods_key(parsed_periods)
-    adjustments_by_fio = await _load_adjustments(client, periods_key)
-
-    return build_flexible_payroll(
-        matching_uploads, ratings_by_upload_id, penalties_by_upload_id, parsed_periods, year,
-        adjustments_by_fio=adjustments_by_fio,
-        hours_norm=hours_norm, overtime_rate=overtime_rate,
     )
 
 
