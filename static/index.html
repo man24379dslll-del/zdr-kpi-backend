@@ -323,12 +323,14 @@
       <button class="dash-tab-btn" data-dashtab="funnel">Воронка новичков</button>
       <button class="dash-tab-btn" data-dashtab="channels">Каналы</button>
       <button class="dash-tab-btn" data-dashtab="anomalies">Аномалии</button>
+      <button class="dash-tab-btn" data-dashtab="bystatus">По уровням</button>
     </div>
     <div id="dashLog" class="log"></div>
     <div class="tab-panel active" id="dashtab-summary"><div id="dashSummaryContainer"></div></div>
     <div class="tab-panel" id="dashtab-funnel"><div id="dashFunnelContainer"></div></div>
     <div class="tab-panel" id="dashtab-channels"><div id="dashChannelsContainer"></div></div>
     <div class="tab-panel" id="dashtab-anomalies"><div id="dashAnomaliesContainer"></div></div>
+    <div class="tab-panel" id="dashtab-bystatus"><div id="dashByStatusContainer"></div></div>
   </div>
 
   <div class="panel" id="payrollPanel" style="display:none;">
@@ -2302,6 +2304,30 @@ function renderSupervisors(){
     `;
     tbody.appendChild(tr);
   }
+
+  // "ИТОГ ОТДЕЛА" — сумма карточек/суммы по каждой из 3 категорий across
+  // ВСЕ группы разом (включая Курбанову/Клюйко — currentSupervisorRows их
+  // тоже содержит, is_na не фильтруем). Ср.чек/конв./с контакта/время/
+  // % ошибок/баллы не суммируем (не аддитивные величины) — пусто. Без
+  // места/ранга и без коэффициента — не применимо к итоговой строке.
+  const totalSum = (field) => currentSupervisorRows.reduce((s, r) => s + (r[field] || 0), 0);
+  const totalTr = document.createElement("tr");
+  totalTr.style.cssText = "font-weight:800;background:var(--panel-2);";
+  totalTr.innerHTML = `
+    <td class="col-fio">ИТОГ ОТДЕЛА</td>
+    <td></td>
+    <td class="block-end">${totalSum("n_evaluated")}/${totalSum("n_total")}</td>
+    <td>${totalSum("c1_cards")}</td><td>${fmt(totalSum("c1_sum"))}</td><td></td><td></td><td></td><td class="block-end"></td>
+    <td>${totalSum("lk_cards")}</td><td>${fmt(totalSum("lk_sum"))}</td><td></td><td></td><td></td><td class="block-end"></td>
+    <td>${totalSum("ch_cards")}</td><td>${fmt(totalSum("ch_sum"))}</td><td></td><td></td><td></td><td class="block-end"></td>
+    <td></td><td class="block-end"></td>
+    <td></td><td class="block-end"></td>
+    <td></td>
+    <td class="place-cell"></td>
+    <td></td>
+  `;
+  tbody.appendChild(totalTr);
+
   wrap.appendChild(table);
   container.appendChild(wrap);
 }
@@ -2879,6 +2905,68 @@ async function renderDashChannels(){
   c.innerHTML = html;
 }
 
+// "По уровням" — отдельная, более подробная вкладка на основе ТЕХ ЖЕ
+// данных, что уже используются в "Сводке" (/dashboards/summary::by_status,
+// status_counts) — цифры намеренно совпадают с тем, что показывает
+// "Сводка", просто вынесены отдельно и крупнее. Только средние показатели
+// по 5 категориям + кол-во человек — БЕЗ ЗП/бонусов/коэффициентов.
+async function renderDashByStatus(){
+  const c = $("dashByStatusContainer");
+  c.innerHTML = "";
+  const data = await loadDashboardData();
+  if(!data){ c.innerHTML = `<div class="history-empty">Периодов ещё нет в базе.</div>`; return; }
+  const { latest, prev } = data;
+  const s = await apiGet("/dashboards/summary", { upload_id: latest.id, previous_upload_id: prev ? prev.id : null });
+
+  let html = `<div style="margin-bottom:14px;color:var(--muted);font-size:13px;">Период: <b style="color:var(--text);">${latest.period_label}</b>${prev ? ` (сравнение с ${prev.period_label})` : ""}</div>`;
+
+  if(s.by_status.length){
+    html += `<div style="font-size:12px;color:var(--muted);margin-bottom:8px;">Стрелка — изменение к предыдущему периоду. Зелёный всегда означает "стало лучше" (для времени и % ошибок — меньше лучше).</div>`;
+    html += `<div class="subtable-wrap"><table class="dyn-table"><thead><tr>
+      <th>Статус</th><th>чел.</th>
+      <th>1 обращение (сумма/конт.)</th><th>Δ</th>
+      <th>ЛК (сумма/конт.)</th><th>Δ</th>
+      <th>Радио+ТВ/Инт. (сумма/конт.)</th><th>Δ</th>
+      <th>Время</th><th>Δ</th>
+      <th>% ошибок</th><th>Δ</th>
+    </tr></thead><tbody>`;
+    s.by_status.forEach(row => {
+      const d = (f) => row[`${f}_delta`] ? row[`${f}_delta`].diff : null;
+      html += `<tr>
+        <td style="font-family:var(--sans);font-weight:600;">${row.status}</td>
+        <td>${row.count}</td>
+        <td>${(row.avg_c1_per_contact ?? 0).toFixed(0)} ₽</td><td>${trendCell(d("c1_per_contact"))}</td>
+        <td>${(row.avg_lk_per_contact ?? 0).toFixed(0)} ₽</td><td>${trendCell(d("lk_per_contact"))}</td>
+        <td>${(row.avg_ch_per_contact ?? 0).toFixed(0)} ₽</td><td>${trendCell(d("ch_per_contact"))}</td>
+        <td>${fmtTime(row.avg_time_per_contact)}</td><td>${trendCell(d("time_per_contact"), "", true)}</td>
+        <td>${(row.avg_errors_pct ?? 0).toFixed(1)}%</td><td>${trendCell(d("errors_pct"), "%", true)}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div>`;
+  } else {
+    html += `<div class="history-empty">Нет оценённых сотрудников в этом периоде.</div>`;
+  }
+
+  const statusEntries = Object.entries(s.status_counts).sort((a,b) => b[1]-a[1]);
+  const maxStatusCount = Math.max(...statusEntries.map(e=>e[1]), 1);
+  html += `<div class="sub-title" style="margin-top:26px;">Количество людей по уровню</div>`;
+  html += `<div style="display:flex;flex-direction:column;gap:8px;margin-top:10px;">`;
+  statusEntries.forEach(([st, cnt]) => {
+    const w = Math.round((cnt/maxStatusCount)*100);
+    html += `<div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;">
+        <span style="font-family:var(--sans);">${st}</span><span style="font-family:var(--mono);">${cnt} чел.</span>
+      </div>
+      <div style="background:var(--panel-2);border-radius:6px;height:12px;overflow:hidden;">
+        <div style="width:${w}%;height:100%;background:linear-gradient(90deg,var(--accent),var(--accent-2));"></div>
+      </div>
+    </div>`;
+  });
+  html += `</div>`;
+
+  c.innerHTML = html;
+}
+
 async function renderDashAnomalies(){
   const c = $("dashAnomaliesContainer");
   c.innerHTML = "";
@@ -3182,7 +3270,7 @@ $("downloadPayrollBtn").addEventListener("click", () => {
   XLSX.utils.book_append_sheet(wb, ws, "Ведомость ЗП");
   XLSX.writeFile(wb, `Ведомость_ЗП_${meta.periodsKey.replace(/,/g, "_")}.xlsx`);
 });
-const DASH_RENDERERS = { summary: renderDashSummary, funnel: renderDashFunnel, channels: renderDashChannels, anomalies: renderDashAnomalies };
+const DASH_RENDERERS = { summary: renderDashSummary, funnel: renderDashFunnel, channels: renderDashChannels, anomalies: renderDashAnomalies, bystatus: renderDashByStatus };
 async function loadActiveDashboard(){
   const activeTab = $("dashboardsPanel").querySelector(".dash-tab-btn.active").dataset.dashtab;
   clearLog($("dashLog"));
@@ -3743,12 +3831,36 @@ function buildSupervisorExportSheet(rows){
     r.total_score, r.statusLabel ?? r.final_place,
     r.coefficient,
   ]);
-  const ws = XLSX.utils.aoa_to_sheet([rowA, rowB, ...arr]);
+
+  // "ИТОГ ОТДЕЛА" — сумма карточек/суммы по каждой из 3 категорий across
+  // ВСЕ группы разом (включая Курбанову/Клюйко — они присутствуют в rows,
+  // просто с statusLabel вместо места, их суммы всё равно учитываются).
+  // Ср.чек/конв./с контакта/время/% ошибок/баллы — не аддитивные величины,
+  // не суммируем (пусто). Без места/ранга и без коэффициента — не
+  // применимо к итоговой строке.
+  const sum = (field) => rows.reduce((s, r) => s + (r[field] || 0), 0);
+  const totalRow = [
+    "ИТОГ ОТДЕЛА", "", `${sum("n_evaluated")}/${sum("n_total")}`,
+    sum("c1_cards"), sum("c1_sum"), "", "", "", "",
+    sum("lk_cards"), sum("lk_sum"), "", "", "", "",
+    sum("ch_cards"), sum("ch_sum"), "", "", "", "",
+    "", "",
+    "", "", "",
+    "", "",
+    "",
+  ];
+
+  const ws = XLSX.utils.aoa_to_sheet([rowA, rowB, ...arr, totalRow]);
   ws["!merges"] = categoryHeaderMerges(0, totalCols);
   ws["!merges"].push({ s: { r: 0, c: finalCols - 1 }, e: { r: 1, c: finalCols - 1 } });
   applyPlaceGradients(ws, sorted, PLACE_COLS_SUP, 2);
   styleHeaderRow(ws, finalCols, 0, "cat");
   styleHeaderRow(ws, finalCols, 1, "sub");
+  const totalRowIdx = 2 + arr.length;
+  for(let col = 0; col < finalCols; col++){
+    const addr = XLSX.utils.encode_cell({ r: totalRowIdx, c: col });
+    if(ws[addr]) ws[addr].s = { font: { bold: true }, fill: { patternType: "solid", fgColor: { rgb: "FFEEF0FE" } } };
+  }
   return ws;
 }
 
