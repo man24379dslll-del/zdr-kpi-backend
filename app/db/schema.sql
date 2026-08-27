@@ -245,3 +245,31 @@ alter table payroll_stage_adjustments alter column month drop not null;
 alter table payroll_stage_adjustments alter column year drop not null;
 alter table payroll_stage_adjustments drop constraint if exists payroll_stage_adjustments_month_year_fio_key;
 alter table payroll_stage_adjustments add constraint payroll_stage_adjustments_fio_periods_key_key unique (fio, periods_key);
+
+-- ============================================================
+-- Джокер '*' в supervisor_names — доступ ко ВСЕМ группам
+-- ============================================================
+-- Один супервайзер (Клюйко Анатолий) должен видеть данные ВСЕХ групп, не
+-- только своей — но статично перечислять все имена групп в
+-- supervisor_names неудобно (список групп пополняется, например недавно
+-- Васько). Вместо этого: если supervisor_names содержит ровно '*',
+-- ratings_select даёт доступ ко ВСЕМ строкам kpi_ratings, независимо от
+-- реального supervisor. my_supervisor_names() не меняется (возвращает
+-- массив как есть) — джокер обрабатывается прямо в политике. Роль
+-- остаётся 'supervisor' — все остальные ограничения (скрытые
+-- Реквизиты/Ведомость ЗП, скрытые коэффициенты ЗП в его таблице) не
+-- завязаны на RLS, применяются на фронтенде как обычно (см.
+-- static/index.html::onLoggedIn).
+drop policy if exists "ratings_select" on kpi_ratings;
+create policy "ratings_select" on kpi_ratings
+  for select using (
+    is_admin_or_manager()
+    OR '*' = ANY(my_supervisor_names())
+    OR supervisor = ANY(my_supervisor_names())
+  );
+
+-- Клюйко Анатолий Анатольевич (id известен из user_profiles, см. ниже) —
+-- единственная существующая запись с "Клюйко" в display_name на момент
+-- миграции, проверено read-only перед миграцией.
+update user_profiles set supervisor_names = array['*']
+  where id = '06624315-d338-474b-af6c-5ddbedcde8c7';
