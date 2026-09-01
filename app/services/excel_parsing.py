@@ -103,6 +103,7 @@ import pandas as pd
 from fastapi import HTTPException, status
 
 from app.services.group_naming import (
+    PEAKS_GROUP_RE,
     PEAKS_PP_SUFFIX,
     PEAKS_UVELICHITELI_SUFFIX,
     REGION_UK_GROUP_RE,
@@ -178,6 +179,18 @@ _MANDATORY_COLUMNS = {
 # Н/О: статус новичка/тренера/руководителя/отпуска/больничного, либо
 # нулевые продажи по 1 обращению — как в старой JS-версии. Не влияет на
 # попадание в тир ЛК (A/Б/В), только на итоговое место рейтинга и ЛГ.
+#
+# ПП/Увеличители (PEAKS_GROUP_RE) — ИСКЛЮЧЕНИЕ: их total_score считается
+# ТОЛЬКО по каналу (см. weekly_rating.py::PEAKS_SCORE_KEYS), они физически
+# не работают по категории "1 обращение" — c1_sum у них СТРУКТУРНО всегда
+# 0 (не "нет продаж", а "эта категория для них не применима"). Проверять
+# c1_sum==0 как сигнал Н/О для этих групп неверно — это уводило в Н/О
+# практически 100% состава каждую неделю, final_place/тир/коэффициент ЛГ
+# для них никогда не считались (нашли на реальных данных: 55/55 строк с
+# c1_sum==0 у ПП+Увеличители против 106/288 у обычных групп той же
+# недели). Для них сигналом служит ch_sum (уже разрешённый канал этого
+# сотрудника, кладётся в row **channel_values ниже по коду, до вызова
+# этой функции) — тот же принцип "структурно применимая категория".
 NA_STATUSES = {"тренер", "руководитель", "отпуск", "больничный"}
 
 
@@ -185,6 +198,9 @@ def is_na_row(row: dict) -> bool:
     status_value = str(row.get("status") or "").strip().lower()
     if status_value.startswith("новичок") or status_value in NA_STATUSES:
         return True
+    supervisor = row.get("supervisor")
+    if supervisor and PEAKS_GROUP_RE.search(supervisor):
+        return (row.get("ch_sum") or 0) == 0
     return (row.get("c1_sum") or 0) == 0
 
 

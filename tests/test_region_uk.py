@@ -181,3 +181,53 @@ def test_region_uk_pp_and_uvelichiteli_get_separate_ladder_groups():
     assert by_fio["Увеличители Орлов О. О."].final_place == 1
     assert by_fio["ПП Козлов А. А."].tier == 1
     assert by_fio["Увеличители Орлов О. О."].tier == 1
+
+
+def test_peaks_with_zero_c1_sum_still_gets_final_place_and_tier():
+    # РЕАЛЬНЫЙ случай (проверено на живых данных) — у ПП/Увеличители
+    # c1_sum СТРУКТУРНО всегда 0 (эта категория для них не применима,
+    # весь зачёт по каналу). is_na_row раньше ошибочно считал это
+    # "Н/О" (как у обычных групп) — final_place/тир/коэффициент никогда
+    # не назначались. Теперь для ПП/Увеличители сигналом служит ch_sum.
+    raw = _build_excel_bytes([
+        _group_row("операторы без супервизора"),
+        _row("ПП Козлов А. А.", 80, 30, 160, 30, 3, c1_sum=0),
+        _row("ПП Быстров Н. Н.", 60, 15, 120, 45, 8, c1_sum=0),
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    by_fio = {r.fio: r for r in results}
+
+    kozlov = by_fio["ПП Козлов А. А."]
+    assert kozlov.is_na is False
+    assert kozlov.final_place is not None
+    assert kozlov.tier is not None
+    assert kozlov.coefficient is not None
+
+
+def test_peaks_with_zero_ch_sum_is_still_na():
+    # ch_sum==0 (не просто ch_per_contact==0, а сама сумма по каналу) —
+    # для ПП/Увеличители это и есть настоящее "ничего не сделал за неделю",
+    # такой сотрудник по-прежнему должен уходить в Н/О.
+    pustyshkin = {**_row("ПП Пустышкин П. П.", 0, 0, 0, 30, 3, c1_sum=0), RADIO_SUM: 0}
+    raw = _build_excel_bytes([_group_row("операторы без супервизора"), pustyshkin])
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    by_fio = {r.fio: r for r in results}
+    assert by_fio["ПП Пустышкин П. П."].is_na is True
+    assert by_fio["ПП Пустышкин П. П."].final_place is None
+
+
+def test_region_uk_with_zero_c1_sum_is_still_na_unaffected_by_peaks_fix():
+    # Контроль: у "Регион УК" c1 остаётся частью total_score (в отличие от
+    # ПП/Увеличители) — c1_sum==0 там по-прежнему настоящий сигнал Н/О,
+    # фикс для ПП/Увеличители их не затрагивает.
+    raw = _build_excel_bytes([
+        _group_row("операторы без супервизора"),
+        _row("ЗДР Пустышкина П. П.", 0, 0, 0, 30, 3, c1_sum=0),
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    by_fio = {r.fio: r for r in results}
+    assert by_fio["ЗДР Пустышкина П. П."].is_na is True
+    assert by_fio["ЗДР Пустышкина П. П."].final_place is None

@@ -1305,6 +1305,15 @@ function channelFields(e, channel){
 }
 function isNaMain(e){ return EXCLUDED_STATUSES.includes(e.status) || e.c1_sum === 0; }
 function isNaNovice(e){ return e.c1_sum === 0; }
+// ПП/Увеличители (computeMainRating передаёт для g.isPeaks) — их
+// total_score считается ТОЛЬКО по каналу (см. computeMainRating ниже),
+// они физически не работают по категории "1 обращение" — c1_sum у них
+// СТРУКТУРНО всегда 0 (не "нет продаж", категория не применима). Сигнал
+// Н/О для них — ch_sum (уже разрешённый канал, см. pass1 в scoreSlice).
+// Точный перенос app/services/excel_parsing.py::is_na_row — там та же
+// причина/фикс, найдено на реальных данных (55/55 ПП+Увеличители-строк
+// с c1_sum==0 против 106/288 у обычных групп той же недели).
+function isNaPeaks(e){ return EXCLUDED_STATUSES.includes(e.status) || (e.ch_sum || 0) === 0; }
 
 // Тиры для места ЛК:
 //  A (лучшие) — карточки>0 и конверсия>0: ранжируются по "сумма с контакта" как раньше
@@ -1512,7 +1521,10 @@ function computeMainRating(groups, prevCoeffMap, tierCoefficients){
     const active = g.isRegionUK ? { c1:true, lk:true, ch:false, time:true, errors:false }
       : g.isPeaks ? { c1:false, lk:false, ch:true, time:false, errors:false }
       : undefined;
-    const scored = scoreSlice(g.employees, e => channelFields(e, channel), isNaMain, "c1_sum", true, active);
+    // g.isPeaks -> isNaPeaks (сигнал Н/О по ch_sum, не по c1_sum — см.
+    // isNaPeaks выше), для всех остальных групп — как раньше, isNaMain.
+    const naFn = g.isPeaks ? isNaPeaks : isNaMain;
+    const scored = scoreSlice(g.employees, e => channelFields(e, channel), naFn, "c1_sum", true, active);
     out.push(...scored.map(e => ({...e, supervisor: g.supervisor, channel, isRegionUK: !!g.isRegionUK, isPeaks: !!g.isPeaks})));
   }
   if(periodType === "week"){
