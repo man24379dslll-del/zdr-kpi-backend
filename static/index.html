@@ -1235,7 +1235,7 @@ $("parseBtn").addEventListener("click", async () => {
       log(`Нашёл колонку "Рабочее время, ч" — база ЗП будет посчитана по отработанным часам.`, "ok");
     }
 
-    buildChannelSettings(groups);
+    await buildChannelSettings(groups);
     $("channelPanel").style.display = "block";
     $("channelPanel").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch(err){
@@ -1245,7 +1245,41 @@ $("parseBtn").addEventListener("click", async () => {
   }
 });
 
-function guessChannel(group){
+// Мирный перенос app/services/excel_parsing.py::_normalize_supervisor —
+// та же нормализация, чтобы совпадения с supervisor_channels из Supabase
+// не зависели от пунктуации/регистра, различающихся между периодами.
+function normalizeSupervisor(text){
+  let t = (text || "").toLowerCase();
+  t = t.replace(/супервайзер|супервизор/g, " ");
+  t = t.replace(/[^а-яёa-z\s]/g, " ");
+  return t.replace(/\s+/g, " ").trim();
+}
+
+// Перенос app/services/excel_parsing.py::_match_supervisor_channel —
+// сначала точное совпадение после нормализации, потом по вхождению
+// фамилии. Возвращает null, если в supervisorChannels нет совпадений.
+function matchSupervisorChannel(supervisor, supervisorChannels){
+  const normalizedTarget = normalizeSupervisor(supervisor);
+  if(!normalizedTarget) return null;
+
+  for(const [configSupervisor, channel] of Object.entries(supervisorChannels)){
+    if(normalizeSupervisor(configSupervisor) === normalizedTarget) return channel;
+  }
+  for(const [configSupervisor, channel] of Object.entries(supervisorChannels)){
+    const normalizedConfig = normalizeSupervisor(configSupervisor);
+    const surname = normalizedConfig.split(" ", 1)[0] || "";
+    if(surname && normalizedTarget.includes(surname)) return channel;
+  }
+  return null;
+}
+
+// Приоритет: supervisor_channels из Supabase (настройка admin/manager,
+// см. app/routers/supervisor_channels.py) → CHANNEL_HINTS (устаревший
+// захардкоженный список, оставлен как запасной вариант для супервайзеров,
+// ещё не заведённых в Supabase) → эвристика "больше сумма".
+function guessChannel(group, supervisorChannels){
+  const matched = matchSupervisorChannel(group.supervisor, supervisorChannels || {});
+  if(matched) return matched;
   for(const hint of CHANNEL_HINTS){
     if(group.supervisor.includes(hint.match)) return hint.channel;
   }
@@ -1254,12 +1288,19 @@ function guessChannel(group){
   return itot > rtot ? "inet" : "radio";
 }
 
-function buildChannelSettings(groups){
+async function buildChannelSettings(groups){
   groupChannels = {};
+  let supervisorChannels = {};
+  try{
+    const rows = await apiGet("/supervisor-channels");
+    supervisorChannels = Object.fromEntries(rows.map(r => [r.supervisor, r.channel]));
+  } catch(err){
+    log("Не удалось загрузить настройки каналов супервайзеров из Supabase, использую резервную эвристику: " + err.message, "warn");
+  }
   const box = $("channelList");
   box.innerHTML = "";
   for(const g of groups){
-    const guess = guessChannel(g);
+    const guess = guessChannel(g, supervisorChannels);
     groupChannels[g.supervisor] = guess;
 
     const rtot = g.employees.reduce((s,e)=>s+e.radio_sum,0);
