@@ -487,7 +487,7 @@
       </div>
       <div class="row" style="gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap;">
         <span style="font-size:13px;color:var(--muted);">База ставки, ₽/мес (для расчёта ставки за час):</span>
-        <input type="number" id="monthlyBaseRate" class="period-select" style="width:100px;" value="40000" min="0" step="1">
+        <input type="number" id="monthlyBaseRate" class="period-select" style="width:100px;" value="20000" min="0" step="1">
         <span style="font-size:13px;color:var(--muted);">Норма часов в месяце:</span>
         <input type="number" id="hoursNorm" class="period-select" style="width:80px;" value="160" min="1" step="0.1">
       </div>
@@ -1688,7 +1688,7 @@ function currentHoursNorm(){
   return parseFloat($("hoursNorm").value) || 160;
 }
 function currentMonthlyBaseRate(){
-  return parseFloat($("monthlyBaseRate").value) || 40000;
+  return parseFloat($("monthlyBaseRate").value) || 20000;
 }
 function assignSalary(rows, prevCoeffMap){
   const hourlyRate = currentMonthlyBaseRate() / currentHoursNorm();
