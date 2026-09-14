@@ -276,6 +276,7 @@
       <div class="row" style="margin-top:6px;justify-content:flex-end;">
         <button class="btn btn-ghost" id="openRequisitesBtn" style="padding:7px 14px;font-size:12.5px;">💳 Реквизиты</button>
         <button class="btn btn-ghost" id="openPayrollBtn" style="padding:7px 14px;font-size:12.5px;">💰 Ведомость ЗП</button>
+        <button class="btn btn-ghost" id="openSectorBtn" style="padding:7px 14px;font-size:12.5px;">🧭 Сектор №1</button>
         <button class="btn btn-ghost" id="openDashboardsBtn" style="padding:7px 14px;font-size:12.5px;">📊 Дашборды</button>
         <button class="btn btn-ghost" id="openDynamicsBtn" style="padding:7px 14px;font-size:12.5px;">📈 Динамика</button>
         <button class="btn btn-ghost" id="openConstructorBtn" style="padding:7px 14px;font-size:12.5px;">⚙️ Конструктор рейтинга</button>
@@ -303,6 +304,24 @@
     </div>
     <div id="reqLog" class="log"></div>
     <div id="reqPreview" style="margin-top:16px;"></div>
+  </div>
+
+  <div class="panel" id="sectorPanel" style="display:none;">
+    <div class="row" style="justify-content:space-between;align-items:flex-start;">
+      <h2 style="margin:0;">Сектор №1</h2>
+      <button class="btn btn-ghost" id="closeSectorBtn" style="padding:7px 14px;font-size:12.5px;">Закрыть ✕</button>
+    </div>
+    <div class="sub" style="margin:10px 0 16px;">4 группы супервайзеров (Болотов, Владыкин, Гулуа, Потапова) вместе, за один выбранный период — то же, что видит руководитель сектора в своей "Моей группе", только доступно admin/manager для любого сохранённого периода.</div>
+    <div class="row" style="gap:14px;flex-wrap:wrap;margin-bottom:16px;align-items:center;">
+      <div class="chan-toggle" id="sectorTypeToggle" style="display:inline-flex;">
+        <button type="button" data-type="week" class="active">Недельный</button>
+        <button type="button" data-type="day">Ежедневный</button>
+      </div>
+      <select id="sectorPeriodSelect" class="period-select" style="min-width:220px;"></select>
+      <button class="btn btn-ghost" id="sectorExportBtn" style="padding:7px 14px;font-size:12.5px;">Скачать Excel</button>
+    </div>
+    <div id="sectorLog" class="log"></div>
+    <div id="sectorContainer"></div>
   </div>
 
   <div class="panel" id="dashboardsPanel" style="display:none;">
@@ -682,8 +701,17 @@ function onLoggedIn(){
     $("openConstructorBtn").style.display = "none";
     $("openPayrollBtn").style.display = "none";
     $("openRequisitesBtn").style.display = "none";
-    $("pageTitle").textContent = "Моя группа — рейтинг";
-    $("pageSub").textContent = "Здесь показаны только сотрудники вашей группы. Данные обновляет администратор/руководитель после загрузки очередного отчёта.";
+    $("openSectorBtn").style.display = "none";
+    // Руководитель сектора — тот же аккаунт/RLS-механизм, что у обычного
+    // супервайзера (просто supervisor_names = все 4 группы сектора), только
+    // заголовок меняем для ясности — "Моя группа" по названию не подходит,
+    // когда групп сразу 4 (renderGroupBlocks выше это уже покажет блоками).
+    const isSector1Head = profile.supervisor_names && profile.supervisor_names.length === SECTOR_1_SUPERVISORS.size
+      && profile.supervisor_names.every(s => SECTOR_1_SUPERVISORS.has(s));
+    $("pageTitle").textContent = isSector1Head ? "Сектор №1 — рейтинг" : "Моя группа — рейтинг";
+    $("pageSub").textContent = isSector1Head
+      ? "Здесь показаны все 4 группы Сектора №1. Данные обновляет администратор/руководитель после загрузки очередного отчёта."
+      : "Здесь показаны только сотрудники вашей группы. Данные обновляет администратор/руководитель после загрузки очередного отчёта.";
     buildSupervisorViewer();
   } else {
     $("adminOnlyPanel1").style.display = "block";
@@ -706,6 +734,33 @@ function dbRowToDisplayRow(r){
     salaryCoeffUsed: r.coefficient, salaryCoeffFromPrev: true, channel: r.channel,
     work_hours: r.work_hours ?? null, shift_count: r.shift_count ?? null,
   };
+}
+
+// Рендер нескольких групп ОДНИМ блоком на группу (заголовок + своя
+// таблица) — общий паттерн с renderGroups() (вкладка "По группам" сразу
+// после расчёта), но по УЖЕ сохранённым в Supabase строкам (dbRowToDisplayRow),
+// без isRegionUK/канального тега — используется там, где рядом нужно
+// видеть НЕСКОЛЬКО обычных групп супервайзеров сразу: панель "Сектор №1"
+// (admin/manager) и "Моя группа" супервайзера с несколькими группами
+// (см. buildSupervisorViewer ниже — тот же руководитель сектора, а также
+// Курбанова Зарина, у которой 2 группы).
+function renderGroupBlocks(container, rows, groupNames, opts){
+  container.innerHTML = "";
+  let any = false;
+  for(const gname of groupNames){
+    const groupRows = rows.filter(r => r.supervisor === gname);
+    if(!groupRows.length) continue;
+    any = true;
+    const channel = groupRows[0].channel;
+    const block = document.createElement("div");
+    block.className = "group-block";
+    block.innerHTML = `<div class="group-title">${displayGroupName(gname)}<span class="count">${groupRows.length} чел.</span><span class="chan-tag">${channel==='inet'?'ИНТЕРНЕТ':'РАДИО+ТВ'}</span></div>`;
+    block.appendChild(buildDetailTable(groupRows, false, opts.showTier, channel === "inet" ? "Интернет" : "ТВ+Радио", false, opts.showDelta, opts.hideFinalPay));
+    container.appendChild(block);
+  }
+  if(!any){
+    container.innerHTML = `<div style="color:var(--muted);padding:20px 0;">Ничего не найдено.</div>`;
+  }
 }
 
 async function buildSupervisorViewer(){
@@ -796,7 +851,14 @@ async function buildSupervisorViewer(){
       // (0.75% за офор., 2% за дост., ЗП), но видит ЛГ/коэффициенты/часы/
       // смены как есть. Сам расчёт не меняется, только видимость колонок
       // в таблице (см. buildDetailTable/detailTableHead).
-      containerEl.appendChild(buildDetailTable(currentRows, false, vType === "week", null, false, true, true));
+      // Несколько групп (руководитель сектора, Курбанова Зарина) — блоком
+      // на группу (renderGroupBlocks), одна группа — как раньше, единой
+      // таблицей без лишнего заголовка группы.
+      if(profile.supervisor_names && profile.supervisor_names.length > 1){
+        renderGroupBlocks(containerEl, currentRows, profile.supervisor_names, { showTier: vType === "week", showDelta: true, hideFinalPay: true });
+      } else {
+        containerEl.appendChild(buildDetailTable(currentRows, false, vType === "week", null, false, true, true));
+      }
     } catch(err){
       log("Ошибка: " + err.message, "err", logEl2);
     }
@@ -1356,6 +1418,29 @@ function isNaNovice(e){ return e.c1_sum === 0; }
 // с c1_sum==0 против 106/288 у обычных групп той же недели).
 function isNaPeaks(e){ return EXCLUDED_STATUSES.includes(e.status) || (e.ch_sum || 0) === 0; }
 
+// Сектор №1 (4 обычные группы супервайзеров) — категория "ЛК" не входит
+// в total_score для всех сотрудников этих групп, КРОМЕ 3 исключений (по
+// точному ФИО, как в реальном файле — сокращённая форма с префиксом
+// "ЗДР ЛК"). Точный перенос app/services/group_naming.py::SECTOR_1_*.
+// В отличие от ПП/Увеличители/Региона УК выше — решение per-employee
+// внутри ОДНОЙ группы, не на всю группу целиком, поэтому не через
+// групповой `active`-флаг scoreSlice, а через отдельный колбэк — см.
+// sector1ZeroesLk и computeMainRating ниже.
+const SECTOR_1_SUPERVISORS = new Set([
+  "Супервайзер - Болотов Дмитрий Александрович",
+  "Супервайзер - Владыкин Сергей Александрович",
+  "Супервайзер - Гулуа Анна Эдуардовна",
+  "Супервайзер - Потапова Алина Дамировна",
+]);
+const SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO = new Set([
+  "ЗДР ЛК Ремизов А. Г.",
+  "ЗДР ЛК Борисенко Н. В.",
+  "ЗДР ЛК Шайдуров А. В.",
+]);
+function sector1ZeroesLk(supervisor, fio){
+  return SECTOR_1_SUPERVISORS.has(supervisor) && !SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO.has(fio);
+}
+
 // Тиры для места ЛК:
 //  A (лучшие) — карточки>0 и конверсия>0: ранжируются по "сумма с контакта" как раньше
 //  B (среднее) — карточки=0, либо карточки 1-9 при конверсии 0%: место = среднее мест
@@ -1483,7 +1568,7 @@ function computeTieredChannelPlaces(items){
   return places;
 }
 
-function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategories){
+function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategories, lkActiveFn){
   if(items.length === 0) return [];
   const active = activeCategories || { c1:true, lk:true, ch:true, time:true, errors:true };
   const c1pc = items.map(e=>e.c1_pc);
@@ -1533,7 +1618,11 @@ function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategorie
     const ch_place = e.ch_place;
     const c1_score = e.c1_place*3, lk_score = lk_place*1.5, ch_score = ch_place*2.5;
     const time_score = e.time_place*1, errors_score = e.errors_place*1;
-    const total_score = (active.c1?c1_score:0)+(active.lk?lk_score:0)+(active.ch?ch_score:0)+(active.time?time_score:0)+(active.errors?errors_score:0);
+    // lkActiveFn — поэлементное переопределение поверх группового active.lk
+    // (Сектор №1: у большинства сотрудников группы ЛК не в счёт, у 3
+    // исключений — как обычно, см. sector1ZeroesLk/computeMainRating).
+    const lkActive = active.lk && (lkActiveFn ? lkActiveFn(e) : true);
+    const total_score = (active.c1?c1_score:0)+(lkActive?lk_score:0)+(active.ch?ch_score:0)+(active.time?time_score:0)+(active.errors?errors_score:0);
     return {...e, lk_place, ch_place, c1_score, lk_score, ch_score, time_score, errors_score, total_score};
   });
 
@@ -1565,7 +1654,10 @@ function computeMainRating(groups, prevCoeffMap, tierCoefficients){
     // g.isPeaks -> isNaPeaks (сигнал Н/О по ch_sum, не по c1_sum — см.
     // isNaPeaks выше), для всех остальных групп — как раньше, isNaMain.
     const naFn = g.isPeaks ? isNaPeaks : isNaMain;
-    const scored = scoreSlice(g.employees, e => channelFields(e, channel), naFn, "c1_sum", true, active);
+    // Сектор №1 — поэлементно (не на всю группу): у большинства ЛК не в
+    // счёт, у 3 исключений — как обычно (см. sector1ZeroesLk выше).
+    const lkActiveFn = e => !sector1ZeroesLk(g.supervisor, e.fio);
+    const scored = scoreSlice(g.employees, e => channelFields(e, channel), naFn, "c1_sum", true, active, lkActiveFn);
     out.push(...scored.map(e => ({...e, supervisor: g.supervisor, channel, isRegionUK: !!g.isRegionUK, isPeaks: !!g.isPeaks})));
   }
   if(periodType === "week"){
@@ -2700,6 +2792,7 @@ $("dynSearchBox").addEventListener("input", (e) => {
 function closeAllTopPanels(){
   $("requisitesPanel").style.display = "none";
   $("payrollPanel").style.display = "none";
+  $("sectorPanel").style.display = "none";
   $("dashboardsPanel").style.display = "none";
   $("standaloneDynamicsPanel").style.display = "none";
   $("constructorPanel").style.display = "none";
@@ -3723,6 +3816,85 @@ $("openPayrollBtn").addEventListener("click", () => {
   populatePayrollMonthSelect();
 });
 $("closePayrollBtn").addEventListener("click", () => { $("payrollPanel").style.display = "none"; });
+
+// ---------- Сектор №1 (admin/manager) ----------
+// Тот же принцип, что "Моя группа" у супервайзера (populatePeriodSelect +
+// sbGet + dbRowToDisplayRow), только жёстко зашит на 4 группы Сектора 1
+// и всегда рендерит блоками (renderGroupBlocks) — доступно для ЛЮБОГО
+// сохранённого периода, не только последнего.
+let sectorUploadsDesc = [];
+let currentSectorPeriodLabel = null;
+let currentSectorRows = null;
+
+async function populateSectorPeriodSelect(vType){
+  const uploads = await fetchAllUploads(vType);
+  sectorUploadsDesc = [...uploads].reverse();
+  const sel = $("sectorPeriodSelect");
+  sel.innerHTML = "";
+  sectorUploadsDesc.forEach(u => {
+    const opt = document.createElement("option");
+    opt.value = u.id;
+    const when = u.uploaded_at ? new Date(u.uploaded_at).toLocaleDateString("ru") : "";
+    opt.textContent = `${u.period_label}${when ? " · загружен " + when : ""}`;
+    sel.appendChild(opt);
+  });
+}
+
+async function loadSectorPanel(){
+  const vType = $("sectorTypeToggle").querySelector(".active").dataset.type;
+  const logEl2 = $("sectorLog");
+  const containerEl = $("sectorContainer");
+  clearLog(logEl2);
+  containerEl.innerHTML = "";
+  log("Загружаю данные Сектора №1…", null, logEl2);
+  try{
+    if(!sectorUploadsDesc.length){
+      log("Пока нет ни одной загрузки такого типа.", "warn", logEl2);
+      return;
+    }
+    const selectedId = $("sectorPeriodSelect").value;
+    const latest = sectorUploadsDesc.find(u => u.id === selectedId) || sectorUploadsDesc[0];
+    const rowsRaw = await sbGet(`kpi_ratings?upload_id=eq.${latest.id}&select=*`);
+    const rows = rowsRaw.map(dbRowToDisplayRow).filter(r => SECTOR_1_SUPERVISORS.has(r.supervisor));
+
+    currentSectorRows = rows.filter(r => !r.is_novice);
+    currentSectorPeriodLabel = latest.period_label;
+
+    clearLog(logEl2);
+    log(`Период: ${latest.period_label} · сотрудников в секторе: ${currentSectorRows.length}`, "ok", logEl2);
+    renderGroupBlocks(containerEl, currentSectorRows, [...SECTOR_1_SUPERVISORS], { showTier: vType === "week", showDelta: false, hideFinalPay: false });
+  } catch(err){
+    log("Ошибка: " + err.message, "err", logEl2);
+  }
+}
+
+$("openSectorBtn").addEventListener("click", async () => {
+  closeAllTopPanels();
+  $("sectorPanel").style.display = "block";
+  $("sectorPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+  periodType = $("sectorTypeToggle").querySelector(".active").dataset.type;
+  await populateSectorPeriodSelect(periodType);
+  loadSectorPanel();
+});
+$("closeSectorBtn").addEventListener("click", () => { $("sectorPanel").style.display = "none"; });
+$("sectorTypeToggle").querySelectorAll("button").forEach(btn => {
+  btn.addEventListener("click", async () => {
+    $("sectorTypeToggle").querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
+    periodType = btn.dataset.type;
+    await populateSectorPeriodSelect(periodType);
+    loadSectorPanel();
+  });
+});
+$("sectorPeriodSelect").addEventListener("change", loadSectorPanel);
+$("sectorExportBtn").addEventListener("click", () => {
+  if(!currentSectorRows || !currentSectorRows.length) return;
+  const wb = XLSX.utils.book_new();
+  const sheet = XLSX.utils.aoa_to_sheet([["ФИО","Статус","Группа","Итог. место","Сумма баллов"]].concat(
+    currentSectorRows.map(r => [r.fio, r.status, displayGroupName(r.supervisor), r.is_na ? "Н/О" : r.final_place, r.total_score])
+  ));
+  XLSX.utils.book_append_sheet(wb, sheet, "Сектор №1");
+  XLSX.writeFile(wb, `Сектор_1_${currentSectorPeriodLabel}.xlsx`);
+});
 
 $("openDashboardsBtn").addEventListener("click", async () => {
   closeAllTopPanels();

@@ -36,6 +36,15 @@ PEAKS_SCORE_KEYS), но не в сумме. Часовая ставка в фо�
 групп тоже отменена — см. services/salary.py, это отдельный, не
 связанный с total_score механизм.
 
+"Сектор №1" (4 обычные группы супервайзеров, см.
+group_naming.SECTOR_1_SUPERVISORS) — категория "ЛК" не входит в
+total_score, КРОМЕ 3 конкретных сотрудников-исключений (по точному ФИО,
+см. SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO) — у них ЛК как у всех остальных.
+Решение принимается по каждому сотруднику отдельно (sector1_zeroes_lk_weight),
+не по группе целиком, в отличие от Региона УК/ПП/Увеличители выше. Место
+по ЛК (lk_place) всё равно считается и показывается как обычно, ЗП не
+затрагивается.
+
 ВАЖНО: места по категориям, тир ЛК, тир канала и итоговое место
 считаются ВНУТРИ каждой группы супервайзера отдельно, а не по всей
 компании сразу — точный перенос старой JS-версии, где scoreSlice
@@ -48,7 +57,12 @@ tests/test_weekly_rating.py::test_category_places_are_scoped_to_supervisor_group
 """
 from __future__ import annotations
 
-from app.services.group_naming import PEAKS_GROUP_RE, PEAKS_SCORE_KEYS, REGION_UK_SCORE_KEYS
+from app.services.group_naming import (
+    PEAKS_GROUP_RE,
+    PEAKS_SCORE_KEYS,
+    REGION_UK_SCORE_KEYS,
+    sector1_zeroes_lk_weight,
+)
 from app.services.ladder_groups import assign_novice_coefficients, assign_tier_coefficients
 from app.services.rating_engine import (
     EmployeeScore,
@@ -164,6 +178,8 @@ def compute_weekly_rating(
                 r.scores = {k: v for k, v in r.scores.items() if k in REGION_UK_SCORE_KEYS}
             elif PEAKS_GROUP_RE.search(r.raw.get(supervisor_field) or ""):
                 r.scores = {k: v for k, v in r.scores.items() if k in PEAKS_SCORE_KEYS}
+            elif sector1_zeroes_lk_weight(r.raw.get(supervisor_field), r.fio):
+                r.scores = {k: v for k, v in r.scores.items() if k != "lk"}
 
         finalize_final_places(group_results, na_predicate, tie_break_field)
 
