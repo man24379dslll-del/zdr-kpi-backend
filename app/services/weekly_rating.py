@@ -37,13 +37,15 @@ PEAKS_SCORE_KEYS), но не в сумме. Часовая ставка в фо�
 связанный с total_score механизм.
 
 "Сектор №1" (4 обычные группы супервайзеров, см.
-group_naming.SECTOR_1_SUPERVISORS) — категория "ЛК" не входит в
-total_score, КРОМЕ 3 конкретных сотрудников-исключений (по точному ФИО,
-см. SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO) — у них ЛК как у всех остальных.
-Решение принимается по каждому сотруднику отдельно (sector1_zeroes_lk_weight),
-не по группе целиком, в отличие от Региона УК/ПП/Увеличители выше. Место
-по ЛК (lk_place) всё равно считается и показывается как обычно, ЗП не
-затрагивается.
+group_naming.SECTOR_1_SUPERVISORS) — место по ЛК (lk_place) ВСЕГДА 1-е,
+для ВСЕХ сотрудников этих 4 групп (переопределяет обычный тир ЛК). В
+total_score категория "ЛК" при этом входит только у 3 конкретных
+сотрудников-исключений (по точному ФИО, см.
+SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO) — у остальных вес 0, как и раньше, но
+раз место у всех теперь 1-е, у этих троих ЛК даёт МАКСИМАЛЬНЫЙ балл
+(1×вес) независимо от реальных продаж. Решение о весе принимается по
+каждому сотруднику отдельно (sector1_zeroes_lk_weight), не по группе
+целиком, в отличие от Региона УК/ПП/Увеличители выше.
 
 ВАЖНО: места по категориям, тир ЛК, тир канала и итоговое место
 считаются ВНУТРИ каждой группы супервайзера отдельно, а не по всей
@@ -61,6 +63,7 @@ from app.services.group_naming import (
     PEAKS_GROUP_RE,
     PEAKS_SCORE_KEYS,
     REGION_UK_SCORE_KEYS,
+    SECTOR_1_SUPERVISORS,
     sector1_zeroes_lk_weight,
 )
 from app.services.ladder_groups import assign_novice_coefficients, assign_tier_coefficients
@@ -168,6 +171,16 @@ def compute_weekly_rating(
             for r, place in zip(group_results, compute_tiered_lk_places(lk_items)):
                 r.places["lk"] = place
                 r.scores["lk"] = place * lk_category.weight
+
+            # Сектор №1 — ЛК ВСЕГДА 1-е место, для ВСЕХ сотрудников этих 4
+            # групп (включая 3 исключения ниже) — по прямому запросу
+            # заказчика, переопределяет обычный тир ЛК выше. У большинства
+            # это не влияет на total_score (вес всё равно 0, см. фильтр
+            # ниже), у 3 исключений — влияет по максимуму (1×вес).
+            for r in group_results:
+                if (r.raw.get(supervisor_field) or "") in SECTOR_1_SUPERVISORS:
+                    r.places["lk"] = 1
+                    r.scores["lk"] = 1 * lk_category.weight
 
         # "Регион УК": total_score только по c1/lk/time. "ПП"/"Увеличители":
         # наоборот, total_score только по channel. Места (r.places) в обоих

@@ -1573,7 +1573,7 @@ function computeTieredChannelPlaces(items){
   return places;
 }
 
-function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategories, lkActiveFn){
+function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategories, lkActiveFn, forceLk1){
   if(items.length === 0) return [];
   const active = activeCategories || { c1:true, lk:true, ch:true, time:true, errors:true };
   const c1pc = items.map(e=>e.c1_pc);
@@ -1619,7 +1619,11 @@ function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategorie
   }
 
   const scored = pass1.map((e, i) => {
-    const lk_place = lkPlaces[i];
+    // forceLk1 — Сектор №1: место по ЛК ВСЕГДА 1-е, для ВСЕХ сотрудников
+    // группы (переопределяет обычный тир ЛК выше). У большинства не влияет
+    // на total_score (lkActiveFn ниже, вес 0), у 3 исключений — даёт
+    // максимальный балл по ЛК (1×вес) независимо от реальных продаж.
+    const lk_place = forceLk1 ? 1 : lkPlaces[i];
     const ch_place = e.ch_place;
     const c1_score = e.c1_place*3, lk_score = lk_place*1.5, ch_score = ch_place*2.5;
     const time_score = e.time_place*1, errors_score = e.errors_place*1;
@@ -1659,10 +1663,12 @@ function computeMainRating(groups, prevCoeffMap, tierCoefficients){
     // g.isPeaks -> isNaPeaks (сигнал Н/О по ch_sum, не по c1_sum — см.
     // isNaPeaks выше), для всех остальных групп — как раньше, isNaMain.
     const naFn = g.isPeaks ? isNaPeaks : isNaMain;
-    // Сектор №1 — поэлементно (не на всю группу): у большинства ЛК не в
-    // счёт, у 3 исключений — как обычно (см. sector1ZeroesLk выше).
+    // Сектор №1: место по ЛК ВСЕГДА 1-е для всей группы (forceLk1); в
+    // total_score эта (теперь максимальная) оценка входит только у 3
+    // исключений — решается поэлементно (lkActiveFn), не на всю группу.
+    const forceLk1 = SECTOR_1_SUPERVISORS.has(g.supervisor);
     const lkActiveFn = e => !sector1ZeroesLk(g.supervisor, e.fio);
-    const scored = scoreSlice(g.employees, e => channelFields(e, channel), naFn, "c1_sum", true, active, lkActiveFn);
+    const scored = scoreSlice(g.employees, e => channelFields(e, channel), naFn, "c1_sum", true, active, lkActiveFn, forceLk1);
     out.push(...scored.map(e => ({...e, supervisor: g.supervisor, channel, isRegionUK: !!g.isRegionUK, isPeaks: !!g.isPeaks})));
   }
   if(periodType === "week"){
@@ -2215,10 +2221,18 @@ const VASKO_RE = /васько/i;
 function isSpecialGroup(supervisor){
   return /операторы\s+без\s+супервизора/i.test(supervisor || "") || VASKO_RE.test(supervisor || "");
 }
-// Обычные группы по алфавиту, "Регион УК"/"ПП"/"Увеличители" — всегда в самом конце
+// Обычные группы по алфавиту, дальше отдельным кластером Сектор №1 (по
+// алфавиту внутри себя — "отдельно от всех", по прямому запросу
+// заказчика), в самом конце — "Регион УК"/"ПП"/"Увеличители"/Васько, как
+// раньше.
+function groupSortTier(supervisor){
+  if(isSpecialGroup(supervisor)) return 2;
+  if(SECTOR_1_SUPERVISORS.has(supervisor)) return 1;
+  return 0;
+}
 function compareGroupNames(a, b){
-  const aSpecial = isSpecialGroup(a), bSpecial = isSpecialGroup(b);
-  if(aSpecial !== bSpecial) return aSpecial ? 1 : -1;
+  const ta = groupSortTier(a), tb = groupSortTier(b);
+  if(ta !== tb) return ta - tb;
   return displayGroupName(a).localeCompare(displayGroupName(b), "ru");
 }
 function sortByPlace(rows){

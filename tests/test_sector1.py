@@ -1,11 +1,15 @@
 """
 Сектор №1 — 4 обычные группы супервайзеров (Болотов/Владыкин/Гулуа/
-Потапова), для которых категория "ЛК" получает вес 0 в total_score, КРОМЕ
-3 конкретных сотрудников-исключений (точное ФИО, см.
-group_naming.SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO). В отличие от Региона
-УК/ПП/Увеличители (test_region_uk.py) решение принимается по каждому
-сотруднику отдельно, а не по всей группе целиком — эти тесты проверяют
-именно поэлементную развилку внутри одной группы.
+Потапова). Два правила поверх обычного расчёта:
+  1. Место по ЛК (lk_place) ВСЕГДА 1-е, для ВСЕХ сотрудников этих групп
+     (переопределяет обычный тир ЛК) — по запросу заказчика.
+  2. В total_score категория "ЛК" при этом входит только у 3 конкретных
+     сотрудников-исключений (точное ФИО, см.
+     group_naming.SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO) — у остальных вес 0,
+     как и раньше. Раз место у всех теперь 1-е, эти трое получают МАКСИМАЛЬНЫЙ
+     балл по ЛК независимо от реальных продаж.
+В отличие от Региона УК/ПП/Увеличители (test_region_uk.py) решение о весе
+принимается по каждому сотруднику отдельно, а не по всей группе целиком.
 """
 import io
 
@@ -173,3 +177,50 @@ def test_sector1_places_and_tiers_are_still_assigned():
         assert r.final_place is not None
         assert r.tier is not None
         assert r.coefficient is not None
+
+
+def test_sector1_regular_employee_always_gets_lk_place_1_even_when_worse():
+    # "Второй" реально хуже по ЛК (lk_pc=15 против 50), но в Секторе 1 у
+    # ВСЕХ место по ЛК всегда 1-е — по прямому запросу заказчика.
+    raw = _build_excel_bytes([
+        _group_row(BOLOTOV),
+        _row("Первый И. И.", 100, 50, 200, 20, 1),
+        _row("Второй И. И.", 60, 15, 120, 45, 8),
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    for r in results:
+        assert r.places["lk"] == 1
+
+
+def test_sector1_exception_gets_maximum_lk_score_regardless_of_real_sales():
+    # Исключение — с ХУДШИМ ЛК, чем у обычного сотрудника той же группы —
+    # всё равно получает МАКСИМАЛЬНЫЙ балл по ЛК (1-е место × вес 1.5),
+    # т.к. место у всех в Секторе 1 всегда 1-е, а у исключений вес обычный.
+    raw = _build_excel_bytes([
+        _group_row(BOLOTOV),
+        _row(EXCEPTION_FIO, 10, 1, 20, 45, 8),  # заведомо худшие показатели
+        _row("Обычный Сотрудник И. И.", 100, 50, 200, 20, 1),  # заведомо лучшие
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    by_fio = {r.fio: r for r in results}
+
+    exception = by_fio[EXCEPTION_FIO]
+    assert exception.places["lk"] == 1
+    assert exception.scores["lk"] == 1.5  # 1 место × вес 1.5, максимум
+    assert "lk" in exception.scores  # входит в total_score (обычный вес)
+
+
+def test_normal_group_lk_place_is_computed_normally_not_forced():
+    # Контроль: вне Сектора 1 место по ЛК считается как обычно (не всегда 1).
+    raw = _build_excel_bytes([
+        _group_row("Супервайзер - Иванов И.И."),
+        _row("Первый И. И.", 100, 50, 200, 20, 1),
+        _row("Второй И. И.", 60, 15, 120, 45, 8),
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    by_fio = {r.fio: r for r in results}
+    assert by_fio["Первый И. И."].places["lk"] == 1
+    assert by_fio["Второй И. И."].places["lk"] != 1
