@@ -1446,6 +1446,16 @@ function channelFields(e, channel){
     : { sum: e.radio_sum, check: e.radio_check, conv: e.radio_conv, pc: e.radio_pc, cards: e.radio_cards };
 }
 function isNaMain(e){ return EXCLUDED_STATUSES.includes(e.status) || e.c1_sum === 0; }
+// "Рейтинг супервайзеров (Сектор №1)" — по прямому запросу заказчика
+// новички ЗДЕСЬ участвуют в расчёте (у сектора сейчас почти все — новички,
+// без них рейтинг supervisorов был бы всегда пуст) — в отличие от ВСЕХ
+// остальных мест (обычный "Рейтинг супервайзеров", "По группам" и т.д.),
+// где новички по-прежнему Н/О как обычно. Исключаем только тех, кого
+// исключили бы в любом случае (тренер/руководитель/отпуск/больничный) и
+// тех, кто реально ничего не сделал за неделю (c1_sum===0) — НЕ статус
+// "Новичок" сам по себе.
+const SECTOR1_NON_NOVICE_EXCLUDED_STATUSES = ["Тренер","руководитель","Отпуск","Больничный"];
+function isSector1Evaluated(e){ return !SECTOR1_NON_NOVICE_EXCLUDED_STATUSES.includes(e.status) && e.c1_sum !== 0; }
 function isNaNovice(e){ return e.c1_sum === 0; }
 // ПП/Увеличители (computeMainRating передаёт для g.isPeaks) — их
 // total_score считается ТОЛЬКО по каналу (см. computeMainRating ниже),
@@ -1932,7 +1942,7 @@ function computeSupervisorRating(groups, onlySector1){
     .filter(groupFilter)
     .map(g => {
     const channel = groupChannels[g.supervisor] || "radio";
-    const evaluated = g.employees.filter(e => !isNaMain(e));
+    const evaluated = onlySector1 ? g.employees.filter(isSector1Evaluated) : g.employees.filter(e => !isNaMain(e));
     const n = evaluated.length;
     const avg = (field) => n ? evaluated.reduce((s,e)=>s+e[field],0)/n : 0;
     const avgCh = (getter) => n ? evaluated.reduce((s,e)=>s+getter(channelFields(e,channel)),0)/n : 0;
@@ -1972,7 +1982,7 @@ function computeSupervisorRatingFromRows(mainRows, onlySector1){
   }
   const groupStats = Object.keys(bySupervisor).map(sup => {
     const rows = bySupervisor[sup];
-    const evaluated = rows.filter(r => !r.is_na);
+    const evaluated = onlySector1 ? rows.filter(isSector1Evaluated) : rows.filter(r => !r.is_na);
     const n = evaluated.length;
     if(!n) return null;
     const avg = (f) => evaluated.reduce((s,r)=>s+(r[f]||0),0)/n;
