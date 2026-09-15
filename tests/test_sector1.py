@@ -224,3 +224,46 @@ def test_normal_group_lk_place_is_computed_normally_not_forced():
     by_fio = {r.fio: r for r in results}
     assert by_fio["Первый И. И."].places["lk"] == 1
     assert by_fio["Второй И. И."].places["lk"] != 1
+
+
+def test_sector1_uses_5_tiers_with_narrow_coefficient_range():
+    # По прямому запросу заказчика: Сектор 1 использует 5 тиров (1.3...1.0),
+    # НЕ обычные 10 (1.4...0.25) — ни выше 1.3, ни ниже 1.0.
+    # 10 человек, строго убывающий c1_pc (остальные категории одинаковые,
+    # чтобы порядок total_score определялся только c1) -> final_place 1..10
+    # по 2 человека на каждый из 5 тиров (tier_sizes(10, 5) = [2,2,2,2,2]).
+    rows = [_group_row(BOLOTOV)]
+    for i in range(10):
+        rows.append(_row(f"Сотрудник {i}", 100 - i * 10, 50, 100, 20, 1))
+    raw = _build_excel_bytes(rows)
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    by_place = {r.final_place: r for r in results}
+
+    expected_tier_by_place = {1: 1, 2: 1, 3: 2, 4: 2, 5: 3, 6: 3, 7: 4, 8: 4, 9: 5, 10: 5}
+    expected_coefficient_by_tier = {1: 1.3, 2: 1.2, 3: 1.1, 4: 1.05, 5: 1.0}
+    for place, expected_tier in expected_tier_by_place.items():
+        r = by_place[place]
+        assert r.tier == expected_tier, f"место {place}: ожидался тир {expected_tier}, получили {r.tier}"
+        assert r.coefficient == expected_coefficient_by_tier[expected_tier]
+
+    # Ни у кого нет тира выше 5 и коэффициента вне диапазона [1.0, 1.3]
+    assert all(r.tier <= 5 for r in results)
+    assert all(1.0 <= r.coefficient <= 1.3 for r in results)
+
+
+def test_normal_group_still_uses_10_tiers():
+    # Контроль: вне Сектора 1 диапазон коэффициентов прежний (1.4...0.25),
+    # не урезан до 1.3...1.0.
+    rows = [_group_row("Супервайзер - Иванов И.И.")]
+    for i in range(10):
+        rows.append(_row(f"Сотрудник {i}", 100 - i * 10, 50, 100, 20, 1))
+    raw = _build_excel_bytes(rows)
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    by_place = {r.final_place: r for r in results}
+
+    assert by_place[1].tier == 1
+    assert by_place[1].coefficient == 1.4  # выше верхней границы Сектора 1 (1.3)
+    assert by_place[10].tier == 10
+    assert by_place[10].coefficient == 0.25  # ниже нижней границы Сектора 1 (1.0)

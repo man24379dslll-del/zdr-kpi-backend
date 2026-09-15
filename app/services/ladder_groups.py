@@ -17,19 +17,30 @@
     ЗП = (ставка_за_час × рабочее_время_ч + бонус075 + бонус2) × коэффициент_ПРОШЛОЙ_недели
 
 (если для человека нет данных за прошлую неделю — коэффициент = 1.0).
+Сектор №1 (4 группы, см. group_naming.SECTOR_1_SUPERVISORS) — исключение
+из общего правила: не 10 тиров, а 5 (1.3...1.0, см.
+group_naming.SECTOR_1_TIER_COEFFICIENTS), по прямому запросу заказчика.
+Настраиваемая через /ladder-tiers таблица (передаётся в tier_coefficients)
+на Сектор №1 не влияет — там всегда своя короткая шкала.
 """
 from __future__ import annotations
+
+from app.services.group_naming import SECTOR_1_SUPERVISORS, SECTOR_1_TIER_COEFFICIENTS
 
 TIER_COEFFICIENTS = [1.4, 1.3, 1.2, 1.1, 1.05, 1, 0.9, 0.75, 0.5, 0.25]
 
 
-def tier_sizes(n: int) -> list[int]:
+def tier_sizes(n: int, num_tiers: int = 10) -> list[int]:
     """
     n — сколько человек оценено (не Н/О) в группе супервайзера.
-    Первые (n % 10) тиров получают на 1 человека больше остальных.
+    Первые (n % num_tiers) тиров получают на 1 человека больше остальных.
     """
-    base, rem = divmod(n, 10)
-    return [base + 1 if i < rem else base for i in range(10)]
+    base, rem = divmod(n, num_tiers)
+    return [base + 1 if i < rem else base for i in range(num_tiers)]
+
+
+def _coefficients_for(supervisor: str | None, default_coefficients: list[float]) -> list[float]:
+    return SECTOR_1_TIER_COEFFICIENTS if supervisor in SECTOR_1_SUPERVISORS else default_coefficients
 
 
 def assign_tier_coefficients(rows: list[dict], tier_coefficients: list[float] | None = None) -> None:
@@ -44,18 +55,19 @@ def assign_tier_coefficients(rows: list[dict], tier_coefficients: list[float] | 
         GET /ladder-tiers). Если не передан — берётся TIER_COEFFICIENTS
         (запасной вариант по умолчанию, не единственный источник истины).
     """
-    coefficients = tier_coefficients if tier_coefficients is not None else TIER_COEFFICIENTS
+    default_coefficients = tier_coefficients if tier_coefficients is not None else TIER_COEFFICIENTS
 
     by_supervisor: dict[str, list[dict]] = {}
     for r in rows:
         by_supervisor.setdefault(r["supervisor"], []).append(r)
 
-    for group in by_supervisor.values():
+    for supervisor, group in by_supervisor.items():
+        coefficients = _coefficients_for(supervisor, default_coefficients)
         evaluated = sorted(
             (r for r in group if not r.get("is_na")),
             key=lambda r: r["final_place"],
         )
-        sizes = tier_sizes(len(evaluated))
+        sizes = tier_sizes(len(evaluated), len(coefficients))
         idx = 0
         for tier_idx, size in enumerate(sizes):
             for _ in range(size):
@@ -104,18 +116,19 @@ def assign_novice_coefficients(rows: list[dict], tier_coefficients: list[float] 
     rows: строки с полями supervisor, is_na, is_novice, total_score,
         tie_break_value (число; 0, если tie-break не задан).
     """
-    coefficients = tier_coefficients if tier_coefficients is not None else TIER_COEFFICIENTS
+    default_coefficients = tier_coefficients if tier_coefficients is not None else TIER_COEFFICIENTS
 
     by_supervisor: dict[str, list[dict]] = {}
     for r in rows:
         by_supervisor.setdefault(r["supervisor"], []).append(r)
 
-    for group in by_supervisor.values():
+    for supervisor, group in by_supervisor.items():
+        coefficients = _coefficients_for(supervisor, default_coefficients)
         evaluated = [r for r in group if not r.get("is_na")]
         novices = [r for r in group if r.get("is_novice")]
         if not novices:
             continue
-        sizes = tier_sizes(len(evaluated) + 1)
+        sizes = tier_sizes(len(evaluated) + 1, len(coefficients))
 
         for novice in novices:
             place = 1

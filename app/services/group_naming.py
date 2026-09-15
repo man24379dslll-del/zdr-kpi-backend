@@ -85,6 +85,15 @@ SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO = frozenset({
     "ЗДР ЛК Шайдуров А. В.",
 })
 
+# Сектор №1 — по прямому запросу заказчика диапазон коэффициентов ЛГ уже,
+# чем у обычных групп: не 10 тиров (1.4...0.25), а 5 тиров (1.3...1.0).
+# Используется вместо TIER_COEFFICIENTS/настроенной через /ladder-tiers
+# таблицы — см. services/ladder_groups.py::assign_tier_coefficients/
+# assign_novice_coefficients, где для supervisor из SECTOR_1_SUPERVISORS
+# эта таблица подставляется вместо обычной (и число тиров тоже 5, не 10 —
+# длина этого списка).
+SECTOR_1_TIER_COEFFICIENTS = [1.3, 1.2, 1.1, 1.05, 1.0]
+
 
 def sector1_zeroes_lk_weight(supervisor: str | None, fio: str | None) -> bool:
     """True, если этому сотруднику нужно урезать ЛК из total_score —
