@@ -749,6 +749,23 @@ function dbRowToDisplayRow(r){
 // (admin/manager) и "Моя группа" супервайзера с несколькими группами
 // (см. buildSupervisorViewer ниже — тот же руководитель сектора, а также
 // Курбанова Зарина, у которой 2 группы).
+// Сектор №1 — колонка ЛК убирается из общей таблицы группы (место всегда
+// 1-е и почти всегда не входит в сумму, см. forceLk1/sector1ZeroesLk),
+// показывать её там бессмысленно. 3 исключения (реально работают с ЛК,
+// см. SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO) выводятся ОТДЕЛЬНЫМ мини-блоком
+// под основной таблицей — там ЛК видна как обычно. commonArgs — те же
+// позиционные аргументы buildDetailTable, что и у основной таблицы
+// (showGroupCol..hideFinalPay), кроме rows/hideLk.
+function appendSector1LkExceptions(container, groupRows, commonArgs){
+  const exceptionRows = groupRows.filter(r => SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO.has(r.fio));
+  if(!exceptionRows.length) return;
+  const sub = document.createElement("div");
+  sub.className = "sub-title";
+  sub.textContent = "Работают с ЛК (учитывается отдельно от остальной группы)";
+  container.appendChild(sub);
+  container.appendChild(buildDetailTable(exceptionRows, ...commonArgs, false));
+}
+
 function renderGroupBlocks(container, rows, groupNames, opts){
   container.innerHTML = "";
   let any = false;
@@ -757,10 +774,14 @@ function renderGroupBlocks(container, rows, groupNames, opts){
     if(!groupRows.length) continue;
     any = true;
     const channel = groupRows[0].channel;
+    const isSector1 = SECTOR_1_SUPERVISORS.has(gname);
+    const mainRows = isSector1 ? groupRows.filter(r => !SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO.has(r.fio)) : groupRows;
+    const commonArgs = [false, opts.showTier, channel === "inet" ? "Интернет" : "ТВ+Радио", false, opts.showDelta, opts.hideFinalPay];
     const block = document.createElement("div");
     block.className = "group-block";
     block.innerHTML = `<div class="group-title">${displayGroupName(gname)}<span class="count">${groupRows.length} чел.</span><span class="chan-tag">${channel==='inet'?'ИНТЕРНЕТ':'РАДИО+ТВ'}</span></div>`;
-    block.appendChild(buildDetailTable(groupRows, false, opts.showTier, channel === "inet" ? "Интернет" : "ТВ+Радио", false, opts.showDelta, opts.hideFinalPay));
+    block.appendChild(buildDetailTable(mainRows, ...commonArgs, isSector1));
+    if(isSector1) appendSector1LkExceptions(block, groupRows, commonArgs);
     container.appendChild(block);
   }
   if(!any){
@@ -862,7 +883,12 @@ async function buildSupervisorViewer(){
       if(profile.supervisor_names && profile.supervisor_names.length > 1){
         renderGroupBlocks(containerEl, currentRows, profile.supervisor_names, { showTier: vType === "week", showDelta: true, hideFinalPay: true });
       } else {
-        containerEl.appendChild(buildDetailTable(currentRows, false, vType === "week", null, false, true, true));
+        const soloSupervisor = profile.supervisor_names && profile.supervisor_names[0];
+        const isSector1 = SECTOR_1_SUPERVISORS.has(soloSupervisor);
+        const mainRows = isSector1 ? currentRows.filter(r => !SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO.has(r.fio)) : currentRows;
+        const commonArgs = [false, vType === "week", null, false, true, true];
+        containerEl.appendChild(buildDetailTable(mainRows, ...commonArgs, isSector1));
+        if(isSector1) appendSector1LkExceptions(containerEl, currentRows, commonArgs);
       }
     } catch(err){
       log("Ошибка: " + err.message, "err", logEl2);
@@ -2276,7 +2302,7 @@ function rankBadge(value, hex, extraText){
   return `<span class="rank-badge" style="background:${bg};color:${fg};">${value}</span>`;
 }
 
-function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay){
+function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk){
   return `
     <thead>
       <tr class="cat">
@@ -2284,7 +2310,7 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
         <th class="col-status block-end" rowspan="2">Статус</th>
         ${extraCol ? `<th class="col-group block-end" rowspan="2">Группа</th>` : ``}
         <th colspan="6" class="block-end">1 обращение</th>
-        <th colspan="6" class="block-end">ЛК</th>
+        ${hideLk ? `` : `<th colspan="6" class="block-end">ЛК</th>`}
         <th colspan="6" class="block-end">${channelLabel || "Радио+ТВ / Интернет"}</th>
         <th colspan="2" class="block-end">Время/контакт (без звонка)</th>
         <th colspan="3" class="block-end">% ошибок</th>
@@ -2296,7 +2322,7 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
       </tr>
       <tr class="sub">
         <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
-        <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
+        ${hideLk ? `` : `<th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>`}
         <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
         <th>чч:мм:сс</th><th class="block-end">место</th>
         <th>кол-во</th><th>%</th><th class="block-end">место</th>
@@ -2304,13 +2330,19 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
     </thead>`;
 }
 
-function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay){
+// hideLk — Сектор №1: место по ЛК теперь всегда 1-е и почти всегда не
+// влияет на сумму (см. sector1ZeroesLk/forceLk1) — показывать этот блок
+// колонок бессмысленно и вводит в заблуждение, поэтому для групп Сектора
+// 1 он убирается целиком (везде, где показаны эти группы), кроме 3
+// исключений — их выводят ОТДЕЛЬНЫМ мини-блоком с ЛК (см. renderGroupBlocks/
+// renderGroups ниже), а не в общей таблице.
+function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk){
   const sorted = sortByPlace(rows);
   const wrap = document.createElement("div");
   wrap.className = "subtable-wrap";
   const table = document.createElement("table");
   table.className = "detail";
-  table.innerHTML = detailTableHead(showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay) + `<tbody></tbody>`;
+  table.innerHTML = detailTableHead(showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk) + `<tbody></tbody>`;
   const tbody = table.querySelector("tbody");
 
   const c1Map = gradientMap(rows, "c1_place");
@@ -2329,7 +2361,7 @@ function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvSt
       <td class="col-status block-end">${r.status}</td>
       ${showGroupCol ? `<td class="col-group block-end">${displayGroupName(r.supervisor)}</td>` : ``}
       <td>${fmtCards(r.c1_cards)}</td><td>${fmt(r.c1_sum)}</td><td>${fmt(r.c1_check)}</td><td>${fmtPct(r.c1_conv)}</td><td>${fmt(r.c1_pc)}</td><td class="block-end">${rankBadge(r.c1_place, c1Map(r.c1_place))}</td>
-      <td>${fmtCards(r.lk_cards)}</td><td>${fmt(r.lk_sum)}</td><td>${fmt(r.lk_check)}</td><td>${fmtPct(r.lk_conv)}</td><td>${fmt(r.lk_pc)}</td><td class="block-end">${rankBadge(fmtPlace(r.lk_place), lkMap(r.lk_place))}</td>
+      ${hideLk ? `` : `<td>${fmtCards(r.lk_cards)}</td><td>${fmt(r.lk_sum)}</td><td>${fmt(r.lk_check)}</td><td>${fmtPct(r.lk_conv)}</td><td>${fmt(r.lk_pc)}</td><td class="block-end">${rankBadge(fmtPlace(r.lk_place), lkMap(r.lk_place))}</td>`}
       <td>${fmtCards(r.ch_cards)}</td><td>${fmt(r.ch_sum)}</td><td>${fmt(r.ch_check)}</td><td>${fmtPct(r.ch_conv)}</td><td>${fmt(r.ch_pc)}</td><td class="block-end">${rankBadge(r.ch_place, chMap(r.ch_place))}</td>
       <td>${fmtTime(r.time)}</td><td class="block-end">${rankBadge(r.time_place, timeMap(r.time_place))}</td>
       <td>${fmtCards(r.errors_count)}</td><td>${fmtPct(r.errors_pct)}</td><td class="block-end">${rankBadge(r.errors_place, errMap(r.errors_place))}</td>
@@ -2416,10 +2448,14 @@ function renderGroups(){
     if(!rows.length) continue;
     const channel = groupChannels[gname];
     const isRegionUK = rows[0] && rows[0].isRegionUK;
+    const isSector1 = SECTOR_1_SUPERVISORS.has(gname);
+    const mainRows = isSector1 ? rows.filter(r => !SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO.has(r.fio)) : rows;
+    const commonArgs = [false, periodType === "week", channel === "inet" ? "Интернет" : "ТВ+Радио", false, true, undefined];
     const block = document.createElement("div");
     block.className = "group-block";
-    block.innerHTML = `<div class="group-title">${displayGroupName(gname)}<span class="count">${rows.length} чел.</span>${isRegionUK ? '<span class="chan-tag">только 1 обращение + ЛК + время</span>' : `<span class="chan-tag">${channel==='inet'?'ИНТЕРНЕТ':'РАДИО+ТВ'}</span>`}${SECTOR_1_SUPERVISORS.has(gname) ? '<span class="sector1-tag">Сектор №1</span>' : ''}</div>`;
-    block.appendChild(buildDetailTable(rows, false, periodType === "week", channel === "inet" ? "Интернет" : "ТВ+Радио", false, true));
+    block.innerHTML = `<div class="group-title">${displayGroupName(gname)}<span class="count">${rows.length} чел.</span>${isRegionUK ? '<span class="chan-tag">только 1 обращение + ЛК + время</span>' : `<span class="chan-tag">${channel==='inet'?'ИНТЕРНЕТ':'РАДИО+ТВ'}</span>`}${isSector1 ? '<span class="sector1-tag">Сектор №1</span>' : ''}</div>`;
+    block.appendChild(buildDetailTable(mainRows, ...commonArgs, isSector1));
+    if(isSector1) appendSector1LkExceptions(block, rows, commonArgs);
     container.appendChild(block);
   }
   if(!container.children.length){
@@ -3891,6 +3927,7 @@ $("openSectorBtn").addEventListener("click", async () => {
   closeAllTopPanels();
   $("sectorPanel").style.display = "block";
   $("sectorPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+  $("wrap").classList.add("wide"); // таблицы группы широкие, на всю ширину экрана (как у Ведомости ЗП)
   periodType = $("sectorTypeToggle").querySelector(".active").dataset.type;
   await populateSectorPeriodSelect(periodType);
   loadSectorPanel();
