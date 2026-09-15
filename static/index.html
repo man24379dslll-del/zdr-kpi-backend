@@ -281,7 +281,6 @@
       <div class="row" style="margin-top:6px;justify-content:flex-end;">
         <button class="btn btn-ghost" id="openRequisitesBtn" style="padding:7px 14px;font-size:12.5px;">💳 Реквизиты</button>
         <button class="btn btn-ghost" id="openPayrollBtn" style="padding:7px 14px;font-size:12.5px;">💰 Ведомость ЗП</button>
-        <button class="btn btn-ghost" id="openSectorBtn" style="padding:7px 14px;font-size:12.5px;">🧭 Сектор №1</button>
         <button class="btn btn-ghost" id="openDashboardsBtn" style="padding:7px 14px;font-size:12.5px;">📊 Дашборды</button>
         <button class="btn btn-ghost" id="openDynamicsBtn" style="padding:7px 14px;font-size:12.5px;">📈 Динамика</button>
         <button class="btn btn-ghost" id="openConstructorBtn" style="padding:7px 14px;font-size:12.5px;">⚙️ Конструктор рейтинга</button>
@@ -309,24 +308,6 @@
     </div>
     <div id="reqLog" class="log"></div>
     <div id="reqPreview" style="margin-top:16px;"></div>
-  </div>
-
-  <div class="panel" id="sectorPanel" style="display:none;">
-    <div class="row" style="justify-content:space-between;align-items:flex-start;">
-      <h2 style="margin:0;">Сектор №1</h2>
-      <button class="btn btn-ghost" id="closeSectorBtn" style="padding:7px 14px;font-size:12.5px;">Закрыть ✕</button>
-    </div>
-    <div class="sub" style="margin:10px 0 16px;">4 группы супервайзеров (Болотов, Владыкин, Гулуа, Потапова) вместе, за один выбранный период — то же, что видит руководитель сектора в своей "Моей группе", только доступно admin/manager для любого сохранённого периода.</div>
-    <div class="row" style="gap:14px;flex-wrap:wrap;margin-bottom:16px;align-items:center;">
-      <div class="chan-toggle" id="sectorTypeToggle" style="display:inline-flex;">
-        <button type="button" data-type="week" class="active">Недельный</button>
-        <button type="button" data-type="day">Ежедневный</button>
-      </div>
-      <select id="sectorPeriodSelect" class="period-select" style="min-width:220px;"></select>
-      <button class="btn btn-ghost" id="sectorExportBtn" style="padding:7px 14px;font-size:12.5px;">Скачать Excel</button>
-    </div>
-    <div id="sectorLog" class="log"></div>
-    <div id="sectorContainer"></div>
   </div>
 
   <div class="panel" id="dashboardsPanel" style="display:none;">
@@ -560,6 +541,7 @@
 
     <div class="tab-bar">
       <button class="tab-btn active" data-tab="byGroup">По группам</button>
+      <button class="tab-btn" data-tab="sector1Groups">Сектор №1</button>
       <button class="tab-btn" data-tab="novices">Новички (общий рейтинг)</button>
       <button class="tab-btn" data-tab="supervisors">Рейтинг супервайзеров</button>
       <button class="tab-btn" data-tab="sector1Supervisors">Рейтинг супервайзеров (Сектор №1)</button>
@@ -572,6 +554,11 @@
         <input type="text" id="searchBox" placeholder="Поиск по ФИО…">
       </div>
       <div id="groupsContainer"></div>
+    </div>
+
+    <div class="tab-panel" id="tab-sector1Groups">
+      <div class="sub" style="margin-bottom:16px;">4 группы супервайзеров Сектора №1 (Болотов, Владыкин, Гулуа, Потапова) вместе — то же, что видит руководитель сектора в своей "Моей группе".</div>
+      <div id="sector1GroupsContainer"></div>
     </div>
 
     <div class="tab-panel" id="tab-novices">
@@ -712,7 +699,6 @@ function onLoggedIn(){
     $("openConstructorBtn").style.display = "none";
     $("openPayrollBtn").style.display = "none";
     $("openRequisitesBtn").style.display = "none";
-    $("openSectorBtn").style.display = "none";
     // Руководитель сектора — тот же аккаунт/RLS-механизм, что у обычного
     // супервайзера (просто supervisor_names = все 4 группы сектора), только
     // заголовок меняем для ясности — "Моя группа" по названию не подходит,
@@ -2450,6 +2436,7 @@ function renderResults(){
 
   renderGroupButtons();
   renderGroups();
+  renderSector1Groups();
   renderNovices();
   renderSupervisors();
   renderSector1Supervisors();
@@ -2508,6 +2495,15 @@ function renderGroups(){
   if(!container.children.length){
     container.innerHTML = `<div style="color:var(--muted);padding:20px 0;">Ничего не найдено.</div>`;
   }
+}
+
+// Отдельная вкладка "Сектор №1" (вместо прежней отдельной панели/кнопки в
+// нав-баре — объединено с общим выбором периода "1 · Файл и период", как
+// и остальные вкладки этой панели, без дублирующего пикера периода).
+// Переиспользует renderGroupBlocks — тот же рендер, что у "Моей группы"
+// руководителя сектора (hideLk + мини-блок 3 исключений внутри).
+function renderSector1Groups(){
+  renderGroupBlocks($("sector1GroupsContainer"), currentRows, [...SECTOR_1_SUPERVISORS], { showTier: periodType === "week", showDelta: true, hideFinalPay: false });
 }
 
 function renderNovices(){
@@ -2901,7 +2897,6 @@ $("dynSearchBox").addEventListener("input", (e) => {
 function closeAllTopPanels(){
   $("requisitesPanel").style.display = "none";
   $("payrollPanel").style.display = "none";
-  $("sectorPanel").style.display = "none";
   $("dashboardsPanel").style.display = "none";
   $("standaloneDynamicsPanel").style.display = "none";
   $("constructorPanel").style.display = "none";
@@ -3925,86 +3920,6 @@ $("openPayrollBtn").addEventListener("click", () => {
   populatePayrollMonthSelect();
 });
 $("closePayrollBtn").addEventListener("click", () => { $("payrollPanel").style.display = "none"; });
-
-// ---------- Сектор №1 (admin/manager) ----------
-// Тот же принцип, что "Моя группа" у супервайзера (populatePeriodSelect +
-// sbGet + dbRowToDisplayRow), только жёстко зашит на 4 группы Сектора 1
-// и всегда рендерит блоками (renderGroupBlocks) — доступно для ЛЮБОГО
-// сохранённого периода, не только последнего.
-let sectorUploadsDesc = [];
-let currentSectorPeriodLabel = null;
-let currentSectorRows = null;
-
-async function populateSectorPeriodSelect(vType){
-  const uploads = await fetchAllUploads(vType);
-  sectorUploadsDesc = [...uploads].reverse();
-  const sel = $("sectorPeriodSelect");
-  sel.innerHTML = "";
-  sectorUploadsDesc.forEach(u => {
-    const opt = document.createElement("option");
-    opt.value = u.id;
-    const when = u.uploaded_at ? new Date(u.uploaded_at).toLocaleDateString("ru") : "";
-    opt.textContent = `${u.period_label}${when ? " · загружен " + when : ""}`;
-    sel.appendChild(opt);
-  });
-}
-
-async function loadSectorPanel(){
-  const vType = $("sectorTypeToggle").querySelector(".active").dataset.type;
-  const logEl2 = $("sectorLog");
-  const containerEl = $("sectorContainer");
-  clearLog(logEl2);
-  containerEl.innerHTML = "";
-  log("Загружаю данные Сектора №1…", null, logEl2);
-  try{
-    if(!sectorUploadsDesc.length){
-      log("Пока нет ни одной загрузки такого типа.", "warn", logEl2);
-      return;
-    }
-    const selectedId = $("sectorPeriodSelect").value;
-    const latest = sectorUploadsDesc.find(u => u.id === selectedId) || sectorUploadsDesc[0];
-    const rowsRaw = await sbGet(`kpi_ratings?upload_id=eq.${latest.id}&select=*`);
-    const rows = rowsRaw.map(dbRowToDisplayRow).filter(r => SECTOR_1_SUPERVISORS.has(r.supervisor));
-
-    currentSectorRows = rows.filter(r => !r.is_novice);
-    currentSectorPeriodLabel = latest.period_label;
-
-    clearLog(logEl2);
-    log(`Период: ${latest.period_label} · сотрудников в секторе: ${currentSectorRows.length}`, "ok", logEl2);
-    renderGroupBlocks(containerEl, currentSectorRows, [...SECTOR_1_SUPERVISORS], { showTier: vType === "week", showDelta: false, hideFinalPay: false });
-  } catch(err){
-    log("Ошибка: " + err.message, "err", logEl2);
-  }
-}
-
-$("openSectorBtn").addEventListener("click", async () => {
-  closeAllTopPanels();
-  $("sectorPanel").style.display = "block";
-  $("sectorPanel").scrollIntoView({ behavior: "smooth", block: "start" });
-  $("wrap").classList.add("wide"); // таблицы группы широкие, на всю ширину экрана (как у Ведомости ЗП)
-  periodType = $("sectorTypeToggle").querySelector(".active").dataset.type;
-  await populateSectorPeriodSelect(periodType);
-  loadSectorPanel();
-});
-$("closeSectorBtn").addEventListener("click", () => { $("sectorPanel").style.display = "none"; });
-$("sectorTypeToggle").querySelectorAll("button").forEach(btn => {
-  btn.addEventListener("click", async () => {
-    $("sectorTypeToggle").querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
-    periodType = btn.dataset.type;
-    await populateSectorPeriodSelect(periodType);
-    loadSectorPanel();
-  });
-});
-$("sectorPeriodSelect").addEventListener("change", loadSectorPanel);
-$("sectorExportBtn").addEventListener("click", () => {
-  if(!currentSectorRows || !currentSectorRows.length) return;
-  const wb = XLSX.utils.book_new();
-  const sheet = XLSX.utils.aoa_to_sheet([["ФИО","Статус","Группа","Итог. место","Сумма баллов"]].concat(
-    currentSectorRows.map(r => [r.fio, r.status, displayGroupName(r.supervisor), r.is_na ? "Н/О" : r.final_place, r.total_score])
-  ));
-  XLSX.utils.book_append_sheet(wb, sheet, "Сектор №1");
-  XLSX.writeFile(wb, `Сектор_1_${currentSectorPeriodLabel}.xlsx`);
-});
 
 $("openDashboardsBtn").addEventListener("click", async () => {
   closeAllTopPanels();
