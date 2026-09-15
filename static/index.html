@@ -1972,7 +1972,7 @@ function computeSupervisorRating(groups, onlySector1){
   // считаются и показываются в таблице как обычно, просто не влияют на
   // итоговое место супервайзера.
   const active = onlySector1 ? { c1:true, lk:false, ch:true, time:true, errors:true } : undefined;
-  const rows = scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc}), e => isSpecialSupervisor(e.supervisor), "c1_sum", false, active);
+  const rows = scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc, cards:e.ch_cards}), e => isSpecialSupervisor(e.supervisor), "c1_sum", false, active);
   assignSupervisorCoefficients(rows);
   return rows;
 }
@@ -2004,7 +2004,7 @@ function computeSupervisorRatingFromRows(mainRows, onlySector1){
   // Сектор №1 — ЛК не в счёт при сравнении групп между собой, см. тот же
   // комментарий в computeSupervisorRating выше.
   const active = onlySector1 ? { c1:true, lk:false, ch:true, time:true, errors:true } : undefined;
-  const rows = scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc}), e => isSpecialSupervisor(e.supervisor), "c1_sum", false, active);
+  const rows = scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc, cards:e.ch_cards}), e => isSpecialSupervisor(e.supervisor), "c1_sum", false, active);
   assignSupervisorCoefficients(rows);
   return rows;
 }
