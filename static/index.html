@@ -197,7 +197,9 @@
   .sector1-lk-card .lk-status{font-size:12px;color:var(--muted);margin-top:2px;}
   .sector1-lk-card .lk-stats{display:flex;flex-wrap:wrap;gap:12px 20px;}
   .sector1-lk-card .lk-stat .v{font-family:var(--mono);font-size:15.5px;font-weight:700;color:var(--text);}
+  .sector1-lk-card .lk-stat .v .rank-badge{margin-left:6px;vertical-align:2px;font-size:11px;padding:1px 6px;}
   .sector1-lk-card .lk-stat .l{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-top:1px;}
+  .sector1-lk-card .lk-stats-extra{margin-top:12px;padding-top:12px;border-top:1px dashed var(--line);}
   .subtable-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-sm);}
   table.detail{border-collapse:collapse;width:100%;min-width:1020px;font-size:12.5px;}
   table.detail th, table.detail td{padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap;}
@@ -776,6 +778,8 @@ function appendSector1LkExceptions(container, groupRows){
 
 function renderSector1LkCards(rows){
   const lkMap = gradientMap(rows, "lk_place");
+  const timeMap = gradientMap(rows, "time_place");
+  const errMap = gradientMap(rows, "errors_place");
   const wrap = document.createElement("div");
   wrap.className = "sector1-lk-cards";
   for(const r of sortByPlace(rows.map(r => ({...r, final_place: r.lk_place, is_na: false})))){
@@ -795,6 +799,10 @@ function renderSector1LkCards(rows){
         <div class="lk-stat"><div class="v">${fmt(r.lk_check)}</div><div class="l">ср.чек</div></div>
         <div class="lk-stat"><div class="v">${fmtPct(r.lk_conv)}</div><div class="l">конв.</div></div>
         <div class="lk-stat"><div class="v">${fmt(r.lk_pc)}</div><div class="l">с контакта</div></div>
+      </div>
+      <div class="lk-stats lk-stats-extra">
+        <div class="lk-stat"><div class="v">${fmtTime(r.time)} ${rankBadge(r.time_place, timeMap(r.time_place))}</div><div class="l">время/контакт</div></div>
+        <div class="lk-stat"><div class="v">${fmtPct(r.errors_pct)} ${rankBadge(r.errors_place, errMap(r.errors_place))}</div><div class="l">% ошибок</div></div>
       </div>
     `;
     wrap.appendChild(card);
