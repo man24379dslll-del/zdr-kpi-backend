@@ -107,6 +107,7 @@ from app.services.group_naming import (
     PEAKS_PP_SUFFIX,
     PEAKS_UVELICHITELI_SUFFIX,
     REGION_UK_GROUP_RE,
+    SECTOR_1_SUPERVISORS,
 )
 
 FIO_COLUMN = "ФИО"
@@ -196,9 +197,17 @@ NA_STATUSES = {"тренер", "руководитель", "отпуск", "бо
 
 def is_na_row(row: dict) -> bool:
     status_value = str(row.get("status") or "").strip().lower()
+    supervisor = row.get("supervisor")
+    # Сектор №1 — по прямому запросу заказчика статус "Новичок" здесь
+    # больше НЕ исключает из официального места/тира/коэффициента (в
+    # отличие от всей остальной компании, см. проверку "новичок" ниже) —
+    # у них сейчас почти весь состав новички, и раньше поэтому место было
+    # всегда "Н/О". Исключаются только тренер/руководитель/отпуск/
+    # больничный (та же NA_STATUSES) и реально нулевая активность.
+    if supervisor in SECTOR_1_SUPERVISORS:
+        return status_value in NA_STATUSES or (row.get("c1_sum") or 0) == 0
     if status_value.startswith("новичок") or status_value in NA_STATUSES:
         return True
-    supervisor = row.get("supervisor")
     if supervisor and PEAKS_GROUP_RE.search(supervisor):
         return (row.get("ch_sum") or 0) == 0
     return (row.get("c1_sum") or 0) == 0

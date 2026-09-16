@@ -745,9 +745,11 @@ function dbRowToDisplayRow(r){
 // 1-е и почти всегда не входит в сумму, см. forceLk1/sector1ZeroesLk),
 // показывать её там бессмысленно. 3 исключения (реально работают с ЛК,
 // см. SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO) выводятся ОТДЕЛЬНЫМ мини-блоком
-// под основной таблицей — там ЛК видна как обычно. commonArgs — те же
-// позиционные аргументы buildDetailTable, что и у основной таблицы
-// (showGroupCol..hideFinalPay), кроме rows/hideLk.
+// под основной таблицей — ТОЛЬКО ФИО/Статус + ЛК (lkOnly=true), без
+// остальных категорий/итоговых колонок — эта подгруппа именно про ЛК.
+// commonArgs — позиционные аргументы buildDetailTable (showGroupCol..
+// hideFinalPay), кроме rows/hideLk/lkOnly — при lkOnly=true они всё равно
+// не используются (соответствующие блоки скрыты), кроме showGroupCol.
 function appendSector1LkExceptions(container, groupRows, commonArgs){
   const exceptionRows = groupRows.filter(r => SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO.has(r.fio));
   if(!exceptionRows.length) return;
@@ -755,7 +757,7 @@ function appendSector1LkExceptions(container, groupRows, commonArgs){
   sub.className = "sub-title";
   sub.textContent = "Работают с ЛК (учитывается отдельно от остальной группы)";
   container.appendChild(sub);
-  container.appendChild(buildDetailTable(exceptionRows, ...commonArgs, false));
+  container.appendChild(buildDetailTable(exceptionRows, ...commonArgs, false, true));
 }
 
 function renderGroupBlocks(container, rows, groupNames, opts){
@@ -1690,13 +1692,15 @@ function computeMainRating(groups, prevCoeffMap, tierCoefficients){
     const active = g.isRegionUK ? { c1:true, lk:true, ch:false, time:true, errors:false }
       : g.isPeaks ? { c1:false, lk:false, ch:true, time:false, errors:false }
       : undefined;
-    // g.isPeaks -> isNaPeaks (сигнал Н/О по ch_sum, не по c1_sum — см.
-    // isNaPeaks выше), для всех остальных групп — как раньше, isNaMain.
-    const naFn = g.isPeaks ? isNaPeaks : isNaMain;
     // Сектор №1: место по ЛК ВСЕГДА 1-е для всей группы (forceLk1); в
     // total_score эта (теперь максимальная) оценка входит только у 3
     // исключений — решается поэлементно (lkActiveFn), не на всю группу.
     const forceLk1 = SECTOR_1_SUPERVISORS.has(g.supervisor);
+    // g.isPeaks -> isNaPeaks (сигнал Н/О по ch_sum, не по c1_sum — см.
+    // isNaPeaks выше). Сектор №1 -> статус "Новичок" САМ ПО СЕБЕ больше не
+    // Н/О (по прямому запросу заказчика — см. isSector1Evaluated выше),
+    // для всех остальных групп — как раньше, isNaMain.
+    const naFn = g.isPeaks ? isNaPeaks : forceLk1 ? (e => !isSector1Evaluated(e)) : isNaMain;
     const lkActiveFn = e => !sector1ZeroesLk(g.supervisor, e.fio);
     const scored = scoreSlice(g.employees, e => channelFields(e, channel), naFn, "c1_sum", true, active, lkActiveFn, forceLk1);
     out.push(...scored.map(e => ({...e, supervisor: g.supervisor, channel, isRegionUK: !!g.isRegionUK, isPeaks: !!g.isPeaks})));
@@ -1769,7 +1773,12 @@ function assignNoviceCoefficients(rows, coefficients, tieField){
     const coeffs = coefficientsFor(supervisor, defaultCoeffs);
     const group = bySupervisor[supervisor];
     const evaluated = group.filter(r => !r.is_na);
-    const novices = group.filter(r => NOVICE_STATUSES.includes(r.status));
+    // is_na=false сам по себе больше не гарантирован статусом "не новичок" —
+    // Сектор №1 (см. isSector1Evaluated/computeMainRating) может дать
+    // новичку is_na=false, и тот уже получил РЕАЛЬНЫЙ тир в assignTierCoefficients
+    // выше; такого трогать не нужно — иначе затёрли бы реальный тир
+    // "теоретическим" (с защитным минимумом).
+    const novices = group.filter(r => NOVICE_STATUSES.includes(r.status) && r.is_na);
     if(!novices.length) continue;
     const sizes = tierSizes(evaluated.length + 1, coeffs.length);
     for(const novice of novices){
@@ -2339,15 +2348,21 @@ function rankBadge(value, hex, extraText){
   return `<span class="rank-badge" style="background:${bg};color:${fg};">${value}</span>`;
 }
 
-function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk){
+// lkOnly — мини-блок "Работают с ЛК" (3 исключения Сектора №1, см.
+// appendSector1LkExceptions): показывает ТОЛЬКО ФИО/Статус/[Группа] + ЛК,
+// остальные категории и итоговые колонки скрыты целиком (в этой
+// подгруппе не нужны — она именно про ЛК).
+function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk, lkOnly){
+  const showLk = lkOnly || !hideLk;
   return `
     <thead>
       <tr class="cat">
         <th class="col-fio" rowspan="2">ФИО</th>
         <th class="col-status block-end" rowspan="2">Статус</th>
         ${extraCol ? `<th class="col-group block-end" rowspan="2">Группа</th>` : ``}
-        <th colspan="6" class="block-end">1 обращение</th>
-        ${hideLk ? `` : `<th colspan="6" class="block-end">ЛК</th>`}
+        ${lkOnly ? `` : `<th colspan="6" class="block-end">1 обращение</th>`}
+        ${showLk ? `<th colspan="6" class="block-end">ЛК</th>` : ``}
+        ${lkOnly ? `` : `
         <th colspan="6" class="block-end">${channelLabel || "Радио+ТВ / Интернет"}</th>
         <th colspan="2" class="block-end">Время/контакт (без звонка)</th>
         <th colspan="3" class="block-end">% ошибок</th>
@@ -2356,13 +2371,16 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
         ${showDelta ? `<th rowspan="2" class="${showTier ? '' : 'block-end'}">Δ к пред. периоду</th>` : ``}
         ${showTier ? `<th rowspan="2">ЛГ</th><th rowspan="2">Коэфф. (эта неделя)</th><th rowspan="2">Коэфф. пред. недели (в ЗП)</th><th rowspan="2">Рабочее время, ч</th><th rowspan="2">Кол-во смен</th>${hideFinalPay ? `` : `<th rowspan="2">${escapeHtml(bonusColumnLabels.bonus075)}</th><th rowspan="2">${escapeHtml(bonusColumnLabels.bonus2)}</th><th rowspan="2">ЗП</th>`}` : ``}
         ${showConvStatus ? `<th rowspan="2">Статус по сумме с контакта</th>` : ``}
+        `}
       </tr>
       <tr class="sub">
-        <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
-        ${hideLk ? `` : `<th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>`}
+        ${lkOnly ? `` : `<th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>`}
+        ${showLk ? `<th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>` : ``}
+        ${lkOnly ? `` : `
         <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
         <th>чч:мм:сс</th><th class="block-end">место</th>
         <th>кол-во</th><th>%</th><th class="block-end">место</th>
+        `}
       </tr>
     </thead>`;
 }
@@ -2372,14 +2390,15 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
 // колонок бессмысленно и вводит в заблуждение, поэтому для групп Сектора
 // 1 он убирается целиком (везде, где показаны эти группы), кроме 3
 // исключений — их выводят ОТДЕЛЬНЫМ мини-блоком с ЛК (см. renderGroupBlocks/
-// renderGroups ниже), а не в общей таблице.
-function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk){
+// renderGroups ниже), а не в общей таблице. lkOnly — см. detailTableHead.
+function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk, lkOnly){
+  const showLk = lkOnly || !hideLk;
   const sorted = sortByPlace(rows);
   const wrap = document.createElement("div");
   wrap.className = "subtable-wrap";
   const table = document.createElement("table");
   table.className = "detail";
-  table.innerHTML = detailTableHead(showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk) + `<tbody></tbody>`;
+  table.innerHTML = detailTableHead(showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk, lkOnly) + `<tbody></tbody>`;
   const tbody = table.querySelector("tbody");
 
   const c1Map = gradientMap(rows, "c1_place");
@@ -2397,8 +2416,9 @@ function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvSt
       <td class="col-fio clickable-fio" data-fio="${escapeHtml(r.fio)}" data-period-type="${periodType}">${r.fio}</td>
       <td class="col-status block-end">${r.status}</td>
       ${showGroupCol ? `<td class="col-group block-end">${displayGroupName(r.supervisor)}</td>` : ``}
-      <td>${fmtCards(r.c1_cards)}</td><td>${fmt(r.c1_sum)}</td><td>${fmt(r.c1_check)}</td><td>${fmtPct(r.c1_conv)}</td><td>${fmt(r.c1_pc)}</td><td class="block-end">${rankBadge(r.c1_place, c1Map(r.c1_place))}</td>
-      ${hideLk ? `` : `<td>${fmtCards(r.lk_cards)}</td><td>${fmt(r.lk_sum)}</td><td>${fmt(r.lk_check)}</td><td>${fmtPct(r.lk_conv)}</td><td>${fmt(r.lk_pc)}</td><td class="block-end">${rankBadge(fmtPlace(r.lk_place), lkMap(r.lk_place))}</td>`}
+      ${lkOnly ? `` : `<td>${fmtCards(r.c1_cards)}</td><td>${fmt(r.c1_sum)}</td><td>${fmt(r.c1_check)}</td><td>${fmtPct(r.c1_conv)}</td><td>${fmt(r.c1_pc)}</td><td class="block-end">${rankBadge(r.c1_place, c1Map(r.c1_place))}</td>`}
+      ${showLk ? `<td>${fmtCards(r.lk_cards)}</td><td>${fmt(r.lk_sum)}</td><td>${fmt(r.lk_check)}</td><td>${fmtPct(r.lk_conv)}</td><td>${fmt(r.lk_pc)}</td><td class="block-end">${rankBadge(fmtPlace(r.lk_place), lkMap(r.lk_place))}</td>` : ``}
+      ${lkOnly ? `` : `
       <td>${fmtCards(r.ch_cards)}</td><td>${fmt(r.ch_sum)}</td><td>${fmt(r.ch_check)}</td><td>${fmtPct(r.ch_conv)}</td><td>${fmt(r.ch_pc)}</td><td class="block-end">${rankBadge(r.ch_place, chMap(r.ch_place))}</td>
       <td>${fmtTime(r.time)}</td><td class="block-end">${rankBadge(r.time_place, timeMap(r.time_place))}</td>
       <td>${fmtCards(r.errors_count)}</td><td>${fmtPct(r.errors_pct)}</td><td class="block-end">${rankBadge(r.errors_place, errMap(r.errors_place))}</td>
@@ -2407,6 +2427,7 @@ function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvSt
       ${showDelta ? `<td class="${showTier ? '' : 'block-end'}">${deltaBadge(r.deltaPlace)}</td>` : ``}
       ${showTier ? `<td>${r.tier ?? ""}</td><td style="font-weight:700;">${r.coefficient ?? ""}</td><td>${r.salaryCoeffUsed ?? ""}${r.salaryCoeffFromPrev ? "" : " (по умолч.)"}</td><td>${fmtCards(r.work_hours)}</td><td>${fmtCards(r.shift_count)}</td>${hideFinalPay ? `` : `<td>${fmtCards(r.bonus075)}</td><td>${fmtCards(r.bonus2)}</td><td style="font-weight:800;color:var(--good);">${fmt(r.salary)}</td>`}` : ``}
       ${showConvStatus ? `<td>${convBadge(r.c1_pc)}</td>` : ``}
+      `}
     `;
     tbody.appendChild(tr);
   }

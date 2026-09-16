@@ -125,7 +125,13 @@ def assign_novice_coefficients(rows: list[dict], tier_coefficients: list[float] 
     for supervisor, group in by_supervisor.items():
         coefficients = _coefficients_for(supervisor, default_coefficients)
         evaluated = [r for r in group if not r.get("is_na")]
-        novices = [r for r in group if r.get("is_novice")]
+        # is_novice сам по себе БОЛЬШЕ не гарантирует is_na=True — Сектор №1
+        # (см. excel_parsing.py::is_na_row) теперь может дать новичку
+        # is_na=False, и тот уже получил РЕАЛЬНЫЙ тир в цикле выше; такого
+        # трогать не нужно — иначе тут бы затёрли реальный тир
+        # "теоретическим" (с защитным минимумом), для is_na=False это не
+        # то поведение, что нужно.
+        novices = [r for r in group if r.get("is_novice") and r.get("is_na")]
         if not novices:
             continue
         sizes = tier_sizes(len(evaluated) + 1, len(coefficients))

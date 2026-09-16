@@ -59,10 +59,10 @@ assert BOLOTOV in SECTOR_1_SUPERVISORS
 EXCEPTION_FIO = next(iter(SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO))
 
 
-def _row(fio, c1_pc, lk_pc, ch_pc, time_pc, errors_pct, lk_cards=1, lk_conv=10, c1_sum=1000):
+def _row(fio, c1_pc, lk_pc, ch_pc, time_pc, errors_pct, lk_cards=1, lk_conv=10, c1_sum=1000, status=""):
     return {
         FIO: fio,
-        STATUS: "",
+        STATUS: status,
         BONUS075: 0,
         BONUS2: 0,
         C1_COUNT: 10,
@@ -267,3 +267,57 @@ def test_normal_group_still_uses_10_tiers():
     assert by_place[1].coefficient == 1.4  # выше верхней границы Сектора 1 (1.3)
     assert by_place[10].tier == 10
     assert by_place[10].coefficient == 0.25  # ниже нижней границы Сектора 1 (1.0)
+
+
+def test_sector1_novice_gets_real_place_and_tier_not_na():
+    # По прямому запросу заказчика: статус "Новичок" САМ ПО СЕБЕ больше не
+    # исключает из официального места для Сектора 1 (в отличие от всей
+    # остальной компании) — сейчас у сектора почти весь состав новички, и
+    # раньше поэтому место было всегда "Н/О". Реальная активность есть ->
+    # реальное место/тир/коэффициент (без защитного минимума новичка).
+    raw = _build_excel_bytes([
+        _group_row(BOLOTOV),
+        _row("Хороший Новичок", 100, 50, 200, 20, 1, status="Новичок, 1-й уровень"),
+        _row("Средний Новичок", 60, 15, 120, 45, 8, status="Новичок, 1-й уровень"),
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    by_fio = {r.fio: r for r in results}
+
+    good = by_fio["Хороший Новичок"]
+    weak = by_fio["Средний Новичок"]
+    assert good.is_na is False
+    assert good.final_place == 1
+    assert good.tier == 1
+    assert good.coefficient == 1.3  # верхняя граница шкалы Сектора 1
+    assert weak.is_na is False
+    assert weak.final_place == 2
+
+
+def test_sector1_novice_with_zero_activity_is_still_na():
+    # Контроль: новичок БЕЗ реальной активности (c1_sum=0) в Секторе 1
+    # всё равно Н/О — исключение статуса "Новичок" не означает исключение
+    # проверки на нулевую активность.
+    raw = _build_excel_bytes([
+        _group_row(BOLOTOV),
+        _row("Пустышкин Новичок", 0, 0, 0, 20, 1, c1_sum=0, status="Новичок, 1-й уровень"),
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    r = results[0]
+    assert r.is_na is True
+    assert r.final_place is None
+
+
+def test_normal_group_novice_is_still_na_unaffected():
+    # Контроль: вне Сектора 1 новичок по-прежнему Н/О, даже с сильными
+    # показателями (правило не тронуто нигде, кроме Сектора 1).
+    raw = _build_excel_bytes([
+        _group_row("Супервайзер - Иванов И.И."),
+        _row("Хороший Новичок", 100, 50, 200, 20, 1, status="Новичок, 1-й уровень"),
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    r = results[0]
+    assert r.is_na is True
+    assert r.final_place is None
