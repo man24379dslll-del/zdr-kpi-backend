@@ -719,6 +719,9 @@ function onLoggedIn(){
     // когда групп сразу 4 (renderGroupBlocks выше это уже покажет блоками).
     const isSector1Head = profile.supervisor_names && profile.supervisor_names.length === SECTOR_1_SUPERVISORS.size
       && profile.supervisor_names.every(s => SECTOR_1_SUPERVISORS.has(s));
+    // На profile — чтобы buildSupervisorViewer (и другой код) мог
+    // проверить без пересчёта, доступен весь onLoggedIn.
+    profile.isSector1Head = isSector1Head;
     // Руководителю Сектора 1 — по прямому запросу заказчика те же доступы,
     // что у admin/manager, но ТОЛЬКО ПРОСМОТР и только его 4 группы:
     // "Ведомость ЗП" (бэкенд сам урезает ответ — см.
@@ -931,12 +934,17 @@ async function buildSupervisorViewer(){
       // hideFinalPay=true — супервайзер не видит бонусы и итоговую ЗП
       // (0.75% за офор., 2% за дост., ЗП), но видит ЛГ/коэффициенты/часы/
       // смены как есть. Сам расчёт не меняется, только видимость колонок
-      // в таблице (см. buildDetailTable/detailTableHead).
+      // в таблице (см. buildDetailTable/detailTableHead). Исключение —
+      // руководитель Сектора 1 (profile.isSector1Head, см. onLoggedIn): ему
+      // ЗП уже доступна отдельно в "Ведомости ЗП" (см. openPayrollBtn), так
+      // что и в этой таблице по прямому запросу заказчика показываем как
+      // есть, а не только там. Курбановой (тоже >1 группы, но не Сектор 1)
+      // это не касается — hideFinalPay для неё остаётся true.
       // Несколько групп (руководитель сектора, Курбанова Зарина) — блоком
       // на группу (renderGroupBlocks), одна группа — как раньше, единой
       // таблицей без лишнего заголовка группы.
       if(profile.supervisor_names && profile.supervisor_names.length > 1){
-        renderGroupBlocks(containerEl, currentRows, profile.supervisor_names, { showTier: vType === "week", showDelta: true, hideFinalPay: true });
+        renderGroupBlocks(containerEl, currentRows, profile.supervisor_names, { showTier: vType === "week", showDelta: true, hideFinalPay: !profile.isSector1Head });
       } else {
         const soloSupervisor = profile.supervisor_names && profile.supervisor_names[0];
         const isSector1 = SECTOR_1_SUPERVISORS.has(soloSupervisor);
