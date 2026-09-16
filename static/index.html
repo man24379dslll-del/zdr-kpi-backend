@@ -186,6 +186,18 @@
     font-family:var(--mono);font-size:11px;letter-spacing:.07em;text-transform:uppercase;
     color:var(--accent-text);margin:20px 0 9px;font-weight:700;
   }
+  /* ---- Сектор №1: карточки "Работают с ЛК" (вместо плоской пустоватой таблицы) ---- */
+  .sector1-lk-cards{display:flex;flex-wrap:wrap;gap:12px;}
+  .sector1-lk-card{
+    background:var(--panel-2);border:1px solid var(--line);border-left:3px solid var(--warn);
+    border-radius:12px;padding:14px 18px;min-width:230px;flex:1 1 230px;box-shadow:var(--shadow-sm);
+  }
+  .sector1-lk-card .lk-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:12px;}
+  .sector1-lk-card .lk-fio{font-weight:700;font-size:14px;color:var(--text);letter-spacing:-.01em;}
+  .sector1-lk-card .lk-status{font-size:12px;color:var(--muted);margin-top:2px;}
+  .sector1-lk-card .lk-stats{display:flex;flex-wrap:wrap;gap:12px 20px;}
+  .sector1-lk-card .lk-stat .v{font-family:var(--mono);font-size:15.5px;font-weight:700;color:var(--text);}
+  .sector1-lk-card .lk-stat .l{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-top:1px;}
   .subtable-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow-sm);}
   table.detail{border-collapse:collapse;width:100%;min-width:1020px;font-size:12.5px;}
   table.detail th, table.detail td{padding:7px 10px;border-bottom:1px solid var(--line);white-space:nowrap;}
@@ -745,19 +757,49 @@ function dbRowToDisplayRow(r){
 // 1-е и почти всегда не входит в сумму, см. forceLk1/sector1ZeroesLk),
 // показывать её там бессмысленно. 3 исключения (реально работают с ЛК,
 // см. SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO) выводятся ОТДЕЛЬНЫМ мини-блоком
-// под основной таблицей — ТОЛЬКО ФИО/Статус + ЛК (lkOnly=true), без
-// остальных категорий/итоговых колонок — эта подгруппа именно про ЛК.
-// commonArgs — позиционные аргументы buildDetailTable (showGroupCol..
-// hideFinalPay), кроме rows/hideLk/lkOnly — при lkOnly=true они всё равно
-// не используются (соответствующие блоки скрыты), кроме showGroupCol.
-function appendSector1LkExceptions(container, groupRows, commonArgs){
+// под основной таблицей — карточками (renderSector1LkCards), не плоской
+// таблицей: у них почти всё в 1 обращение/канале — нули (не их профиль),
+// широкая таблица с кучей пустых колонок смотрелась плохо; карточка с
+// только ЛК-метриками компактнее и понятнее. Вызывающий код
+// (renderGroups/renderGroupBlocks/buildSupervisorViewer) по-прежнему
+// передаёт 3-м аргументом commonArgs (нужен ему для соседнего вызова
+// buildDetailTable) — здесь он просто не используется.
+function appendSector1LkExceptions(container, groupRows){
   const exceptionRows = groupRows.filter(r => SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO.has(r.fio));
   if(!exceptionRows.length) return;
   const sub = document.createElement("div");
   sub.className = "sub-title";
   sub.textContent = "Работают с ЛК (учитывается отдельно от остальной группы)";
   container.appendChild(sub);
-  container.appendChild(buildDetailTable(exceptionRows, ...commonArgs, false, true));
+  container.appendChild(renderSector1LkCards(exceptionRows));
+}
+
+function renderSector1LkCards(rows){
+  const lkMap = gradientMap(rows, "lk_place");
+  const wrap = document.createElement("div");
+  wrap.className = "sector1-lk-cards";
+  for(const r of sortByPlace(rows.map(r => ({...r, final_place: r.lk_place, is_na: false})))){
+    const card = document.createElement("div");
+    card.className = "sector1-lk-card";
+    card.innerHTML = `
+      <div class="lk-head">
+        <div>
+          <div class="lk-fio">${escapeHtml(r.fio)}</div>
+          <div class="lk-status">${escapeHtml(r.status || "")}</div>
+        </div>
+        ${rankBadge(fmtPlace(r.lk_place), lkMap(r.lk_place))}
+      </div>
+      <div class="lk-stats">
+        <div class="lk-stat"><div class="v">${fmtCards(r.lk_cards)}</div><div class="l">карточек</div></div>
+        <div class="lk-stat"><div class="v">${fmt(r.lk_sum)}</div><div class="l">сумма</div></div>
+        <div class="lk-stat"><div class="v">${fmt(r.lk_check)}</div><div class="l">ср.чек</div></div>
+        <div class="lk-stat"><div class="v">${fmtPct(r.lk_conv)}</div><div class="l">конв.</div></div>
+        <div class="lk-stat"><div class="v">${fmt(r.lk_pc)}</div><div class="l">с контакта</div></div>
+      </div>
+    `;
+    wrap.appendChild(card);
+  }
+  return wrap;
 }
 
 function renderGroupBlocks(container, rows, groupNames, opts){
@@ -2348,21 +2390,15 @@ function rankBadge(value, hex, extraText){
   return `<span class="rank-badge" style="background:${bg};color:${fg};">${value}</span>`;
 }
 
-// lkOnly — мини-блок "Работают с ЛК" (3 исключения Сектора №1, см.
-// appendSector1LkExceptions): показывает ТОЛЬКО ФИО/Статус/[Группа] + ЛК,
-// остальные категории и итоговые колонки скрыты целиком (в этой
-// подгруппе не нужны — она именно про ЛК).
-function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk, lkOnly){
-  const showLk = lkOnly || !hideLk;
+function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk){
   return `
     <thead>
       <tr class="cat">
         <th class="col-fio" rowspan="2">ФИО</th>
         <th class="col-status block-end" rowspan="2">Статус</th>
         ${extraCol ? `<th class="col-group block-end" rowspan="2">Группа</th>` : ``}
-        ${lkOnly ? `` : `<th colspan="6" class="block-end">1 обращение</th>`}
-        ${showLk ? `<th colspan="6" class="block-end">ЛК</th>` : ``}
-        ${lkOnly ? `` : `
+        <th colspan="6" class="block-end">1 обращение</th>
+        ${hideLk ? `` : `<th colspan="6" class="block-end">ЛК</th>`}
         <th colspan="6" class="block-end">${channelLabel || "Радио+ТВ / Интернет"}</th>
         <th colspan="2" class="block-end">Время/контакт (без звонка)</th>
         <th colspan="3" class="block-end">% ошибок</th>
@@ -2371,16 +2407,13 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
         ${showDelta ? `<th rowspan="2" class="${showTier ? '' : 'block-end'}">Δ к пред. периоду</th>` : ``}
         ${showTier ? `<th rowspan="2">ЛГ</th><th rowspan="2">Коэфф. (эта неделя)</th><th rowspan="2">Коэфф. пред. недели (в ЗП)</th><th rowspan="2">Рабочее время, ч</th><th rowspan="2">Кол-во смен</th>${hideFinalPay ? `` : `<th rowspan="2">${escapeHtml(bonusColumnLabels.bonus075)}</th><th rowspan="2">${escapeHtml(bonusColumnLabels.bonus2)}</th><th rowspan="2">ЗП</th>`}` : ``}
         ${showConvStatus ? `<th rowspan="2">Статус по сумме с контакта</th>` : ``}
-        `}
       </tr>
       <tr class="sub">
-        ${lkOnly ? `` : `<th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>`}
-        ${showLk ? `<th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>` : ``}
-        ${lkOnly ? `` : `
+        <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
+        ${hideLk ? `` : `<th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>`}
         <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
         <th>чч:мм:сс</th><th class="block-end">место</th>
         <th>кол-во</th><th>%</th><th class="block-end">место</th>
-        `}
       </tr>
     </thead>`;
 }
@@ -2389,16 +2422,15 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
 // влияет на сумму (см. sector1ZeroesLk/forceLk1) — показывать этот блок
 // колонок бессмысленно и вводит в заблуждение, поэтому для групп Сектора
 // 1 он убирается целиком (везде, где показаны эти группы), кроме 3
-// исключений — их выводят ОТДЕЛЬНЫМ мини-блоком с ЛК (см. renderGroupBlocks/
-// renderGroups ниже), а не в общей таблице. lkOnly — см. detailTableHead.
-function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk, lkOnly){
-  const showLk = lkOnly || !hideLk;
+// исключений — их выводят ОТДЕЛЬНЫМ мини-блоком карточек (см.
+// renderSector1LkCards), не этой таблицей.
+function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk){
   const sorted = sortByPlace(rows);
   const wrap = document.createElement("div");
   wrap.className = "subtable-wrap";
   const table = document.createElement("table");
   table.className = "detail";
-  table.innerHTML = detailTableHead(showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk, lkOnly) + `<tbody></tbody>`;
+  table.innerHTML = detailTableHead(showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk) + `<tbody></tbody>`;
   const tbody = table.querySelector("tbody");
 
   const c1Map = gradientMap(rows, "c1_place");
@@ -2416,9 +2448,8 @@ function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvSt
       <td class="col-fio clickable-fio" data-fio="${escapeHtml(r.fio)}" data-period-type="${periodType}">${r.fio}</td>
       <td class="col-status block-end">${r.status}</td>
       ${showGroupCol ? `<td class="col-group block-end">${displayGroupName(r.supervisor)}</td>` : ``}
-      ${lkOnly ? `` : `<td>${fmtCards(r.c1_cards)}</td><td>${fmt(r.c1_sum)}</td><td>${fmt(r.c1_check)}</td><td>${fmtPct(r.c1_conv)}</td><td>${fmt(r.c1_pc)}</td><td class="block-end">${rankBadge(r.c1_place, c1Map(r.c1_place))}</td>`}
-      ${showLk ? `<td>${fmtCards(r.lk_cards)}</td><td>${fmt(r.lk_sum)}</td><td>${fmt(r.lk_check)}</td><td>${fmtPct(r.lk_conv)}</td><td>${fmt(r.lk_pc)}</td><td class="block-end">${rankBadge(fmtPlace(r.lk_place), lkMap(r.lk_place))}</td>` : ``}
-      ${lkOnly ? `` : `
+      <td>${fmtCards(r.c1_cards)}</td><td>${fmt(r.c1_sum)}</td><td>${fmt(r.c1_check)}</td><td>${fmtPct(r.c1_conv)}</td><td>${fmt(r.c1_pc)}</td><td class="block-end">${rankBadge(r.c1_place, c1Map(r.c1_place))}</td>
+      ${hideLk ? `` : `<td>${fmtCards(r.lk_cards)}</td><td>${fmt(r.lk_sum)}</td><td>${fmt(r.lk_check)}</td><td>${fmtPct(r.lk_conv)}</td><td>${fmt(r.lk_pc)}</td><td class="block-end">${rankBadge(fmtPlace(r.lk_place), lkMap(r.lk_place))}</td>`}
       <td>${fmtCards(r.ch_cards)}</td><td>${fmt(r.ch_sum)}</td><td>${fmt(r.ch_check)}</td><td>${fmtPct(r.ch_conv)}</td><td>${fmt(r.ch_pc)}</td><td class="block-end">${rankBadge(r.ch_place, chMap(r.ch_place))}</td>
       <td>${fmtTime(r.time)}</td><td class="block-end">${rankBadge(r.time_place, timeMap(r.time_place))}</td>
       <td>${fmtCards(r.errors_count)}</td><td>${fmtPct(r.errors_pct)}</td><td class="block-end">${rankBadge(r.errors_place, errMap(r.errors_place))}</td>
@@ -2427,7 +2458,6 @@ function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvSt
       ${showDelta ? `<td class="${showTier ? '' : 'block-end'}">${deltaBadge(r.deltaPlace)}</td>` : ``}
       ${showTier ? `<td>${r.tier ?? ""}</td><td style="font-weight:700;">${r.coefficient ?? ""}</td><td>${r.salaryCoeffUsed ?? ""}${r.salaryCoeffFromPrev ? "" : " (по умолч.)"}</td><td>${fmtCards(r.work_hours)}</td><td>${fmtCards(r.shift_count)}</td>${hideFinalPay ? `` : `<td>${fmtCards(r.bonus075)}</td><td>${fmtCards(r.bonus2)}</td><td style="font-weight:800;color:var(--good);">${fmt(r.salary)}</td>`}` : ``}
       ${showConvStatus ? `<td>${convBadge(r.c1_pc)}</td>` : ``}
-      `}
     `;
     tbody.appendChild(tr);
   }
