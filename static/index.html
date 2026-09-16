@@ -719,6 +719,17 @@ function onLoggedIn(){
     // когда групп сразу 4 (renderGroupBlocks выше это уже покажет блоками).
     const isSector1Head = profile.supervisor_names && profile.supervisor_names.length === SECTOR_1_SUPERVISORS.size
       && profile.supervisor_names.every(s => SECTOR_1_SUPERVISORS.has(s));
+    // Руководителю Сектора 1 — по прямому запросу заказчика те же доступы,
+    // что у admin/manager, но ТОЛЬКО ПРОСМОТР и только его 4 группы:
+    // "Ведомость ЗП" (бэкенд сам урезает ответ — см.
+    // routers/payroll.py::_restrict_to_sector1/CurrentUser.is_sector1_head)
+    // и "Дашборды" (та кнопка уже видна всем ролям — RLS уже урезает
+    // kpi_ratings до его групп, отдельного кода не потребовалось).
+    // Конструктор/Реквизиты — сознательно НЕ даём (глобальные для всей
+    // компании настройки/данные, см. обсуждение с заказчиком).
+    if(isSector1Head){
+      $("openPayrollBtn").style.display = "";
+    }
     $("pageTitle").textContent = isSector1Head ? "Сектор №1 — рейтинг" : "Моя группа — рейтинг";
     $("pageSub").textContent = isSector1Head
       ? "Здесь показаны все 4 группы Сектора №1. Данные обновляет администратор/руководитель после загрузки очередного отчёта."
@@ -3681,6 +3692,11 @@ function renderPayrollTable(){
   const c = $("dashPayrollContainer");
   const result = currentPayrollMeta;
   if(!result || !currentPayrollRows) return;
+  // Руководитель Сектора 1 — только просмотр (PUT /payroll/adjustment
+  // остаётся admin/manager-only на бэкенде, см. routers/payroll.py) —
+  // поля штраф/премия/оплата за смены недоступны для редактирования,
+  // чтобы не выглядели рабочими и не падали в 403 при попытке сохранить.
+  const payrollReadOnly = profile.role === "supervisor";
   const search = ($("payrollSearchBox").value || "").trim().toLowerCase();
   const visibleRows = search ? currentPayrollRows.filter(r => r.fio.toLowerCase().includes(search)) : currentPayrollRows;
 
@@ -3724,10 +3740,10 @@ function renderPayrollTable(){
         <td>${r.guaranteedPay == null ? '—' : fmt(Math.round(r.guaranteedPay))}</td>
         <td style="font-weight:700;">${fmt(Math.round(r.base))}</td>
         ` : ``}
-        <td><input type="number" step="0.01" class="payroll-penalty" value="${r.penalty || 0}" style="width:90px;"></td>
-        <td><input type="number" step="0.01" class="payroll-premium" value="${r.premium || 0}" style="width:90px;"></td>
+        <td><input type="number" step="0.01" class="payroll-penalty" value="${r.penalty || 0}" style="width:90px;" ${payrollReadOnly ? "disabled" : ""}></td>
+        <td><input type="number" step="0.01" class="payroll-premium" value="${r.premium || 0}" style="width:90px;" ${payrollReadOnly ? "disabled" : ""}></td>
         <td style="font-family:var(--sans);text-align:center;" title="Автосумма из файла — только для справки, в сумму не входит">${fmt(r.shiftCount || 0)}</td>
-        <td><input type="number" step="0.01" class="payroll-shift-pay" value="${r.shiftPay || 0}" style="width:90px;"></td>
+        <td><input type="number" step="0.01" class="payroll-shift-pay" value="${r.shiftPay || 0}" style="width:90px;" ${payrollReadOnly ? "disabled" : ""}></td>
         ${isMonthClose ? `<td title="Уже выплаченная полу-ведомость за недели 1-2 (0 — для еженедельной оплаты)">${fmt(Math.round(r.halfDeduction || 0))}</td>` : ``}
         <td style="font-weight:800;color:var(--good);" title="${escapeHtml(formatWeeksBreakdown(r.weeks))}">
           ${fmt(Math.round(r.sum))}
@@ -3986,6 +4002,10 @@ $("openPayrollBtn").addEventListener("click", () => {
   closeAllTopPanels();
   $("payrollPanel").style.display = "block";
   $("payrollPanel").scrollIntoView({ behavior: "smooth", block: "start" });
+  // Руководитель Сектора 1 — только просмотр ведомости (см. onLoggedIn):
+  // "Маркеры сотрудников" (GET/PUT /payroll/employee-marker(s)) остаётся
+  // admin/manager-only на бэкенде — кнопку прячем, чтобы не вела в 403.
+  $("openPayrollMarkersBtn").style.display = profile.role === "supervisor" ? "none" : "";
   renderDashPayroll();
   populatePayrollMonthSelect();
 });

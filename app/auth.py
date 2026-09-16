@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 from fastapi import Header, HTTPException, status
 
+from app.services.group_naming import SECTOR_1_SUPERVISORS
 from app.supabase_client import as_user
 
 
@@ -35,6 +36,15 @@ class CurrentUser:
     @property
     def is_admin_or_manager(self) -> bool:
         return self.role in ("admin", "manager")
+
+    @property
+    def is_sector1_head(self) -> bool:
+        """Руководитель Сектора №1 — supervisor с supervisor_names, РОВНО
+        совпадающим с 4 группами Сектора 1 (см. group_naming.SECTOR_1_SUPERVISORS,
+        аккаунт Бочиус Е.М.). По прямому запросу заказчика получает
+        просмотр (не запись/редактирование) Ведомости ЗП/Дашбордов,
+        ограниченный данными Сектора 1 — см. routers/payroll.py."""
+        return self.role == "supervisor" and bool(self.supervisor_names) and set(self.supervisor_names) == SECTOR_1_SUPERVISORS
 
 
 def resolve_supervisor_names(profile: dict) -> list[str] | None:

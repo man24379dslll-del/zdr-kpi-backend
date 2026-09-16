@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.auth import CurrentUser, get_current_user
+from app.services.group_naming import SECTOR_1_SUPERVISORS
 from app.services.payroll import (
     DEFAULT_GUARANTEED_BASE,
     DEFAULT_MONTH2_TRAINING_BONUS,
@@ -23,7 +24,18 @@ from app.services.payroll import (
     month_close_periods,
 )
 from app.services.salary import DEFAULT_HOURS_NORM
-from app.supabase_client import as_user
+from app.supabase_client import as_service, as_user
+
+
+def _restrict_to_sector1(result: dict) -> dict:
+    """Руководитель Сектора 1 (view-only, см. CurrentUser.is_sector1_head) —
+    урезаем уже посчитанную ведомость до строк 4 групп Сектора 1, ПОСЛЕ
+    полного расчёта (не раньше — иначе не с чем сравнивать МАКСИМУМ
+    гарантия/рейтинг и т.д., формула считается по каждому человеку
+    независимо, урезание тут чисто про то, что видно в ответе)."""
+    result["rows"] = [r for r in result["rows"] if r.get("supervisor") in SECTOR_1_SUPERVISORS]
+    return result
+
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
 
@@ -85,13 +97,22 @@ async def get_half_payroll(
 ):
     """"Полу-ведомость" за недели 1-2 месяца (см. services/payroll.py::
     build_half_payroll) — сотрудники с "Еженедельная оплата"=Да
-    (payroll_employee_markers.weekly_pay) исключены полностью."""
-    if not user.is_admin_or_manager:
+    (payroll_employee_markers.weekly_pay) исключены полностью.
+
+    Руководитель Сектора 1 (is_sector1_head) — тоже допускается, но ТОЛЬКО
+    на чтение (см. PUT-эндпоинты ниже — там по-прежнему только admin/manager),
+    ответ урезается до его 4 групп (см. _restrict_to_sector1)."""
+    if not (user.is_admin_or_manager or user.is_sector1_head):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Только admin/manager могут смотреть ведомость ЗП")
     if not 1 <= month <= 12:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "month должен быть от 1 до 12")
 
-    client = as_user(user.access_token)
+    # as_service(), не as_user() — payroll_stage_adjustments/payroll_employee_markers
+    # для supervisor-роли закрыты RLS-политикой "только admin/manager"
+    # (см. schema.sql), а руководителю Сектора 1 нужны ПОЛНЫЕ данные для
+    # корректного расчёта (штрафы/премии/маркеры), просто ответ урезается
+    # ПОСЛЕ расчёта — сам расчёт не должен быть неполным/неверным.
+    client = as_service()
     periods = half_payroll_periods(month)
     matching_uploads, ratings_by_upload_id, penalties_by_upload_id = await _load_uploads_and_ratings(client, periods)
 
@@ -101,11 +122,12 @@ async def get_half_payroll(
     periods_key = make_periods_key(periods)
     adjustments_by_fio = await _load_adjustments(client, periods_key)
 
-    return build_half_payroll(
+    result = build_half_payroll(
         matching_uploads, ratings_by_upload_id, penalties_by_upload_id, month, year,
         weekly_pay_fios=weekly_pay_fios, adjustments_by_fio=adjustments_by_fio,
         hours_norm=hours_norm, overtime_rate=overtime_rate,
     )
+    return result if user.is_admin_or_manager else _restrict_to_sector1(result)
 
 
 @router.get("/close")
@@ -121,13 +143,17 @@ async def get_month_close_payroll(
     """"Закрытие месяца" — недели 1-4 (см. services/payroll.py::
     build_month_close_payroll) — MAX(гарантия, по рейтингу) для work_month
     1/2, просто сумма по рейтингу для 3+; минус уже выплаченная полу-
-    ведомость за недели 1-2 (для всех, кроме weekly_pay=true)."""
-    if not user.is_admin_or_manager:
+    ведомость за недели 1-2 (для всех, кроме weekly_pay=true).
+
+    Руководитель Сектора 1 — см. докстринг /half выше, тот же принцип
+    (полный расчёт, включая half_sum_by_fio ниже — ОН НЕ урезается, нужен
+    целиком для корректного вычета; урезается только финальный ответ)."""
+    if not (user.is_admin_or_manager or user.is_sector1_head):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Только admin/manager могут смотреть ведомость ЗП")
     if not 1 <= month <= 12:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "month должен быть от 1 до 12")
 
-    client = as_user(user.access_token)
+    client = as_service()
     close_periods = month_close_periods(month)
     matching_uploads, ratings_by_upload_id, penalties_by_upload_id = await _load_uploads_and_ratings(client, close_periods)
 
@@ -150,13 +176,14 @@ async def get_month_close_payroll(
 
     close_adjustments_by_fio = await _load_adjustments(client, make_periods_key(close_periods))
 
-    return build_month_close_payroll(
+    result = build_month_close_payroll(
         matching_uploads, ratings_by_upload_id, penalties_by_upload_id, month, year,
         markers_by_fio=markers, adjustments_by_fio=close_adjustments_by_fio,
         half_sum_by_fio=half_sum_by_fio,
         hours_norm=hours_norm, overtime_rate=overtime_rate,
         guaranteed_base=guaranteed_base, month2_bonus=month2_bonus,
     )
+    return result if user.is_admin_or_manager else _restrict_to_sector1(result)
 
 
 class AdjustmentIn(BaseModel):
