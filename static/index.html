@@ -776,21 +776,22 @@ function dbRowToDisplayRow(r){
 // под основной таблицей — карточками (renderSector1LkCards), не плоской
 // таблицей: у них почти всё в 1 обращение/канале — нули (не их профиль),
 // широкая таблица с кучей пустых колонок смотрелась плохо; карточка с
-// только ЛК-метриками компактнее и понятнее. Вызывающий код
-// (renderGroups/renderGroupBlocks/buildSupervisorViewer) по-прежнему
-// передаёт 3-м аргументом commonArgs (нужен ему для соседнего вызова
-// buildDetailTable) — здесь он просто не используется.
-function appendSector1LkExceptions(container, groupRows){
+// только ЛК-метриками компактнее и понятнее. commonArgs[5] — hideFinalPay
+// (та же позиция, что у buildDetailTable) — передаём в renderSector1LkCards,
+// чтобы ЗП показывалась по тому же правилу, что и в основной таблице
+// (видна admin/manager и руководителю Сектора 1, скрыта у обычного
+// супервайзера группы).
+function appendSector1LkExceptions(container, groupRows, commonArgs){
   const exceptionRows = groupRows.filter(r => SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO.has(r.fio));
   if(!exceptionRows.length) return;
   const sub = document.createElement("div");
   sub.className = "sub-title";
   sub.textContent = "Работают с ЛК (учитывается отдельно от остальной группы)";
   container.appendChild(sub);
-  container.appendChild(renderSector1LkCards(exceptionRows));
+  container.appendChild(renderSector1LkCards(exceptionRows, commonArgs && commonArgs[5]));
 }
 
-function renderSector1LkCards(rows){
+function renderSector1LkCards(rows, hideFinalPay){
   const lkMap = gradientMap(rows, "lk_place");
   const timeMap = gradientMap(rows, "time_place");
   const errMap = gradientMap(rows, "errors_place");
@@ -818,6 +819,11 @@ function renderSector1LkCards(rows){
         <div class="lk-stat"><div class="v">${fmtTime(r.time)} ${rankBadge(r.time_place, timeMap(r.time_place))}</div><div class="l">время/контакт</div></div>
         <div class="lk-stat"><div class="v">${fmtPct(r.errors_pct)} ${rankBadge(r.errors_place, errMap(r.errors_place))}</div><div class="l">% ошибок</div></div>
       </div>
+      ${hideFinalPay ? `` : `
+      <div class="lk-stats lk-stats-extra">
+        <div class="lk-stat"><div class="v" style="color:var(--good);">${fmt(Math.round(r.salary ?? 0))}</div><div class="l">ЗП</div></div>
+      </div>
+      `}
     `;
     wrap.appendChild(card);
   }
