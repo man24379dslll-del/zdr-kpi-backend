@@ -863,6 +863,24 @@ async function buildSupervisorViewer(){
   const panel = document.createElement("div");
   panel.id = "supervisorViewerPanel";
   panel.className = "panel";
+  // Руководитель Сектора 1 — вкладки, как у admin/manager в "3 · Результат"
+  // (тот же .tab-bar/.tab-btn/.tab-panel, см. renderResults): "Моя группа" +
+  // "Рейтинг супервайзеров (Сектор №1)", а не всё подряд одной длинной
+  // прокруткой. У обычных супервайзеров вкладок нет — им сравнивать не с
+  // кем (своя группа одна).
+  const tabsHtml = profile.isSector1Head ? `
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="viewerGroups">Моя группа</button>
+      <button class="tab-btn" data-tab="viewerSupervisors">Рейтинг супервайзеров (Сектор №1)</button>
+    </div>
+    <div class="tab-panel active" id="tab-viewerGroups">
+      <div id="viewerContainer"></div>
+    </div>
+    <div class="tab-panel" id="tab-viewerSupervisors">
+      <div class="sub" style="margin-bottom:16px;">Сравнение 4 групп сектора между собой — та же логика, что в общем расчёте (ЛК не в счёт, новички участвуют).</div>
+      <div id="viewerSupervisorContainer"></div>
+    </div>
+  ` : `<div id="viewerContainer"></div>`;
   panel.innerHTML = `
     <h2>Моя группа</h2>
     <div class="row" style="gap:14px;flex-wrap:wrap;margin-bottom:16px;align-items:center;">
@@ -874,13 +892,19 @@ async function buildSupervisorViewer(){
       <button class="btn btn-ghost" id="viewerExportBtn" style="padding:7px 14px;font-size:12.5px;">Скачать Excel</button>
     </div>
     <div id="viewerLog" class="log"></div>
-    <div id="viewerContainer"></div>
-    <div id="viewerSupervisorSection" style="display:none;margin-top:32px;">
-      <h2 style="margin:0 0 6px;">Рейтинг супервайзеров (Сектор №1)</h2>
-      <div class="sub" style="margin-bottom:16px;">Сравнение 4 групп сектора между собой — та же логика, что в общем расчёте (ЛК не в счёт, новички участвуют).</div>
-      <div id="viewerSupervisorContainer"></div>
-    </div>
+    ${tabsHtml}
   `;
+  // Переключение вкладок — та же логика, что у глобального обработчика
+  // ".tab-btn" (см. низ файла), но своя копия: тот регистрируется ОДИН
+  // РАЗ при загрузке страницы, до того как эта панель вообще существует
+  // в DOM (панель создаётся динамически) — глобальный обработчик её
+  // кнопки не увидит.
+  panel.querySelectorAll(".tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      panel.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b === btn));
+      panel.querySelectorAll(".tab-panel").forEach(p => p.classList.toggle("active", p.id === "tab-" + btn.dataset.tab));
+    });
+  });
   $("wrap").insertBefore(panel, $("channelPanel"));
   $("channelPanel").style.display = "none";
   $("resultsPanel").style.display = "none";
@@ -973,8 +997,7 @@ async function buildSupervisorViewer(){
       // принцип, что и в общем расчёте).
       if(profile.isSector1Head){
         const sector1SupervisorRows = computeSupervisorRatingFromRows(currentRows, true);
-        $("viewerSupervisorSection").style.display = "block";
-        renderSupervisorTable($("viewerSupervisorContainer"), sector1SupervisorRows);
+        renderSupervisorTable(panel.querySelector("#viewerSupervisorContainer"), sector1SupervisorRows);
       }
     } catch(err){
       log("Ошибка: " + err.message, "err", logEl2);
