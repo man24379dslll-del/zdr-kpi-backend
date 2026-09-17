@@ -875,6 +875,11 @@ async function buildSupervisorViewer(){
     </div>
     <div id="viewerLog" class="log"></div>
     <div id="viewerContainer"></div>
+    <div id="viewerSupervisorSection" style="display:none;margin-top:32px;">
+      <h2 style="margin:0 0 6px;">Рейтинг супервайзеров (Сектор №1)</h2>
+      <div class="sub" style="margin-bottom:16px;">Сравнение 4 групп сектора между собой — та же логика, что в общем расчёте (ЛК не в счёт, новички участвуют).</div>
+      <div id="viewerSupervisorContainer"></div>
+    </div>
   `;
   $("wrap").insertBefore(panel, $("channelPanel"));
   $("channelPanel").style.display = "none";
@@ -958,6 +963,18 @@ async function buildSupervisorViewer(){
         const commonArgs = [false, vType === "week", null, false, true, true];
         containerEl.appendChild(buildDetailTable(mainRows, ...commonArgs, isSector1));
         if(isSector1) appendSector1LkExceptions(containerEl, currentRows, commonArgs);
+      }
+
+      // Руководитель Сектора 1 — та же вкладка "Рейтинг супервайзеров
+      // (Сектор №1)", что видит admin/manager после загрузки файла (см.
+      // renderSector1Supervisors), только считается прямо здесь по уже
+      // загруженным currentRows (computeSupervisorRatingFromRows —
+      // чистая функция без сети, тот же ЛК-не-в-счёт + новички-участвуют
+      // принцип, что и в общем расчёте).
+      if(profile.isSector1Head){
+        const sector1SupervisorRows = computeSupervisorRatingFromRows(currentRows, true);
+        $("viewerSupervisorSection").style.display = "block";
+        renderSupervisorTable($("viewerSupervisorContainer"), sector1SupervisorRows);
       }
     } catch(err){
       log("Ошибка: " + err.message, "err", logEl2);
