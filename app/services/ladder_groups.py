@@ -17,15 +17,21 @@
     ЗП = (ставка_за_час × рабочее_время_ч + бонус075 + бонус2) × коэффициент_ПРОШЛОЙ_недели
 
 (если для человека нет данных за прошлую неделю — коэффициент = 1.0).
-Сектор №1 (4 группы, см. group_naming.SECTOR_1_SUPERVISORS) — исключение
-из общего правила: не 10 тиров, а 5 (1.3...1.0, см.
-group_naming.SECTOR_1_TIER_COEFFICIENTS), по прямому запросу заказчика.
-Настраиваемая через /ladder-tiers таблица (передаётся в tier_coefficients)
-на Сектор №1 не влияет — там всегда своя короткая шкала.
+Сектор №1 (4 группы, см. group_naming.SECTOR_1_SUPERVISORS) и Сектор №2
+(3 группы, group_naming.SECTOR_2_SUPERVISORS) — исключение из общего
+правила: не 10 тиров, а 5 (1.3...1.0, см. group_naming.SECTOR_1_
+/SECTOR_2_TIER_COEFFICIENTS), по прямому запросу заказчика. Настраиваемая
+через /ladder-tiers таблица (передаётся в tier_coefficients) на эти
+секторы не влияет — там всегда своя короткая шкала.
 """
 from __future__ import annotations
 
-from app.services.group_naming import SECTOR_1_SUPERVISORS, SECTOR_1_TIER_COEFFICIENTS
+from app.services.group_naming import (
+    SECTOR_1_SUPERVISORS,
+    SECTOR_1_TIER_COEFFICIENTS,
+    SECTOR_2_SUPERVISORS,
+    SECTOR_2_TIER_COEFFICIENTS,
+)
 
 TIER_COEFFICIENTS = [1.4, 1.3, 1.2, 1.1, 1.05, 1, 0.9, 0.75, 0.5, 0.25]
 
@@ -40,7 +46,11 @@ def tier_sizes(n: int, num_tiers: int = 10) -> list[int]:
 
 
 def _coefficients_for(supervisor: str | None, default_coefficients: list[float]) -> list[float]:
-    return SECTOR_1_TIER_COEFFICIENTS if supervisor in SECTOR_1_SUPERVISORS else default_coefficients
+    if supervisor in SECTOR_1_SUPERVISORS:
+        return SECTOR_1_TIER_COEFFICIENTS
+    if supervisor in SECTOR_2_SUPERVISORS:
+        return SECTOR_2_TIER_COEFFICIENTS
+    return default_coefficients
 
 
 def assign_tier_coefficients(rows: list[dict], tier_coefficients: list[float] | None = None) -> None:

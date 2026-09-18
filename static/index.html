@@ -719,23 +719,30 @@ function onLoggedIn(){
     // когда групп сразу 4 (renderGroupBlocks выше это уже покажет блоками).
     const isSector1Head = profile.supervisor_names && profile.supervisor_names.length === SECTOR_1_SUPERVISORS.size
       && profile.supervisor_names.every(s => SECTOR_1_SUPERVISORS.has(s));
+    // Руководитель Сектора 2 (Сорокин Н.) — тот же принцип, что у Сектора 1
+    // выше, только 3 группы вместо 4. См. group_naming.SECTOR_2_SUPERVISORS.
+    const isSector2Head = profile.supervisor_names && profile.supervisor_names.length === SECTOR_2_SUPERVISORS.size
+      && profile.supervisor_names.every(s => SECTOR_2_SUPERVISORS.has(s));
     // На profile — чтобы buildSupervisorViewer (и другой код) мог
     // проверить без пересчёта, доступен весь onLoggedIn.
     profile.isSector1Head = isSector1Head;
-    // Руководителю Сектора 1 — по прямому запросу заказчика те же доступы,
-    // что у admin/manager, но ТОЛЬКО ПРОСМОТР и только его 4 группы:
-    // "Ведомость ЗП" (бэкенд сам урезает ответ — см.
-    // routers/payroll.py::_restrict_to_sector1/CurrentUser.is_sector1_head)
+    profile.isSector2Head = isSector2Head;
+    // Руководителям секторов — по прямому запросу заказчика те же доступы,
+    // что у admin/manager, но ТОЛЬКО ПРОСМОТР и только группы своего
+    // сектора: "Ведомость ЗП" (бэкенд сам урезает ответ — см.
+    // routers/payroll.py::_restrict_to_sector/CurrentUser.is_sectorN_head)
     // и "Дашборды" (та кнопка уже видна всем ролям — RLS уже урезает
     // kpi_ratings до его групп, отдельного кода не потребовалось).
     // Конструктор/Реквизиты — сознательно НЕ даём (глобальные для всей
     // компании настройки/данные, см. обсуждение с заказчиком).
-    if(isSector1Head){
+    if(isSector1Head || isSector2Head){
       $("openPayrollBtn").style.display = "";
     }
-    $("pageTitle").textContent = isSector1Head ? "Сектор №1 — рейтинг" : "Моя группа — рейтинг";
+    $("pageTitle").textContent = isSector1Head ? "Сектор №1 — рейтинг" : isSector2Head ? "Сектор №2 — рейтинг" : "Моя группа — рейтинг";
     $("pageSub").textContent = isSector1Head
       ? "Здесь показаны все 4 группы Сектора №1. Данные обновляет администратор/руководитель после загрузки очередного отчёта."
+      : isSector2Head
+      ? "Здесь показаны все 3 группы Сектора №2. Данные обновляет администратор/руководитель после загрузки очередного отчёта."
       : "Здесь показаны только сотрудники вашей группы. Данные обновляет администратор/руководитель после загрузки очередного отчёта.";
     buildSupervisorViewer();
   } else {
@@ -863,21 +870,24 @@ async function buildSupervisorViewer(){
   const panel = document.createElement("div");
   panel.id = "supervisorViewerPanel";
   panel.className = "panel";
-  // Руководитель Сектора 1 — вкладки, как у admin/manager в "3 · Результат"
-  // (тот же .tab-bar/.tab-btn/.tab-panel, см. renderResults): "Моя группа" +
-  // "Рейтинг супервайзеров (Сектор №1)", а не всё подряд одной длинной
-  // прокруткой. У обычных супервайзеров вкладок нет — им сравнивать не с
-  // кем (своя группа одна).
-  const tabsHtml = profile.isSector1Head ? `
+  // Руководитель сектора (1 или 2) — вкладки, как у admin/manager в
+  // "3 · Результат" (тот же .tab-bar/.tab-btn/.tab-panel, см. renderResults):
+  // "Моя группа" + "Рейтинг супервайзеров (Сектор №N)", а не всё подряд
+  // одной длинной прокруткой. У обычных супервайзеров вкладок нет — им
+  // сравнивать не с кем (своя группа одна).
+  const sectorSupervisors = profile.isSector1Head ? SECTOR_1_SUPERVISORS : profile.isSector2Head ? SECTOR_2_SUPERVISORS : null;
+  const sectorLabel = profile.isSector1Head ? "Сектор №1" : "Сектор №2";
+  const sectorSizeLabel = profile.isSector1Head ? "4 групп" : "3 групп";
+  const tabsHtml = sectorSupervisors ? `
     <div class="tab-bar">
       <button class="tab-btn active" data-tab="viewerGroups">Моя группа</button>
-      <button class="tab-btn" data-tab="viewerSupervisors">Рейтинг супервайзеров (Сектор №1)</button>
+      <button class="tab-btn" data-tab="viewerSupervisors">Рейтинг супервайзеров (${sectorLabel})</button>
     </div>
     <div class="tab-panel active" id="tab-viewerGroups">
       <div id="viewerContainer"></div>
     </div>
     <div class="tab-panel" id="tab-viewerSupervisors">
-      <div class="sub" style="margin-bottom:16px;">Сравнение 4 групп сектора между собой — та же логика, что в общем расчёте (ЛК не в счёт, новички участвуют).</div>
+      <div class="sub" style="margin-bottom:16px;">Сравнение ${sectorSizeLabel} сектора между собой — та же логика, что в общем расчёте${profile.isSector1Head ? " (ЛК не в счёт, новички участвуют)" : " (новички участвуют)"}.</div>
       <div id="viewerSupervisorContainer"></div>
     </div>
   ` : `<div id="viewerContainer"></div>`;
@@ -970,16 +980,17 @@ async function buildSupervisorViewer(){
       // (0.75% за офор., 2% за дост., ЗП), но видит ЛГ/коэффициенты/часы/
       // смены как есть. Сам расчёт не меняется, только видимость колонок
       // в таблице (см. buildDetailTable/detailTableHead). Исключение —
-      // руководитель Сектора 1 (profile.isSector1Head, см. onLoggedIn): ему
-      // ЗП уже доступна отдельно в "Ведомости ЗП" (см. openPayrollBtn), так
-      // что и в этой таблице по прямому запросу заказчика показываем как
-      // есть, а не только там. Курбановой (тоже >1 группы, но не Сектор 1)
-      // это не касается — hideFinalPay для неё остаётся true.
+      // руководители секторов (profile.isSector1Head/isSector2Head, см.
+      // onLoggedIn): им ЗП уже доступна отдельно в "Ведомости ЗП" (см.
+      // openPayrollBtn), так что и в этой таблице по прямому запросу
+      // заказчика показываем как есть, а не только там. Курбановой (тоже
+      // >1 группы, но не руководитель сектора) это не касается —
+      // hideFinalPay для неё остаётся true.
       // Несколько групп (руководитель сектора, Курбанова Зарина) — блоком
       // на группу (renderGroupBlocks), одна группа — как раньше, единой
       // таблицей без лишнего заголовка группы.
       if(profile.supervisor_names && profile.supervisor_names.length > 1){
-        renderGroupBlocks(containerEl, currentRows, profile.supervisor_names, { showTier: vType === "week", showDelta: true, hideFinalPay: !profile.isSector1Head });
+        renderGroupBlocks(containerEl, currentRows, profile.supervisor_names, { showTier: vType === "week", showDelta: true, hideFinalPay: !(profile.isSector1Head || profile.isSector2Head) });
       } else {
         const soloSupervisor = profile.supervisor_names && profile.supervisor_names[0];
         const isSector1 = SECTOR_1_SUPERVISORS.has(soloSupervisor);
@@ -989,15 +1000,14 @@ async function buildSupervisorViewer(){
         if(isSector1) appendSector1LkExceptions(containerEl, currentRows, commonArgs);
       }
 
-      // Руководитель Сектора 1 — та же вкладка "Рейтинг супервайзеров
-      // (Сектор №1)", что видит admin/manager после загрузки файла (см.
-      // renderSector1Supervisors), только считается прямо здесь по уже
-      // загруженным currentRows (computeSupervisorRatingFromRows —
-      // чистая функция без сети, тот же ЛК-не-в-счёт + новички-участвуют
-      // принцип, что и в общем расчёте).
-      if(profile.isSector1Head){
-        const sector1SupervisorRows = computeSupervisorRatingFromRows(currentRows, true);
-        renderSupervisorTable(panel.querySelector("#viewerSupervisorContainer"), sector1SupervisorRows);
+      // Руководитель сектора — вкладка "Рейтинг супервайзеров (Сектор №N)",
+      // считается прямо здесь по уже загруженным currentRows
+      // (computeSupervisorRatingFromRows — чистая функция без сети; для
+      // Сектора 1 — ЛК не в счёт + новички участвуют, для Сектора 2 —
+      // ЛК считается обычно, новички тоже участвуют).
+      if(sectorSupervisors){
+        const ownSectorSupervisorRows = computeSupervisorRatingFromRows(currentRows, sectorSupervisors);
+        renderSupervisorTable(panel.querySelector("#viewerSupervisorContainer"), ownSectorSupervisorRows);
       }
     } catch(err){
       log("Ошибка: " + err.message, "err", logEl2);
@@ -1182,7 +1192,7 @@ async function loadSavedPeriod(upload){
     currentRows = main;
     currentNoviceRows = novices;
     currentSupervisorRows = computeSupervisorRatingFromRows(main);
-    currentSector1SupervisorRows = computeSupervisorRatingFromRows(main, true);
+    currentSector1SupervisorRows = computeSupervisorRatingFromRows(main, SECTOR_1_SUPERVISORS);
     currentFilename = upload.source_filename || "(сохранённый период)";
 
     $("channelPanel").style.display = "none";
@@ -1593,6 +1603,20 @@ function sector1ZeroesLk(supervisor, fio){
   return SECTOR_1_SUPERVISORS.has(supervisor) && !SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO.has(fio);
 }
 
+// Сектор №2 (3 обычные группы, отдельный руководитель — Сорокин Никита).
+// В ОТЛИЧИЕ от Сектора 1: ЛК считается ОБЫЧНО (вес 1.5, без исключений,
+// без форсированного 1-го места) — по прямому запросу заказчика урезание
+// веса ЛК для Сектора 2 не нужно. Общее с Сектором 1 — только 2 правила:
+// статус "Новичок" не исключает из официального места (см. isSector1Evaluated,
+// переиспользуется как есть — она не завязана на конкретный сектор) и
+// суженный диапазон ЛГ (см. SECTOR_2_TIER_COEFFICIENTS ниже). Точный
+// перенос app/services/group_naming.py::SECTOR_2_*.
+const SECTOR_2_SUPERVISORS = new Set([
+  "Супервайзер - Курилова Марина Вадимовна",
+  "Супервайзер - Бровкова Елена Александровна",
+  "Супервайзер - Басараб Станислав Федорович",
+]);
+
 // Тиры для места ЛК:
 //  A (лучшие) — карточки>0 и конверсия>0: ранжируются по "сумма с контакта" как раньше
 //  B (среднее) — карточки=0, либо карточки 1-9 при конверсии 0%: место = среднее мест
@@ -1811,11 +1835,14 @@ function computeMainRating(groups, prevCoeffMap, tierCoefficients){
     // total_score эта (теперь максимальная) оценка входит только у 3
     // исключений — решается поэлементно (lkActiveFn), не на всю группу.
     const forceLk1 = SECTOR_1_SUPERVISORS.has(g.supervisor);
+    const isSector2 = SECTOR_2_SUPERVISORS.has(g.supervisor);
     // g.isPeaks -> isNaPeaks (сигнал Н/О по ch_sum, не по c1_sum — см.
-    // isNaPeaks выше). Сектор №1 -> статус "Новичок" САМ ПО СЕБЕ больше не
-    // Н/О (по прямому запросу заказчика — см. isSector1Evaluated выше),
-    // для всех остальных групп — как раньше, isNaMain.
-    const naFn = g.isPeaks ? isNaPeaks : forceLk1 ? (e => !isSector1Evaluated(e)) : isNaMain;
+    // isNaPeaks выше). Сектор №1 и Сектор №2 -> статус "Новичок" САМ ПО
+    // СЕБЕ больше не Н/О (по прямому запросу заказчика — см.
+    // isSector1Evaluated выше, переиспользуется для обоих секторов — сама
+    // функция не завязана на конкретный сектор), для всех остальных групп
+    // — как раньше, isNaMain.
+    const naFn = g.isPeaks ? isNaPeaks : (forceLk1 || isSector2) ? (e => !isSector1Evaluated(e)) : isNaMain;
     const lkActiveFn = e => !sector1ZeroesLk(g.supervisor, e.fio);
     const scored = scoreSlice(g.employees, e => channelFields(e, channel), naFn, "c1_sum", true, active, lkActiveFn, forceLk1);
     out.push(...scored.map(e => ({...e, supervisor: g.supervisor, channel, isRegionUK: !!g.isRegionUK, isPeaks: !!g.isPeaks})));
@@ -1839,8 +1866,14 @@ const TIER_COEFFICIENTS = [1.4, 1.3, 1.2, 1.1, 1.05, 1, 0.9, 0.75, 0.5, 0.25];
 // влияет — там всегда эта короткая шкала. Точный перенос
 // app/services/group_naming.py::SECTOR_1_TIER_COEFFICIENTS.
 const SECTOR_1_TIER_COEFFICIENTS = [1.3, 1.2, 1.1, 1.05, 1.0];
+// Сектор №2 — та же узкая шкала (5 тиров, 1.3...1.0), что и у Сектора 1,
+// по прямому запросу заказчика. Точный перенос
+// app/services/group_naming.py::SECTOR_2_TIER_COEFFICIENTS.
+const SECTOR_2_TIER_COEFFICIENTS = [1.3, 1.2, 1.1, 1.05, 1.0];
 function coefficientsFor(supervisor, defaultCoeffs){
-  return SECTOR_1_SUPERVISORS.has(supervisor) ? SECTOR_1_TIER_COEFFICIENTS : defaultCoeffs;
+  if(SECTOR_1_SUPERVISORS.has(supervisor)) return SECTOR_1_TIER_COEFFICIENTS;
+  if(SECTOR_2_SUPERVISORS.has(supervisor)) return SECTOR_2_TIER_COEFFICIENTS;
+  return defaultCoeffs;
 }
 function tierSizes(n, numTiers){
   const nt = numTiers || 10;
@@ -2050,20 +2083,24 @@ function assignSupervisorCoefficients(rows){
   });
 }
 
-// onlySector1 — считать рейтинг ТОЛЬКО среди 4 групп Сектора 1 (для
-// отдельной вкладки "Рейтинг супервайзеров (Сектор №1)"), вместо обычного
-// поведения (все группы, КРОМЕ Сектора 1 и special-групп — см. п.4 запроса
-// Сектора 1: их формула total_score другая из-за отменённого веса ЛК,
-// сравнивать напрямую с обычными группами было бы некорректно).
-function computeSupervisorRating(groups, onlySector1){
-  const groupFilter = onlySector1
-    ? g => SECTOR_1_SUPERVISORS.has(g.supervisor)
+// sectorSupervisors — считать рейтинг ТОЛЬКО среди групп ОДНОГО сектора
+// (SECTOR_1_SUPERVISORS или SECTOR_2_SUPERVISORS — для отдельной вкладки
+// "Рейтинг супервайзеров (Сектор №N)" в собственном просмотре руководителя
+// сектора), вместо обычного поведения (все группы, КРОМЕ Сектора 1 и
+// special-групп — Сектор 2 из общего сравнения НЕ исключается, его формула
+// total_score обычная, сравнивать с другими группами корректно). Новички
+// участвуют в расчёте для ЛЮБОГО сектора (isSector1Evaluated — общая
+// функция, не завязана на конкретный сектор), ЛК не в счёт — ТОЛЬКО для
+// Сектора 1 (см. active ниже, сравнение по ссылке с самой константой).
+function computeSupervisorRating(groups, sectorSupervisors){
+  const groupFilter = sectorSupervisors
+    ? g => sectorSupervisors.has(g.supervisor)
     : g => !isSpecialGroup(g.supervisor) && !SECTOR_1_SUPERVISORS.has(g.supervisor);
   const groupStats = groups
     .filter(groupFilter)
     .map(g => {
     const channel = groupChannels[g.supervisor] || "radio";
-    const evaluated = onlySector1 ? g.employees.filter(isSector1Evaluated) : g.employees.filter(e => !isNaMain(e));
+    const evaluated = sectorSupervisors ? g.employees.filter(isSector1Evaluated) : g.employees.filter(e => !isNaMain(e));
     const n = evaluated.length;
     const avg = (field) => n ? evaluated.reduce((s,e)=>s+e[field],0)/n : 0;
     const avgCh = (getter) => n ? evaluated.reduce((s,e)=>s+getter(channelFields(e,channel)),0)/n : 0;
@@ -2087,12 +2124,11 @@ function computeSupervisorRating(groups, onlySector1){
     };
   }).filter(s => s.n_evaluated > 0);
 
-  // Сектор №1 — ЛК не в счёт в сумме баллов при сравнении групп между
-  // собой (тот же принцип, что и на уровне сотрудника, см.
-  // sector1ZeroesLk/forceLk1) — карточки/сумма/место по ЛК всё равно
-  // считаются и показываются в таблице как обычно, просто не влияют на
-  // итоговое место супервайзера.
-  const active = onlySector1 ? { c1:true, lk:false, ch:true, time:true, errors:true } : undefined;
+  // ЛК не в счёт в сумме баллов при сравнении групп между собой — ТОЛЬКО
+  // для Сектора 1 (тот же принцип, что и на уровне сотрудника, см.
+  // sector1ZeroesLk/forceLk1); Сектор 2 считается обычно (полный вес ЛК),
+  // сравнение по ссылке с самой константой SECTOR_1_SUPERVISORS.
+  const active = sectorSupervisors === SECTOR_1_SUPERVISORS ? { c1:true, lk:false, ch:true, time:true, errors:true } : undefined;
   const rows = scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc, cards:e.ch_cards}), e => isSpecialSupervisor(e.supervisor), "c1_sum", false, active);
   assignSupervisorCoefficients(rows);
   return rows;
@@ -2100,16 +2136,16 @@ function computeSupervisorRating(groups, onlySector1){
 
 // Пересборка "Рейтинга супервайзеров" из уже сохранённых в Supabase строк
 // (используется при просмотре ранее загруженного периода без повторного парсинга Excel)
-function computeSupervisorRatingFromRows(mainRows, onlySector1){
+function computeSupervisorRatingFromRows(mainRows, sectorSupervisors){
   const bySupervisor = {};
   for(const r of mainRows){
     const isSector1Row = SECTOR_1_SUPERVISORS.has(r.supervisor);
-    if(onlySector1 ? !isSector1Row : (isSpecialGroup(r.supervisor) || isSector1Row)) continue;
+    if(sectorSupervisors ? !sectorSupervisors.has(r.supervisor) : (isSpecialGroup(r.supervisor) || isSector1Row)) continue;
     (bySupervisor[r.supervisor] ||= []).push(r);
   }
   const groupStats = Object.keys(bySupervisor).map(sup => {
     const rows = bySupervisor[sup];
-    const evaluated = onlySector1 ? rows.filter(isSector1Evaluated) : rows.filter(r => !r.is_na);
+    const evaluated = sectorSupervisors ? rows.filter(isSector1Evaluated) : rows.filter(r => !r.is_na);
     const n = evaluated.length;
     if(!n) return null;
     const avg = (f) => evaluated.reduce((s,r)=>s+(r[f]||0),0)/n;
@@ -2124,7 +2160,7 @@ function computeSupervisorRatingFromRows(mainRows, onlySector1){
   }).filter(Boolean);
   // Сектор №1 — ЛК не в счёт при сравнении групп между собой, см. тот же
   // комментарий в computeSupervisorRating выше.
-  const active = onlySector1 ? { c1:true, lk:false, ch:true, time:true, errors:true } : undefined;
+  const active = sectorSupervisors === SECTOR_1_SUPERVISORS ? { c1:true, lk:false, ch:true, time:true, errors:true } : undefined;
   const rows = scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc, cards:e.ch_cards}), e => isSpecialSupervisor(e.supervisor), "c1_sum", false, active);
   assignSupervisorCoefficients(rows);
   return rows;
@@ -2309,7 +2345,7 @@ $("calcBtn").addEventListener("click", async () => {
     const mainRated = computeMainRating(parsedGroups, prevCoeffMap, tierCoefficients);
     const noviceRated = computeGlobalNovices(parsedGroups);
     const supervisorRated = computeSupervisorRating(parsedGroups);
-    const sector1SupervisorRated = computeSupervisorRating(parsedGroups, true);
+    const sector1SupervisorRated = computeSupervisorRating(parsedGroups, SECTOR_1_SUPERVISORS);
 
     // "Теоретический" коэффициент ЛГ новичков считается внутри
     // computeMainRating (там total_score — правильный, посчитанный ВНУТРИ
