@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from app.auth import CurrentUser, get_current_user
-from app.services.group_naming import SECTOR_1_SUPERVISORS, SECTOR_2_SUPERVISORS
+from app.services.group_naming import SECTOR_2_SUPERVISORS, SECTOR_3_SUPERVISORS
 from app.services.payroll import (
     DEFAULT_GUARANTEED_BASE,
     DEFAULT_MONTH2_TRAINING_BONUS,
@@ -30,16 +30,16 @@ from app.supabase_client import as_service, as_user
 def _sector_supervisors_for(user: CurrentUser) -> frozenset[str] | None:
     """Группы сектора, к которым нужно урезать ответ для этого user — None
     для admin/manager (ответ не урезается вообще)."""
-    if user.is_sector1_head:
-        return SECTOR_1_SUPERVISORS
     if user.is_sector2_head:
         return SECTOR_2_SUPERVISORS
+    if user.is_sector3_head:
+        return SECTOR_3_SUPERVISORS
     return None
 
 
 def _restrict_to_sector(result: dict, supervisors: frozenset[str]) -> dict:
-    """Руководитель Сектора 1/2 (view-only, см. CurrentUser.is_sector1_head/
-    is_sector2_head) — урезаем уже посчитанную ведомость до строк групп его
+    """Руководитель Сектора 2/3 (view-only, см. CurrentUser.is_sector2_head/
+    is_sector3_head) — урезаем уже посчитанную ведомость до строк групп его
     сектора, ПОСЛЕ полного расчёта (не раньше — иначе не с чем сравнивать
     МАКСИМУМ гарантия/рейтинг и т.д., формула считается по каждому человеку
     независимо, урезание тут чисто про то, что видно в ответе)."""
@@ -109,7 +109,7 @@ async def get_half_payroll(
     build_half_payroll) — сотрудники с "Еженедельная оплата"=Да
     (payroll_employee_markers.weekly_pay) исключены полностью.
 
-    Руководитель Сектора 1/2 (is_sector1_head/is_sector2_head) — тоже
+    Руководитель Сектора 2/3 (is_sector2_head/is_sector3_head) — тоже
     допускается, но ТОЛЬКО на чтение (см. PUT-эндпоинты ниже — там
     по-прежнему только admin/manager), ответ урезается до групп его
     сектора (см. _restrict_to_sector)."""
@@ -157,7 +157,7 @@ async def get_month_close_payroll(
     1/2, просто сумма по рейтингу для 3+; минус уже выплаченная полу-
     ведомость за недели 1-2 (для всех, кроме weekly_pay=true).
 
-    Руководитель Сектора 1/2 — см. докстринг /half выше, тот же принцип
+    Руководитель Сектора 2/3 — см. докстринг /half выше, тот же принцип
     (полный расчёт, включая half_sum_by_fio ниже — ОН НЕ урезается, нужен
     целиком для корректного вычета; урезается только финальный ответ)."""
     sector_supervisors = _sector_supervisors_for(user)

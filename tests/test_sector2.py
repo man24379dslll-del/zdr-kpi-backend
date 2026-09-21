@@ -1,17 +1,22 @@
 """
-Сектор №2 — 3 обычные группы супервайзеров (Курилова/Бровкова/Басараб).
-В ОТЛИЧИЕ от Сектора 1: ЛК считается ОБЫЧНО (вес 1.5, без исключений,
-без форсированного 1-го места) — по прямому запросу заказчика урезание
-веса ЛК для Сектора 2 не нужно. Общее с Сектором 1 — только 2 правила:
-статус "Новичок" не исключает из официального места, и суженный
-диапазон ЛГ (5 тиров, 1.3...1.0, вместо обычных 10, 1.4...0.25).
+Сектор №2 — 4 обычные группы супервайзеров (Болотов/Владыкин/Гулуа/
+Потапова). Два правила поверх обычного расчёта:
+  1. Место по ЛК (lk_place) ВСЕГДА 1-е, для ВСЕХ сотрудников этих групп
+     (переопределяет обычный тир ЛК) — по запросу заказчика.
+  2. В total_score категория "ЛК" при этом входит только у 3 конкретных
+     сотрудников-исключений (точное ФИО, см.
+     group_naming.SECTOR_2_LK_WEIGHT_EXCEPTIONS_FIO) — у остальных вес 0,
+     как и раньше. Раз место у всех теперь 1-е, эти трое получают МАКСИМАЛЬНЫЙ
+     балл по ЛК независимо от реальных продаж.
+В отличие от Региона УК/ПП/Увеличители (test_region_uk.py) решение о весе
+принимается по каждому сотруднику отдельно, а не по всей группе целиком.
 """
 import io
 
 import pandas as pd
 
 from app.services.excel_parsing import is_na_row, parse_weekly_rating_excel
-from app.services.group_naming import SECTOR_2_SUPERVISORS
+from app.services.group_naming import SECTOR_2_LK_WEIGHT_EXCEPTIONS_FIO, SECTOR_2_SUPERVISORS
 from app.services.rating_engine import RatingCategory
 from app.services.weekly_rating import compute_weekly_rating
 
@@ -49,8 +54,9 @@ CATEGORIES = [
     RatingCategory(key="errors", label="% ошибок", source_column="errors_pct", weight=1, direction="asc", sort_order=5),
 ]
 
-KURILOVA = "Супервайзер - Курилова Марина Вадимовна"
-assert KURILOVA in SECTOR_2_SUPERVISORS
+BOLOTOV = "Супервайзер - Болотов Дмитрий Александрович"
+assert BOLOTOV in SECTOR_2_SUPERVISORS
+EXCEPTION_FIO = next(iter(SECTOR_2_LK_WEIGHT_EXCEPTIONS_FIO))
 
 
 def _row(fio, c1_pc, lk_pc, ch_pc, time_pc, errors_pct, lk_cards=1, lk_conv=10, c1_sum=1000, status=""):
@@ -94,33 +100,183 @@ def _build_excel_bytes(rows: list[dict]) -> bytes:
     return buf.getvalue()
 
 
-def test_sector2_lk_counts_normally_not_zeroed():
-    # Контроль: в отличие от Сектора 1, ЛК для Сектора 2 считается как у
-    # обычных сотрудников — полный вес 1.5, входит в total_score без
-    # исключений/форсированного места.
+def test_sector2_regular_employee_has_lk_excluded_from_total_score():
     raw = _build_excel_bytes([
-        _group_row(KURILOVA),
-        _row("Сотрудник А", 100, 50, 200, 20, 1),
-        _row("Сотрудник Б", 60, 90, 120, 45, 8),  # хуже c1, но ЛУЧШЕ ЛК
+        _group_row(BOLOTOV),
+        _row("Обычный Сотрудник И. И.", 100, 50, 200, 20, 1),
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    r = results[0]
+
+    # Место по ЛК всё равно считается и хранится (для отображения) ...
+    assert "lk" in r.places
+    # ... но НЕ входит в total_score
+    assert "lk" not in r.scores
+    assert set(r.scores.keys()) == {"c1", "channel", "time", "errors"}
+    assert r.total_score == r.scores["c1"] + r.scores["channel"] + r.scores["time"] + r.scores["errors"]
+
+
+def test_sector2_exception_employee_keeps_normal_lk_weight():
+    raw = _build_excel_bytes([
+        _group_row(BOLOTOV),
+        _row(EXCEPTION_FIO, 100, 50, 200, 20, 1),
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    r = results[0]
+
+    assert "lk" in r.scores
+    assert set(r.scores.keys()) == {"c1", "lk", "channel", "time", "errors"}
+    assert r.total_score == sum(r.scores.values())
+    assert r.scores["lk"] == r.places["lk"] * 1.5  # обычный вес ЛК, как у всех остальных сотрудников
+
+
+def test_sector2_exception_and_regular_employee_in_same_group():
+    # Обе развилки внутри ОДНОЙ группы одновременно — проверяет, что
+    # решение действительно поэлементное, а не на всю группу целиком
+    # (как у Региона УК/ПП/Увеличители).
+    raw = _build_excel_bytes([
+        _group_row(BOLOTOV),
+        _row(EXCEPTION_FIO, 100, 50, 200, 20, 1),
+        _row("Обычный Сотрудник И. И.", 90, 40, 180, 25, 2),
     ])
     employees = parse_weekly_rating_excel(raw)
     results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
     by_fio = {r.fio: r for r in results}
 
-    a = by_fio["Сотрудник А"]
-    b = by_fio["Сотрудник Б"]
-    assert "lk" in a.scores and "lk" in b.scores  # не урезано, как у Сектора 1
-    assert a.scores["lk"] == a.places["lk"] * 1.5
-    assert b.scores["lk"] == b.places["lk"] * 1.5
-    # Место по ЛК НЕ форсировано к 1 для обоих одновременно (реальный расчёт)
-    assert {a.places["lk"], b.places["lk"]} == {1, 2}
+    assert "lk" in by_fio[EXCEPTION_FIO].scores
+    assert "lk" not in by_fio["Обычный Сотрудник И. И."].scores
+
+
+def test_normal_group_is_unaffected_by_sector2_logic():
+    # Контроль: обычная группа (не Сектор 2) — ЛК как всегда, независимо
+    # от того, что ФИО сотрудника совпадает с одним из 3 исключений
+    # (исключение действует ТОЛЬКО внутри 4 групп Сектора 2).
+    raw = _build_excel_bytes([
+        _group_row("Супервайзер - Иванов И.И."),
+        _row(EXCEPTION_FIO, 100, 50, 200, 20, 1),
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    r = results[0]
+    assert "lk" in r.scores
+
+
+def test_sector2_places_and_tiers_are_still_assigned():
+    # Урезание total_score не должно мешать финальному месту/ЛГ.
+    raw = _build_excel_bytes([
+        _group_row(BOLOTOV),
+        _row("Первый И. И.", 100, 50, 200, 20, 1),
+        _row("Второй И. И.", 60, 15, 120, 45, 8),
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    for r in results:
+        assert r.is_na is False
+        assert r.final_place is not None
+        assert r.tier is not None
+        assert r.coefficient is not None
+
+
+def test_sector2_regular_employee_always_gets_lk_place_1_even_when_worse():
+    # "Второй" реально хуже по ЛК (lk_pc=15 против 50), но в Секторе 2 у
+    # ВСЕХ место по ЛК всегда 1-е — по прямому запросу заказчика.
+    raw = _build_excel_bytes([
+        _group_row(BOLOTOV),
+        _row("Первый И. И.", 100, 50, 200, 20, 1),
+        _row("Второй И. И.", 60, 15, 120, 45, 8),
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    for r in results:
+        assert r.places["lk"] == 1
+
+
+def test_sector2_exception_gets_maximum_lk_score_regardless_of_real_sales():
+    # Исключение — с ХУДШИМ ЛК, чем у обычного сотрудника той же группы —
+    # всё равно получает МАКСИМАЛЬНЫЙ балл по ЛК (1-е место × вес 1.5),
+    # т.к. место у всех в Секторе 2 всегда 1-е, а у исключений вес обычный.
+    raw = _build_excel_bytes([
+        _group_row(BOLOTOV),
+        _row(EXCEPTION_FIO, 10, 1, 20, 45, 8),  # заведомо худшие показатели
+        _row("Обычный Сотрудник И. И.", 100, 50, 200, 20, 1),  # заведомо лучшие
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    by_fio = {r.fio: r for r in results}
+
+    exception = by_fio[EXCEPTION_FIO]
+    assert exception.places["lk"] == 1
+    assert exception.scores["lk"] == 1.5  # 1 место × вес 1.5, максимум
+    assert "lk" in exception.scores  # входит в total_score (обычный вес)
+
+
+def test_normal_group_lk_place_is_computed_normally_not_forced():
+    # Контроль: вне Сектора 2 место по ЛК считается как обычно (не всегда 1).
+    raw = _build_excel_bytes([
+        _group_row("Супервайзер - Иванов И.И."),
+        _row("Первый И. И.", 100, 50, 200, 20, 1),
+        _row("Второй И. И.", 60, 15, 120, 45, 8),
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    by_fio = {r.fio: r for r in results}
+    assert by_fio["Первый И. И."].places["lk"] == 1
+    assert by_fio["Второй И. И."].places["lk"] != 1
+
+
+def test_sector2_uses_5_tiers_with_narrow_coefficient_range():
+    # По прямому запросу заказчика: Сектор 2 использует 5 тиров (1.3...1.0),
+    # НЕ обычные 10 (1.4...0.25) — ни выше 1.3, ни ниже 1.0.
+    # 10 человек, строго убывающий c1_pc (остальные категории одинаковые,
+    # чтобы порядок total_score определялся только c1) -> final_place 1..10
+    # по 2 человека на каждый из 5 тиров (tier_sizes(10, 5) = [2,2,2,2,2]).
+    rows = [_group_row(BOLOTOV)]
+    for i in range(10):
+        rows.append(_row(f"Сотрудник {i}", 100 - i * 10, 50, 100, 20, 1))
+    raw = _build_excel_bytes(rows)
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    by_place = {r.final_place: r for r in results}
+
+    expected_tier_by_place = {1: 1, 2: 1, 3: 2, 4: 2, 5: 3, 6: 3, 7: 4, 8: 4, 9: 5, 10: 5}
+    expected_coefficient_by_tier = {1: 1.3, 2: 1.2, 3: 1.1, 4: 1.05, 5: 1.0}
+    for place, expected_tier in expected_tier_by_place.items():
+        r = by_place[place]
+        assert r.tier == expected_tier, f"место {place}: ожидался тир {expected_tier}, получили {r.tier}"
+        assert r.coefficient == expected_coefficient_by_tier[expected_tier]
+
+    # Ни у кого нет тира выше 5 и коэффициента вне диапазона [1.0, 1.3]
+    assert all(r.tier <= 5 for r in results)
+    assert all(1.0 <= r.coefficient <= 1.3 for r in results)
+
+
+def test_normal_group_still_uses_10_tiers():
+    # Контроль: вне Сектора 2 диапазон коэффициентов прежний (1.4...0.25),
+    # не урезан до 1.3...1.0.
+    rows = [_group_row("Супервайзер - Иванов И.И.")]
+    for i in range(10):
+        rows.append(_row(f"Сотрудник {i}", 100 - i * 10, 50, 100, 20, 1))
+    raw = _build_excel_bytes(rows)
+    employees = parse_weekly_rating_excel(raw)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    by_place = {r.final_place: r for r in results}
+
+    assert by_place[1].tier == 1
+    assert by_place[1].coefficient == 1.4  # выше верхней границы Сектора 2 (1.3)
+    assert by_place[10].tier == 10
+    assert by_place[10].coefficient == 0.25  # ниже нижней границы Сектора 2 (1.0)
 
 
 def test_sector2_novice_gets_real_place_and_tier_not_na():
-    # Та же схема, что у Сектора 1: статус "Новичок" сам по себе больше не
-    # исключает из официального места.
+    # По прямому запросу заказчика: статус "Новичок" САМ ПО СЕБЕ больше не
+    # исключает из официального места для Сектора 2 (в отличие от всей
+    # остальной компании) — сейчас у сектора почти весь состав новички, и
+    # раньше поэтому место было всегда "Н/О". Реальная активность есть ->
+    # реальное место/тир/коэффициент (без защитного минимума новичка).
     raw = _build_excel_bytes([
-        _group_row(KURILOVA),
+        _group_row(BOLOTOV),
         _row("Хороший Новичок", 100, 50, 200, 20, 1, status="Новичок, 1-й уровень"),
         _row("Средний Новичок", 60, 15, 120, 45, 8, status="Новичок, 1-й уровень"),
     ])
@@ -133,14 +289,17 @@ def test_sector2_novice_gets_real_place_and_tier_not_na():
     assert good.is_na is False
     assert good.final_place == 1
     assert good.tier == 1
-    assert good.coefficient == 1.3  # верхняя граница узкой шкалы
+    assert good.coefficient == 1.3  # верхняя граница шкалы Сектора 2
     assert weak.is_na is False
     assert weak.final_place == 2
 
 
 def test_sector2_novice_with_zero_activity_is_still_na():
+    # Контроль: новичок БЕЗ реальной активности (c1_sum=0) в Секторе 2
+    # всё равно Н/О — исключение статуса "Новичок" не означает исключение
+    # проверки на нулевую активность.
     raw = _build_excel_bytes([
-        _group_row(KURILOVA),
+        _group_row(BOLOTOV),
         _row("Пустышкин Новичок", 0, 0, 0, 20, 1, c1_sum=0, status="Новичок, 1-й уровень"),
     ])
     employees = parse_weekly_rating_excel(raw)
@@ -150,31 +309,9 @@ def test_sector2_novice_with_zero_activity_is_still_na():
     assert r.final_place is None
 
 
-def test_sector2_uses_5_tiers_with_narrow_coefficient_range():
-    # 10 человек, строго убывающий c1_pc -> final_place 1..10, по 2
-    # человека на каждый из 5 тиров.
-    rows = [_group_row(KURILOVA)]
-    for i in range(10):
-        rows.append(_row(f"Сотрудник {i}", 100 - i * 10, 50, 100, 20, 1))
-    raw = _build_excel_bytes(rows)
-    employees = parse_weekly_rating_excel(raw)
-    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
-    by_place = {r.final_place: r for r in results}
-
-    expected_tier_by_place = {1: 1, 2: 1, 3: 2, 4: 2, 5: 3, 6: 3, 7: 4, 8: 4, 9: 5, 10: 5}
-    expected_coefficient_by_tier = {1: 1.3, 2: 1.2, 3: 1.1, 4: 1.05, 5: 1.0}
-    for place, expected_tier in expected_tier_by_place.items():
-        r = by_place[place]
-        assert r.tier == expected_tier
-        assert r.coefficient == expected_coefficient_by_tier[expected_tier]
-
-    assert all(r.tier <= 5 for r in results)
-    assert all(1.0 <= r.coefficient <= 1.3 for r in results)
-
-
-def test_normal_group_is_unaffected_by_sector2_logic():
-    # Контроль: вне Сектора 2 (и Сектора 1) — всё как раньше: новичок
-    # по-прежнему Н/О, коэффициенты 1.4...0.25.
+def test_normal_group_novice_is_still_na_unaffected():
+    # Контроль: вне Сектора 2 новичок по-прежнему Н/О, даже с сильными
+    # показателями (правило не тронуто нигде, кроме Сектора 2).
     raw = _build_excel_bytes([
         _group_row("Супервайзер - Иванов И.И."),
         _row("Хороший Новичок", 100, 50, 200, 20, 1, status="Новичок, 1-й уровень"),

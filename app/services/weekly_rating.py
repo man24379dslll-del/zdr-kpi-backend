@@ -36,15 +36,15 @@ PEAKS_SCORE_KEYS), но не в сумме. Часовая ставка в фо�
 групп тоже отменена — см. services/salary.py, это отдельный, не
 связанный с total_score механизм.
 
-"Сектор №1" (4 обычные группы супервайзеров, см.
-group_naming.SECTOR_1_SUPERVISORS) — место по ЛК (lk_place) ВСЕГДА 1-е,
+"Сектор №2" (4 обычные группы супервайзеров, см.
+group_naming.SECTOR_2_SUPERVISORS) — место по ЛК (lk_place) ВСЕГДА 1-е,
 для ВСЕХ сотрудников этих 4 групп (переопределяет обычный тир ЛК). В
 total_score категория "ЛК" при этом входит только у 3 конкретных
 сотрудников-исключений (по точному ФИО, см.
-SECTOR_1_LK_WEIGHT_EXCEPTIONS_FIO) — у остальных вес 0, как и раньше, но
+SECTOR_2_LK_WEIGHT_EXCEPTIONS_FIO) — у остальных вес 0, как и раньше, но
 раз место у всех теперь 1-е, у этих троих ЛК даёт МАКСИМАЛЬНЫЙ балл
 (1×вес) независимо от реальных продаж. Решение о весе принимается по
-каждому сотруднику отдельно (sector1_zeroes_lk_weight), не по группе
+каждому сотруднику отдельно (sector2_zeroes_lk_weight), не по группе
 целиком, в отличие от Региона УК/ПП/Увеличители выше.
 
 ВАЖНО: места по категориям, тир ЛК, тир канала и итоговое место
@@ -63,8 +63,8 @@ from app.services.group_naming import (
     PEAKS_GROUP_RE,
     PEAKS_SCORE_KEYS,
     REGION_UK_SCORE_KEYS,
-    SECTOR_1_SUPERVISORS,
-    sector1_zeroes_lk_weight,
+    SECTOR_2_SUPERVISORS,
+    sector2_zeroes_lk_weight,
 )
 from app.services.ladder_groups import assign_novice_coefficients, assign_tier_coefficients
 from app.services.rating_engine import (
@@ -172,13 +172,13 @@ def compute_weekly_rating(
                 r.places["lk"] = place
                 r.scores["lk"] = place * lk_category.weight
 
-            # Сектор №1 — ЛК ВСЕГДА 1-е место, для ВСЕХ сотрудников этих 4
+            # Сектор №2 — ЛК ВСЕГДА 1-е место, для ВСЕХ сотрудников этих 4
             # групп (включая 3 исключения ниже) — по прямому запросу
             # заказчика, переопределяет обычный тир ЛК выше. У большинства
             # это не влияет на total_score (вес всё равно 0, см. фильтр
             # ниже), у 3 исключений — влияет по максимуму (1×вес).
             for r in group_results:
-                if (r.raw.get(supervisor_field) or "") in SECTOR_1_SUPERVISORS:
+                if (r.raw.get(supervisor_field) or "") in SECTOR_2_SUPERVISORS:
                     r.places["lk"] = 1
                     r.scores["lk"] = 1 * lk_category.weight
 
@@ -191,7 +191,7 @@ def compute_weekly_rating(
                 r.scores = {k: v for k, v in r.scores.items() if k in REGION_UK_SCORE_KEYS}
             elif PEAKS_GROUP_RE.search(r.raw.get(supervisor_field) or ""):
                 r.scores = {k: v for k, v in r.scores.items() if k in PEAKS_SCORE_KEYS}
-            elif sector1_zeroes_lk_weight(r.raw.get(supervisor_field), r.fio):
+            elif sector2_zeroes_lk_weight(r.raw.get(supervisor_field), r.fio):
                 r.scores = {k: v for k, v in r.scores.items() if k != "lk"}
 
         finalize_final_places(group_results, na_predicate, tie_break_field)

@@ -17,20 +17,21 @@
     ЗП = (ставка_за_час × рабочее_время_ч + бонус075 + бонус2) × коэффициент_ПРОШЛОЙ_недели
 
 (если для человека нет данных за прошлую неделю — коэффициент = 1.0).
-Сектор №1 (4 группы, см. group_naming.SECTOR_1_SUPERVISORS) и Сектор №2
-(3 группы, group_naming.SECTOR_2_SUPERVISORS) — исключение из общего
-правила: не 10 тиров, а 5 (1.3...1.0, см. group_naming.SECTOR_1_
-/SECTOR_2_TIER_COEFFICIENTS), по прямому запросу заказчика. Настраиваемая
-через /ladder-tiers таблица (передаётся в tier_coefficients) на эти
-секторы не влияет — там всегда своя короткая шкала.
+Сектор №2 (4 группы, см. group_naming.SECTOR_2_SUPERVISORS) и Сектор №3
+(3 группы, group_naming.SECTOR_3_SUPERVISORS) — исключение из общего
+правила: не 10 тиров, а 5 (1.3...1.0, см. group_naming.
+SECTOR_2_TIER_COEFFICIENTS/SECTOR_3_TIER_COEFFICIENTS), по прямому
+запросу заказчика. Настраиваемая через /ladder-tiers таблица
+(передаётся в tier_coefficients) на эти секторы не влияет — там всегда
+своя короткая шкала.
 """
 from __future__ import annotations
 
 from app.services.group_naming import (
-    SECTOR_1_SUPERVISORS,
-    SECTOR_1_TIER_COEFFICIENTS,
     SECTOR_2_SUPERVISORS,
     SECTOR_2_TIER_COEFFICIENTS,
+    SECTOR_3_SUPERVISORS,
+    SECTOR_3_TIER_COEFFICIENTS,
 )
 
 TIER_COEFFICIENTS = [1.4, 1.3, 1.2, 1.1, 1.05, 1, 0.9, 0.75, 0.5, 0.25]
@@ -46,10 +47,10 @@ def tier_sizes(n: int, num_tiers: int = 10) -> list[int]:
 
 
 def _coefficients_for(supervisor: str | None, default_coefficients: list[float]) -> list[float]:
-    if supervisor in SECTOR_1_SUPERVISORS:
-        return SECTOR_1_TIER_COEFFICIENTS
     if supervisor in SECTOR_2_SUPERVISORS:
         return SECTOR_2_TIER_COEFFICIENTS
+    if supervisor in SECTOR_3_SUPERVISORS:
+        return SECTOR_3_TIER_COEFFICIENTS
     return default_coefficients
 
 
@@ -135,7 +136,7 @@ def assign_novice_coefficients(rows: list[dict], tier_coefficients: list[float] 
     for supervisor, group in by_supervisor.items():
         coefficients = _coefficients_for(supervisor, default_coefficients)
         evaluated = [r for r in group if not r.get("is_na")]
-        # is_novice сам по себе БОЛЬШЕ не гарантирует is_na=True — Сектор №1
+        # is_novice сам по себе БОЛЬШЕ не гарантирует is_na=True — Сектор №2/№3
         # (см. excel_parsing.py::is_na_row) теперь может дать новичку
         # is_na=False, и тот уже получил РЕАЛЬНЫЙ тир в цикле выше; такого
         # трогать не нужно — иначе тут бы затёрли реальный тир
