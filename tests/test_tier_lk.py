@@ -50,7 +50,7 @@ def test_tier_b_can_outrank_tier_a_when_other_categories_are_good():
     assert places[1] <= places[0]
 
 
-def test_tier_c_is_always_worse_than_tier_b_but_not_necessarily_than_tier_a():
+def test_tier_c_is_always_worse_than_both_tier_a_and_tier_b():
     items = [
         _row(5, 10, 100, 1, 1, 1, 1),  # A
         _row(0, 0, 0, 2, 2, 2, 2),     # Б #1
@@ -60,8 +60,9 @@ def test_tier_c_is_always_worse_than_tier_b_but_not_necessarily_than_tier_a():
     places = compute_tiered_lk_places(items)
     assert places[0] == 1.0
     assert places[1] == places[2] == 2.0  # тир Б: среднее (2,2,2,2) у обоих, без сдвига
-    assert places[3] == 2.0 + 1.0         # тир В: max(Б)=2.0 + ранг 1 (единственный в тире В)
+    assert places[3] == 2.0 + 1.0         # тир В: max(A,Б)=2.0 + ранг 1 (единственный в тире В)
     assert places[3] > places[1]          # В хуже Б
+    assert places[3] > places[0]          # В хуже A
 
 
 def test_tier_c_worse_than_every_tier_b_person_even_if_one_of_them_has_bad_average():
@@ -145,9 +146,12 @@ def test_tier_c_ties_share_place_with_skip():
     assert places[3] == 4.0  # сдвиг на 2 (кол-во делящих место 2)
 
 
-def test_empty_tier_b_gives_zero_offset():
-    # Если тира Б в группе нет вообще — сдвига брать неоткуда, тир В
-    # ранжируется с места 1 (внутри самого тира В).
+def test_empty_tier_b_uses_tier_a_as_offset():
+    # Если тира Б в группе нет, но тир A есть — сдвиг тира В теперь
+    # берётся от худшего места ТИРА A (а не 0, как раньше) — иначе тир В
+    # ранжировался бы с 1-го места и обгонял тир A с реальными продажами
+    # (реальный сбой на проде, группа Курбановой, период 9-3 — см.
+    # докстринг модуля).
     items = [
         _row(5, 10, 100, 1, 1, 1, 1),  # тир A -> место 1
         _row(20, 0, 0, 2, 2, 2, 2),    # тир В, 20 карточек
@@ -155,8 +159,38 @@ def test_empty_tier_b_gives_zero_offset():
     ]
     places = compute_tiered_lk_places(items)
     assert places[0] == 1.0
-    assert places[2] == 1.0  # 10 карточек -> лучший в тире В, сдвиг 0
-    assert places[1] == 2.0  # 20 карточек -> хуже
+    # max(A)=1.0, Б пуст -> тир В начинается с места 2
+    assert places[2] == 2.0  # 10 карточек -> лучший в тире В
+    assert places[1] == 3.0  # 20 карточек -> хуже
+    assert places[2] > places[0] and places[1] > places[0]  # В строго хуже A
+
+
+def test_tier_c_never_beats_tier_a_even_when_tier_b_is_empty():
+    # Тот самый реальный сбой: несколько человек тира A (реальные продажи)
+    # и один человек тира В (карточки впустую, тир Б пуст) — тир В должен
+    # остаться строго хуже ОБОИХ представителей тира A, не только
+    # "среднего" из них.
+    items = [
+        _row(20, 5, 50, 1, 1, 1, 1),    # тир A, худшая реальная продажа
+        _row(30, 10, 200, 1, 1, 1, 1),  # тир A, лучшая реальная продажа
+        _row(15, 0, 0, 1, 1, 1, 1),     # тир В: карточки впустую, конверсия 0
+    ]
+    places = compute_tiered_lk_places(items)
+    assert sorted(places[:2]) == [1.0, 2.0]  # тир A: обычный ранг, 2 человека
+    assert places[2] > places[0]
+    assert places[2] > places[1]
+
+
+def test_all_tier_c_group_has_zero_offset():
+    # Если ВСЯ группа — тир В (нет ни A, ни Б) — сдвига брать неоткуда,
+    # ранжируются с места 1 внутри самого тира В.
+    items = [
+        _row(20, 0, 0, 2, 2, 2, 2),
+        _row(10, 0, 0, 2, 2, 2, 2),
+    ]
+    places = compute_tiered_lk_places(items)
+    assert places[1] == 1.0  # 10 карточек -> лучший
+    assert places[0] == 2.0  # 20 карточек -> хуже
 
 
 def test_positive_cards_zero_conversion_is_tier_b_not_a():
