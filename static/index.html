@@ -763,6 +763,11 @@ function dbRowToDisplayRow(r){
     errors_pct: r.errors_pct, errors_place: r.errors_place, errors_count: r.errors_count ?? null,
     total_score: r.total_score, final_place: r.final_place,
     tier: r.tier, coefficient: r.coefficient, bonus075: r.bonus075, bonus2: r.bonus2, salary: r.salary,
+    // Заглушка (r.coefficient — коэффициент ЭТОЙ недели, не прошлой) —
+    // вызывающая сторона (load()/loadSavedPeriod()) должна сразу же
+    // перезаписать через assignDisplaySalaryCoeff(rows, prevMap), иначе
+    // колонка "Коэфф. пред. недели (в ЗП)" покажет неверное число (см.
+    // докстринг assignDisplaySalaryCoeff — реальный сбой на проде).
     salaryCoeffUsed: r.coefficient, salaryCoeffFromPrev: true, channel: r.channel,
     work_hours: r.work_hours ?? null, shift_count: r.shift_count ?? null,
   };
@@ -964,11 +969,12 @@ async function buildSupervisorViewer(){
       const prevUpload = await fetchLatestUpload(vType, latest.period_label);
       let prevMap = null;
       if(prevUpload){
-        const prevRaw = await sbGet(`kpi_ratings?upload_id=eq.${prevUpload.id}&select=fio,final_place,total_score,is_na`);
+        const prevRaw = await sbGet(`kpi_ratings?upload_id=eq.${prevUpload.id}&select=fio,final_place,total_score,is_na,coefficient`);
         prevMap = {};
         for(const r of prevRaw) prevMap[r.fio] = r;
       }
       assignDeltas(rows, prevMap);
+      assignDisplaySalaryCoeff(rows, prevMap);
 
       currentRows = rows.filter(r => !r.is_novice);
       currentNoviceRows = rows.filter(r => r.is_novice);
@@ -1182,12 +1188,14 @@ async function loadSavedPeriod(upload){
     const prevUpload = await fetchLatestUpload(periodType, upload.period_label);
     let prevMap = null;
     if(prevUpload){
-      const prevRaw = await sbGet(`kpi_ratings?upload_id=eq.${prevUpload.id}&select=fio,final_place,total_score,is_na`);
+      const prevRaw = await sbGet(`kpi_ratings?upload_id=eq.${prevUpload.id}&select=fio,final_place,total_score,is_na,coefficient`);
       prevMap = {};
       for(const r of prevRaw) prevMap[r.fio] = r;
     }
     assignDeltas(main, prevMap);
     assignDeltas(novices, prevMap);
+    assignDisplaySalaryCoeff(main, prevMap);
+    assignDisplaySalaryCoeff(novices, prevMap);
 
     currentRows = main;
     currentNoviceRows = novices;
@@ -2305,6 +2313,28 @@ function deltaBadge(delta){
   if(delta === 0) return `<span style="color:var(--muted);">±0</span>`;
   const up = delta > 0;
   return `<span style="color:${up ? 'var(--good)' : 'var(--err)'};font-weight:700;">${up ? '▲' : '▼'} ${Math.abs(delta)}</span>`;
+}
+
+// При просмотре УЖЕ СОХРАНЁННОГО периода (loadSavedPeriod/buildSupervisorViewer)
+// dbRowToDisplayRow не может знать, какой коэффициент реально использовался
+// при расчёте ЗП (в kpi_ratings хранится только r.coefficient — коэффициент
+// ЭТОЙ недели, не прошлой) — до этой функции колонка "Коэфф. пред. недели
+// (в ЗП)" ошибочно дублировала r.coefficient. Реальный сбой на проде:
+// человек с прошлонедельным коэффициентом 1.15 показывал в этой колонке
+// 1.3 (свой коэффициент этой недели), из-за чего ЗП в таблице выглядела
+// как посчитанная неверно, хотя сама сумма (уже сохранённая в r.salary)
+// была верна. Точный перенос резолюции коэффициента из assignSalary —
+// та же логика (floor до 1.0 для Н/О этой недели), но НЕ пересчитывает
+// саму ЗП (она уже верна и сохранена), только чинит то, что показывается
+// в колонке.
+function assignDisplaySalaryCoeff(rows, prevMap){
+  for(const r of rows){
+    const prev = prevMap ? prevMap[r.fio] : null;
+    let coeff = (prev && prev.coefficient != null) ? prev.coefficient : 1.0;
+    if(r.is_na && coeff < 1.0) coeff = 1.0;
+    r.salaryCoeffUsed = coeff;
+    r.salaryCoeffFromPrev = !!(prev && prev.coefficient != null);
+  }
 }
 
 // ---------- step 2: compute & render ----------
