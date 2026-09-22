@@ -1353,13 +1353,19 @@ function parseWorkbook(arrayBuffer){
   let currentPeaksPP = null;
   let currentPeaksUvelichiteli = null;
   const REGION_UK_RE = /операторы\s+без\s+супервизора/i;
+  // Метки "С1 "/"С2 "/"С3 " — иногда добавляются прямо в название группы
+  // в исходном файле (пометка заказчика для себя, см.
+  // app/services/excel_parsing.py::SECTOR_LABEL_PREFIX_RE — точный
+  // перенос, тот же реальный сбой на проде). Срезаются сразу, до того как
+  // название попадёт в group.supervisor.
+  const SECTOR_LABEL_PREFIX_RE = /^С\d+\s+(?=Супервайзер|Супервизор|операторы)/i;
 
   for(let r = 1; r < rows.length; r++){
     const row = rows[r];
     if(!row || row[0] === null || row[0] === undefined || row[0] === "") continue;
     const fio = row[0].toString();
     if(fio.startsWith("ГРУППА")){
-      const rawName = fio.replace("ГРУППА:","").trim();
+      const rawName = fio.replace("ГРУППА:","").trim().replace(SECTOR_LABEL_PREFIX_RE, "");
       const isSpecial = REGION_UK_RE.test(rawName);
       current = { supervisor: rawName, employees: [], isRegionUK: isSpecial };
       groups.push(current);

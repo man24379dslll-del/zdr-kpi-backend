@@ -167,6 +167,16 @@ SHIFT_COUNT_COLUMN = "Кол-во смен"
 
 GROUP_ROW_PREFIX = "группа:"
 
+# Метки вида "С1 "/"С2 "/"С3 " — заказчик иногда добавляет их прямо в
+# название группы в исходном файле (пометка для себя, какой группе
+# в какой сектор идти — см. историю создания секторов), из-за чего
+# supervisor в файле перестаёт совпадать с user_profiles.supervisor_names
+# и SECTOR_2_SUPERVISORS/SECTOR_3_SUPERVISORS (реальный сбой на проде —
+# см. историю). Срезаются сразу при разборе строки "ГРУППА: ...", ДО
+# того как название попадёт в kpi_ratings.supervisor — сама пометка
+# нигде дальше не нужна.
+SECTOR_LABEL_PREFIX_RE = re.compile(r"^С\d+\s+(?=Супервайзер|Супервизор|операторы)", re.IGNORECASE)
+
 # Всё, кроме 4 "кол-во"-колонок (E/J/O/T) и 2 бонусных (ищутся по
 # суффиксу, см. BONUS075_SUFFIX/BONUS2_SUFFIX) — они необязательные, см. докстринг.
 _MANDATORY_COLUMNS = {
@@ -353,7 +363,7 @@ def parse_weekly_rating_excel(raw: bytes, supervisor_channels: dict[str, str] | 
         if not fio:
             continue
         if fio.lower().startswith(GROUP_ROW_PREFIX):
-            current_supervisor = fio[len(GROUP_ROW_PREFIX):].strip()
+            current_supervisor = SECTOR_LABEL_PREFIX_RE.sub("", fio[len(GROUP_ROW_PREFIX):].strip())
             current_group_splits_region_uk = bool(REGION_UK_GROUP_RE.search(current_supervisor))
             if current_group_splits_region_uk:
                 current_peaks_pp_supervisor = current_supervisor + PEAKS_PP_SUFFIX
