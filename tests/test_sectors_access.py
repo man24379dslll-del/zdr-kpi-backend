@@ -4,10 +4,21 @@
 ограниченный только группами своего сектора. См.
 auth.py::CurrentUser.is_sector2_head/is_sector3_head и
 routers/payroll.py::_restrict_to_sector/_sector_supervisors_for.
+
+Отдельно (см. блок ниже) — group_naming.restrict_to_sector_pair: та же
+пара руководителей видит СТАТИСТИКУ друг друга (Дашборды + "Моя
+группа" через routers/dashboards.py и routers/ratings.py::
+get_ratings_by_upload), но НЕ Ведомость ЗП — эти два механизма
+независимы, урезание Ведомости ЗП выше не тронуто.
 """
 from app.auth import CurrentUser
 from app.routers.payroll import _restrict_to_sector, _sector_supervisors_for
-from app.services.group_naming import SECTOR_2_SUPERVISORS, SECTOR_3_SUPERVISORS
+from app.services.group_naming import (
+    SECTOR_2_AND_3_SUPERVISORS,
+    SECTOR_2_SUPERVISORS,
+    SECTOR_3_SUPERVISORS,
+    restrict_to_sector_pair,
+)
 
 SECTOR2_LIST = sorted(SECTOR_2_SUPERVISORS)
 SECTOR3_LIST = sorted(SECTOR_3_SUPERVISORS)
@@ -103,3 +114,24 @@ def test_restrict_to_sector_filters_rows_by_supervisor():
 
     restricted_2 = _restrict_to_sector(dict(result), SECTOR_3_SUPERVISORS)
     assert {r["fio"] for r in restricted_2["rows"]} == {"Г"}
+
+
+def test_sector_2_and_3_supervisors_is_the_union():
+    assert SECTOR_2_AND_3_SUPERVISORS == SECTOR_2_SUPERVISORS | SECTOR_3_SUPERVISORS
+    # Секторы не пересекаются — объединение строго больше любого из них.
+    assert len(SECTOR_2_AND_3_SUPERVISORS) == len(SECTOR_2_SUPERVISORS) + len(SECTOR_3_SUPERVISORS)
+
+
+def test_restrict_to_sector_pair_keeps_both_sectors_drops_everyone_else():
+    rows = [
+        {"fio": "А", "supervisor": SECTOR2_LIST[0]},
+        {"fio": "Б", "supervisor": SECTOR3_LIST[0]},
+        {"fio": "В", "supervisor": "Супервайзер - Иванов И.И."},
+        {"fio": "Г", "supervisor": "Операторы без супервизора"},
+    ]
+    restricted = restrict_to_sector_pair(rows)
+    assert {r["fio"] for r in restricted} == {"А", "Б"}
+
+
+def test_restrict_to_sector_pair_empty_input():
+    assert restrict_to_sector_pair([]) == []

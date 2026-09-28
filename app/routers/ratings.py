@@ -13,15 +13,34 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 
 from app.auth import CurrentUser, get_current_user
 from app.services.excel_parsing import is_na_row, parse_weekly_rating_excel
+from app.services.group_naming import restrict_to_sector_pair
 from app.services.payroll import is_weekly_period_label
 from app.services.periods import find_previous_period
 from app.services.rating_engine import RatingCategory
 from app.services.ratings_repository import maybe_save_weekly_rating, save_weekly_rating
 from app.services.salary import DEFAULT_HOURS_NORM, DEFAULT_MONTHLY_BASE_RATE, assign_salary
 from app.services.weekly_rating import compute_weekly_rating
-from app.supabase_client import as_user
+from app.supabase_client import as_service, as_user
 
 router = APIRouter(prefix="/ratings", tags=["weekly-rating"])
+
+
+@router.get("/by-upload")
+async def get_ratings_by_upload(upload_id: str, user: CurrentUser = Depends(get_current_user)):
+    """Строки kpi_ratings за upload_id — обычно фронтенд читает их
+    напрямую из Supabase (RLS сам урезает до supervisor_names
+    пользователя), этот эндпоинт нужен ТОЛЬКО для руководителей Секторов
+    2 и 3 — та же "статистика групп друг друга", что у Ворониной (см.
+    group_naming.restrict_to_sector_pair, тот же приём, что и в
+    routers/dashboards.py). Для всех остальных ролей отдаёт ровно то же,
+    что дал бы прямой запрос к Supabase (as_user, полный select), без
+    изменения поведения."""
+    if user.is_sector2_head or user.is_sector3_head:
+        client = as_service()
+        rows = await client.get("kpi_ratings", params={"upload_id": f"eq.{upload_id}", "select": "*"})
+        return restrict_to_sector_pair(rows)
+    client = as_user(user.access_token)
+    return await client.get("kpi_ratings", params={"upload_id": f"eq.{upload_id}", "select": "*"})
 
 
 async def _load_categories(user: CurrentUser) -> list[RatingCategory]:

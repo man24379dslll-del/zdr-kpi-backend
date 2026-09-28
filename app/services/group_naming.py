@@ -116,6 +116,23 @@ SECTOR_3_SUPERVISORS = frozenset({
 })
 SECTOR_3_TIER_COEFFICIENTS = [1.3, 1.2, 1.1, 1.05, 1.0]
 
+# Руководителям Секторов 2 и 3 (Бочиус/Сорокин) — по прямому запросу
+# заказчика та же "статистика групп друг друга", что у Ворониной, но
+# ТОЛЬКО в Дашбордах и в "Моей группе" (не в Ведомости ЗП — там как было,
+# см. routers/payroll.py::_sector_supervisors_for, не тронуто). Их
+# supervisor_names НЕ расширяем (иначе сломался бы exact-match в
+# CurrentUser.is_sector2_head/is_sector3_head, от которого зависит
+# урезание в Ведомости ЗП) — вместо этого routers/dashboards.py и
+# routers/ratings.py::get_ratings_by_upload для НИХ идут в обход RLS
+# через as_service() и урезают ОТВЕТ вручную этой функцией.
+SECTOR_2_AND_3_SUPERVISORS = SECTOR_2_SUPERVISORS | SECTOR_3_SUPERVISORS
+
+
+def restrict_to_sector_pair(rows: list[dict]) -> list[dict]:
+    """Урезает строки kpi_ratings (или похожие, с полем "supervisor") до
+    объединения групп Секторов 2 и 3."""
+    return [r for r in rows if r.get("supervisor") in SECTOR_2_AND_3_SUPERVISORS]
+
 
 def is_region_uk_or_peaks_supervisor(supervisor: str | None) -> bool:
     """True для ВСЕХ ТРЁХ виртуальных групп (совпадает по общему префиксу

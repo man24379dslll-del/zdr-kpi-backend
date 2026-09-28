@@ -875,25 +875,41 @@ async function buildSupervisorViewer(){
   const panel = document.createElement("div");
   panel.id = "supervisorViewerPanel";
   panel.className = "panel";
-  // Руководитель сектора (1 или 2) — вкладки, как у admin/manager в
+  // Руководитель сектора (2 или 3) — вкладки, как у admin/manager в
   // "3 · Результат" (тот же .tab-bar/.tab-btn/.tab-panel, см. renderResults):
-  // "Моя группа" + "Рейтинг супервайзеров (Сектор №N)", а не всё подряд
-  // одной длинной прокруткой. У обычных супервайзеров вкладок нет — им
-  // сравнивать не с кем (своя группа одна).
-  const sectorSupervisors = profile.isSector2Head ? SECTOR_2_SUPERVISORS : profile.isSector3Head ? SECTOR_3_SUPERVISORS : null;
-  const sectorLabel = profile.isSector2Head ? "Сектор №2" : "Сектор №3";
-  const sectorSizeLabel = profile.isSector2Head ? "4 групп" : "3 групп";
-  const tabsHtml = sectorSupervisors ? `
+  // "Мои группы" + "Рейтинг супервайзеров" ПО КАЖДОМУ сектору отдельно, а
+  // не всё подряд одной длинной прокруткой. У обычных супервайзеров
+  // вкладок нет — им сравнивать не с кем (своя группа одна).
+  //
+  // По прямому запросу заказчика — Бочиус (Сектор №2) и Сорокин (Сектор
+  // №3) теперь видят "статистику групп друг друга" (те же 2 вкладки
+  // "Рейтинг супервайзеров" ОБОИХ секторов, и свои группы + группы
+  // другого сектора вместе на вкладке "Мои группы") — как Воронина,
+  // но ТОЛЬКО здесь и в Дашбордах, НЕ в Ведомости ЗП (та по-прежнему
+  // урезана до своего сектора, см. routers/payroll.py, не тронуто).
+  // ВАЖНО: два отдельных "Рейтинг супервайзеров"-таба, а не один общий
+  // на 7 групп — у Сектора №2 ЛК не в счёт в total_score, у Сектора №3
+  // считается обычно; слить их в одно сравнение значило бы ранжировать
+  // по разным формулам одновременно (та же причина, по которой Сектор
+  // №2 изначально исключён из общего "Рейтинга супервайзеров" — см.
+  // computeSupervisorRating выше).
+  const isSectorPairHead = profile.isSector2Head || profile.isSector3Head;
+  const tabsHtml = isSectorPairHead ? `
     <div class="tab-bar">
-      <button class="tab-btn active" data-tab="viewerGroups">Моя группа</button>
-      <button class="tab-btn" data-tab="viewerSupervisors">Рейтинг супервайзеров (${sectorLabel})</button>
+      <button class="tab-btn active" data-tab="viewerGroups">Мои группы</button>
+      <button class="tab-btn" data-tab="viewerSupervisors2">Рейтинг супервайзеров (Сектор №2)</button>
+      <button class="tab-btn" data-tab="viewerSupervisors3">Рейтинг супервайзеров (Сектор №3)</button>
     </div>
     <div class="tab-panel active" id="tab-viewerGroups">
       <div id="viewerContainer"></div>
     </div>
-    <div class="tab-panel" id="tab-viewerSupervisors">
-      <div class="sub" style="margin-bottom:16px;">Сравнение ${sectorSizeLabel} сектора между собой — та же логика, что в общем расчёте${profile.isSector2Head ? " (ЛК не в счёт, новички участвуют)" : " (новички участвуют)"}.</div>
-      <div id="viewerSupervisorContainer"></div>
+    <div class="tab-panel" id="tab-viewerSupervisors2">
+      <div class="sub" style="margin-bottom:16px;">Сравнение 4 групп Сектора №2 между собой — та же логика, что в общем расчёте (ЛК не в счёт, новички участвуют).</div>
+      <div id="viewerSupervisorContainer2"></div>
+    </div>
+    <div class="tab-panel" id="tab-viewerSupervisors3">
+      <div class="sub" style="margin-bottom:16px;">Сравнение 3 групп Сектора №3 между собой — та же логика, что в общем расчёте (новички участвуют).</div>
+      <div id="viewerSupervisorContainer3"></div>
     </div>
   ` : `<div id="viewerContainer"></div>`;
   panel.innerHTML = `
@@ -963,7 +979,14 @@ async function buildSupervisorViewer(){
       }
       const selectedId = panel.querySelector("#viewerPeriodSelect").value;
       const latest = viewerUploadsDesc.find(u => u.id === selectedId) || viewerUploadsDesc[0];
-      const rowsRaw = await sbGet(`kpi_ratings?upload_id=eq.${latest.id}&select=*`);
+      // Руководители Секторов 2/3 — через свой бэкенд (в обход RLS,
+      // см. routers/ratings.py::get_ratings_by_upload), чтобы получить
+      // ОБЕ группы секторов сразу, не только свою (supervisor_names у
+      // них намеренно не расширяем, см. group_naming.restrict_to_sector_pair).
+      // Все остальные — как раньше, напрямую из Supabase (RLS сам урезает).
+      const rowsRaw = isSectorPairHead
+        ? await apiGet("/ratings/by-upload", { upload_id: latest.id })
+        : await sbGet(`kpi_ratings?upload_id=eq.${latest.id}&select=*`);
       const rows = rowsRaw.map(dbRowToDisplayRow);
 
       const prevUpload = await fetchLatestUpload(vType, latest.period_label);
@@ -994,9 +1017,15 @@ async function buildSupervisorViewer(){
       // hideFinalPay для неё остаётся true.
       // Несколько групп (руководитель сектора, Курбанова Зарина) — блоком
       // на группу (renderGroupBlocks), одна группа — как раньше, единой
-      // таблицей без лишнего заголовка группы.
-      if(profile.supervisor_names && profile.supervisor_names.length > 1){
-        renderGroupBlocks(containerEl, currentRows, profile.supervisor_names, { showTier: vType === "week", showDelta: true, hideFinalPay: !(profile.isSector2Head || profile.isSector3Head) });
+      // таблицей без лишнего заголовка группы. Руководители Секторов 2/3 —
+      // список групп берём из САМИХ currentRows (там теперь обе группы
+      // секторов, см. rowsRaw выше), а не из profile.supervisor_names
+      // (та намеренно осталась только со своим сектором).
+      if(isSectorPairHead || (profile.supervisor_names && profile.supervisor_names.length > 1)){
+        const groupNamesToRender = isSectorPairHead
+          ? [...new Set(currentRows.map(r => r.supervisor))].sort(compareGroupNames)
+          : profile.supervisor_names;
+        renderGroupBlocks(containerEl, currentRows, groupNamesToRender, { showTier: vType === "week", showDelta: true, hideFinalPay: !isSectorPairHead });
       } else {
         const soloSupervisor = profile.supervisor_names && profile.supervisor_names[0];
         const isSector2 = SECTOR_2_SUPERVISORS.has(soloSupervisor);
@@ -1006,14 +1035,17 @@ async function buildSupervisorViewer(){
         if(isSector2) appendSector2LkExceptions(containerEl, currentRows, commonArgs);
       }
 
-      // Руководитель сектора — вкладка "Рейтинг супервайзеров (Сектор №N)",
-      // считается прямо здесь по уже загруженным currentRows
+      // Руководители Секторов 2/3 — ОБЕ вкладки "Рейтинг супервайзеров",
+      // считаются прямо здесь по уже загруженным currentRows
       // (computeSupervisorRatingFromRows — чистая функция без сети; для
       // Сектора 2 — ЛК не в счёт + новички участвуют, для Сектора 3 —
-      // ЛК считается обычно, новички тоже участвуют).
-      if(sectorSupervisors){
-        const ownSectorSupervisorRows = computeSupervisorRatingFromRows(currentRows, sectorSupervisors);
-        renderSupervisorTable(panel.querySelector("#viewerSupervisorContainer"), ownSectorSupervisorRows);
+      // ЛК считается обычно, новички тоже участвуют) — раздельно, не
+      // единым сравнением (см. комментарий про tabsHtml выше).
+      if(isSectorPairHead){
+        const sector2Rows = computeSupervisorRatingFromRows(currentRows, SECTOR_2_SUPERVISORS);
+        renderSupervisorTable(panel.querySelector("#viewerSupervisorContainer2"), sector2Rows);
+        const sector3Rows = computeSupervisorRatingFromRows(currentRows, SECTOR_3_SUPERVISORS);
+        renderSupervisorTable(panel.querySelector("#viewerSupervisorContainer3"), sector3Rows);
       }
     } catch(err){
       log("Ошибка: " + err.message, "err", logEl2);
@@ -3161,8 +3193,10 @@ async function populateDashPeriodSelect(){
   return dashUploadsDesc;
 }
 
-// Свой бэкенд (Railway, тот же домен) — используется только дашбордами
-// (GET /dashboards/*, только чтение). Остальной сайт пока ходит в Supabase
+// Свой бэкенд (Railway, тот же домен) — используется дашбордами (GET
+// /dashboards/*) и, для руководителей Секторов 2/3, чтением "Моих групп"
+// (GET /ratings/by-upload — см. buildSupervisorViewer, обход RLS для
+// просмотра ОБОИХ секторов сразу). Остальной сайт пока ходит в Supabase
 // напрямую, это будет переключаться отдельными следующими шагами.
 async function apiGet(path, params){
   const entries = Object.entries(params || {}).filter(([, v]) => v !== null && v !== undefined);
