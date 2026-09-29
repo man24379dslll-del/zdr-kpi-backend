@@ -992,9 +992,8 @@ async function buildSupervisorViewer(){
       const prevUpload = await fetchLatestUpload(vType, latest.period_label);
       let prevMap = null;
       if(prevUpload){
-        const prevRaw = await sbGet(`kpi_ratings?upload_id=eq.${prevUpload.id}&select=fio,final_place,total_score,is_na,coefficient`);
-        prevMap = {};
-        for(const r of prevRaw) prevMap[r.fio] = r;
+        const prevRaw = await sbGet(`kpi_ratings?upload_id=eq.${prevUpload.id}&select=fio,final_place,total_score,is_na,coefficient,is_novice`);
+        prevMap = buildPrevMap(prevRaw);
       }
       assignDeltas(rows, prevMap);
       assignDisplaySalaryCoeff(rows, prevMap);
@@ -1220,9 +1219,8 @@ async function loadSavedPeriod(upload){
     const prevUpload = await fetchLatestUpload(periodType, upload.period_label);
     let prevMap = null;
     if(prevUpload){
-      const prevRaw = await sbGet(`kpi_ratings?upload_id=eq.${prevUpload.id}&select=fio,final_place,total_score,is_na,coefficient`);
-      prevMap = {};
-      for(const r of prevRaw) prevMap[r.fio] = r;
+      const prevRaw = await sbGet(`kpi_ratings?upload_id=eq.${prevUpload.id}&select=fio,final_place,total_score,is_na,coefficient,is_novice`);
+      prevMap = buildPrevMap(prevRaw);
     }
     assignDeltas(main, prevMap);
     assignDeltas(novices, prevMap);
@@ -2301,14 +2299,29 @@ async function fetchAllUploads(type){
   const filtered = uploads.filter(u => pattern.test(u.period_label));
   return sortByCalendarDesc(filtered, type).reverse(); // по возрастанию
 }
-async function fetchRatingsMap(uploadId){
-  const rows = await sbGet(`kpi_ratings?upload_id=eq.${uploadId}&select=fio,final_place,total_score,coefficient,is_na,is_novice`);
+// Каждый новичок хранится в kpi_ratings ДВУМЯ строками: "основная"
+// (is_novice=false, реальные final_place/coefficient для его группы) и
+// "дубль" для общего списка новичков (is_novice=true, coefficient=null,
+// своё отдельное общекомпанейское final_place — см. computeGlobalNovices).
+// Если строить карту "fio -> строка" наивно (последняя строка по fio
+// побеждает), от НЕОПРЕДЕЛЁННОГО порядка ответа Supabase зависит, какая
+// из двух победит — реальный сбой на проде: дубль с coefficient=null
+// затирал основную запись, и "Коэфф. пред. недели (в ЗП)"/"Δ к пред.
+// периоду" на "Моей группе" показывали значение по умолчанию для КАЖДОГО
+// новичка прошлой недели. Эта функция — тот же приём, что уже был в
+// fetchRatingsMap ниже, вынесенный отдельно, чтобы использовать и там,
+// где строки уже получены другим запросом (buildSupervisorViewer/
+// loadSavedPeriod/loadStandaloneDynamics).
+function buildPrevMap(rows){
   const map = {};
   for(const r of rows){
-    // если человек встречается и в основном списке, и в новичках — предпочитаем основную (не новичков) запись
     if(!map[r.fio] || map[r.fio].is_novice) map[r.fio] = r;
   }
   return map;
+}
+async function fetchRatingsMap(uploadId){
+  const rows = await sbGet(`kpi_ratings?upload_id=eq.${uploadId}&select=fio,final_place,total_score,coefficient,is_na,is_novice`);
+  return buildPrevMap(rows);
 }
 async function fetchFioHistory(fio, type, limit){
   const uploads = await fetchAllUploads(type);
@@ -3050,11 +3063,10 @@ async function loadStandaloneDynamics(){
 
     const [latestRaw, prevRaw] = await Promise.all([
       sbGet(`kpi_ratings?upload_id=eq.${latest.id}&select=*`),
-      sbGet(`kpi_ratings?upload_id=eq.${prev.id}&select=fio,final_place,total_score,is_na`),
+      sbGet(`kpi_ratings?upload_id=eq.${prev.id}&select=fio,final_place,total_score,is_na,is_novice`),
     ]);
     const rows = latestRaw.map(dbRowToDisplayRow);
-    const prevMap = {};
-    for(const r of prevRaw) prevMap[r.fio] = r;
+    const prevMap = buildPrevMap(prevRaw);
     assignDeltas(rows, prevMap);
 
     dynStandaloneAll = rows.filter(r => r.deltaPlace !== null && r.deltaPlace !== undefined);
