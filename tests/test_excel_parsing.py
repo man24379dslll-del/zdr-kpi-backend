@@ -123,3 +123,23 @@ def test_surname_starting_with_c_and_digit_like_pattern_is_not_mistaken():
     ])
     employees = parse_weekly_rating_excel(raw)
     assert employees[0]["supervisor"] == "С2 Иванов И.И."
+
+
+def test_sector_tag_is_stripped_from_employee_fio():
+    # С 02.10 метка стоит в самом ФИО — иначе человек "теряется" между
+    # неделями (коэффициент прошлой недели берётся по умолчанию).
+    raw = _build_excel_bytes([
+        _group_row("Супервайзер - Владыкин Сергей Александрович"),
+        _row("ЗДР С2 Алиева Ш. А."),
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    assert employees[0]["fio"] == "ЗДР Алиева Ш. А."
+
+
+def test_fio_without_tag_and_initial_s_are_unaffected():
+    raw = _build_excel_bytes([
+        _group_row("Супервайзер - Иванов И.И."),
+        _row("ЗДР Сидоров С. С."),
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    assert employees[0]["fio"] == "ЗДР Сидоров С. С."

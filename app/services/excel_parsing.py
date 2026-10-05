@@ -177,6 +177,14 @@ GROUP_ROW_PREFIX = "группа:"
 # нигде дальше не нужна.
 SECTOR_LABEL_PREFIX_RE = re.compile(r"^С\d+\s+(?=Супервайзер|Супервизор|операторы)", re.IGNORECASE)
 
+# С 2026-10-02 та же метка "С1/С2/С3" стоит уже в самом ФИО сотрудника
+# ("ЗДР С2 Алиева Ш. А." вместо "ЗДР Алиева Ш. А."). ФИО — ключ связи
+# между неделями (коэффициент прошлой недели, дельты, история, ЗП-
+# корректировки): с меткой человек "терялся" и получал коэффициент по
+# умолчанию. Метка — отдельное слово "С"/"C" + цифры между пробелами
+# (инициалы "С." с точкой сюда не попадают) — срезается при разборе.
+FIO_SECTOR_TAG_RE = re.compile(r"\s+[СC]\d+(?=\s)")
+
 # Всё, кроме 4 "кол-во"-колонок (E/J/O/T) и 2 бонусных (ищутся по
 # суффиксу, см. BONUS075_SUFFIX/BONUS2_SUFFIX) — они необязательные, см. докстринг.
 _MANDATORY_COLUMNS = {
@@ -372,6 +380,8 @@ def parse_weekly_rating_excel(raw: bytes, supervisor_channels: dict[str, str] | 
                 current_peaks_pp_supervisor = None
                 current_peaks_uvelichiteli_supervisor = None
             continue
+
+        fio = FIO_SECTOR_TAG_RE.sub("", fio)
 
         if current_group_splits_region_uk:
             fio_upper = fio.upper()

@@ -154,8 +154,12 @@ def compute_weekly_rating(
                 r.scores["channel"] = place * channel_category.weight
 
         # 2. Обычные категории конструктора (1 обращение, время, % ошибок,
-        # любые кастомные) — независимы, обычный спортивный ранг.
-        apply_category_ranks(group_results, other_categories)
+        # любые кастомные) — независимы, обычный спортивный ранг. na_predicate
+        # передаём и сюда (не только в finalize_final_places ниже) — иначе
+        # 0 у Н/О сотрудника (нет данных, не было в линии) ранжировался бы
+        # как ЛУЧШИЙ результат для asc-категорий (время/контакт, % ошибок),
+        # см. docstring apply_category_ranks.
+        apply_category_ranks(group_results, other_categories, na_predicate)
 
         # 3. Тир ЛК — ПОСЛЕ канала: среднее для тиров Б/В использует уже
         # ФИНАЛЬНОЕ (не промежуточное) место по каналу из шага 1, циклической

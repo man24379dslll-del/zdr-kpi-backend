@@ -62,16 +62,40 @@ def rank_standard(values: list[float], value: float, direction: str) -> int:
     return better + 1
 
 
-def apply_category_ranks(results: list[EmployeeScore], categories: list[RatingCategory]) -> None:
+def apply_category_ranks(
+    results: list[EmployeeScore],
+    categories: list[RatingCategory],
+    na_predicate=None,
+) -> None:
     """Проставляет r.places[cat.key]/r.scores[cat.key] по обычному спортивному
     рангу для каждой категории. Общая часть, которую переиспользует как
     compute_ratings, так и services/weekly_rating.py (там она применяется
-    только к категориям, кроме 'lk' — та считается через tier_lk.py)."""
+    только к категориям, кроме 'lk' — та считается через tier_lk.py).
+
+    na_predicate: та же функция, что определяет Н/О для finalize_final_places
+    ниже (аналог naFn в JS scoreSlice, см. static/index.html). Если
+    передана — сотрудники, для которых na_predicate(r.raw) истинно, НЕ
+    участвуют в ранжировании наравне с остальными: их 0 (нет реальной
+    активности за период — не было в линии в этот день/неделю) иначе
+    выглядел бы "лучшим" результатом для asc-категорий (время/контакт,
+    % ошибок), обгоняя реальных исполнителей — реальный сбой на проде
+    (см. историю). Место такого сотрудника — ХУЖЕ любого из оценённых,
+    независимо от direction (для 'desc' 0 и так ранжируется последним —
+    исключение просто не меняет результат, для 'asc' — исправляет его).
+    Точный перенос JS rankAscDenseSkippingNa."""
     for cat in categories:
-        values = [r.raw.get(cat.source_column) or 0 for r in results]
+        if na_predicate:
+            evaluated = [r for r in results if not na_predicate(r.raw)]
+        else:
+            evaluated = results
+        values = [r.raw.get(cat.source_column) or 0 for r in evaluated]
+        worst_place = len(evaluated) + 1
         for r in results:
-            v = r.raw.get(cat.source_column) or 0
-            place = rank_standard(values, v, cat.direction)
+            if na_predicate and na_predicate(r.raw):
+                place = worst_place
+            else:
+                v = r.raw.get(cat.source_column) or 0
+                place = rank_standard(values, v, cat.direction)
             r.places[cat.key] = place
             r.scores[cat.key] = place * cat.weight
 
@@ -129,6 +153,6 @@ def compute_ratings(
     """
     active = [c for c in categories if c.enabled]
     results = [EmployeeScore(fio=row.get(fio_field, ""), raw=row) for row in employees]
-    apply_category_ranks(results, active)
+    apply_category_ranks(results, active, na_predicate)
     finalize_final_places(results, na_predicate, tie_break_field)
     return results

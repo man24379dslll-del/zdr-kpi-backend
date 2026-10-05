@@ -45,3 +45,47 @@ def test_na_excluded_from_final_place():
     assert by_fio["A"].final_place == 1
     assert by_fio["B"].is_na is True
     assert by_fio["B"].final_place is None
+
+
+def test_na_employee_with_zero_value_does_not_win_asc_category():
+    """Реальный сбой на проде: ОП, которых не было в линии в этот день
+    (0 обращений -> Н/О), получали место 1 по "время/контакт" (asc,
+    меньше = лучше) — 0 формально наименьшее число, но означает "нет
+    данных", а не "мгновенное обслуживание". Сотрудник Н/О должен
+    получать место ХУЖЕ любого реального исполнителя, а не 1-е."""
+    categories = [
+        RatingCategory(key="time", label="Время", source_column="time", weight=1, direction="asc"),
+    ]
+    employees = [
+        {"fio": "Реальный медленный", "c1_sum": 1000, "time": 20},
+        {"fio": "Реальный быстрый", "c1_sum": 1000, "time": 5},
+        {"fio": "Не было в линии", "c1_sum": 0, "time": 0},
+    ]
+    results = compute_ratings(employees, categories, na_predicate=lambda row: row["c1_sum"] == 0)
+    by_fio = {r.fio: r for r in results}
+
+    # Реальные исполнители ранжируются МЕЖДУ СОБОЙ, как будто "нулевого"
+    # сотрудника нет вообще — их места не сдвинуты его присутствием.
+    assert by_fio["Реальный быстрый"].places["time"] == 1
+    assert by_fio["Реальный медленный"].places["time"] == 2
+    # "Нулевой" — строго хуже обоих, а не 1-е место.
+    assert by_fio["Не было в линии"].places["time"] == 3
+
+
+def test_na_employee_does_not_shift_desc_category_either():
+    # Для "desc"-категорий 0 у Н/О и так естественно ранжируется хуже
+    # всех — исключение из пула не должно ничего ломать (тот же
+    # результат, что и раньше).
+    categories = [
+        RatingCategory(key="sales", label="Продажи", source_column="sales", weight=1, direction="desc"),
+    ]
+    employees = [
+        {"fio": "A", "c1_sum": 1000, "sales": 100},
+        {"fio": "B", "c1_sum": 1000, "sales": 50},
+        {"fio": "C", "c1_sum": 0, "sales": 0},
+    ]
+    results = compute_ratings(employees, categories, na_predicate=lambda row: row["c1_sum"] == 0)
+    by_fio = {r.fio: r for r in results}
+    assert by_fio["A"].places["sales"] == 1
+    assert by_fio["B"].places["sales"] == 2
+    assert by_fio["C"].places["sales"] == 3

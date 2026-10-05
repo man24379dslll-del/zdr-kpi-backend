@@ -1397,13 +1397,14 @@ function parseWorkbook(arrayBuffer){
   // перенос, тот же реальный сбой на проде). Срезаются сразу, до того как
   // название попадёт в group.supervisor.
   const SECTOR_LABEL_PREFIX_RE = /^С\d+\s+(?=Супервайзер|Супервизор|операторы)/i;
+  const FIO_SECTOR_TAG_RE = /\s+[СC]\d+(?=\s)/g;
 
   for(let r = 1; r < rows.length; r++){
     const row = rows[r];
     if(!row || row[0] === null || row[0] === undefined || row[0] === "") continue;
-    const fio = row[0].toString();
-    if(fio.startsWith("ГРУППА")){
-      const rawName = fio.replace("ГРУППА:","").trim().replace(SECTOR_LABEL_PREFIX_RE, "");
+    const fioRaw = row[0].toString();
+    if(fioRaw.startsWith("ГРУППА")){
+      const rawName = fioRaw.replace("ГРУППА:","").trim().replace(SECTOR_LABEL_PREFIX_RE, "");
       const isSpecial = REGION_UK_RE.test(rawName);
       current = { supervisor: rawName, employees: [], isRegionUK: isSpecial };
       groups.push(current);
@@ -1417,6 +1418,9 @@ function parseWorkbook(arrayBuffer){
       }
       continue;
     }
+    // Метка "С1/С2/С3" в самом ФИО ("ЗДР С2 Алиева Ш. А.") — точный перенос
+    // excel_parsing.py::FIO_SECTOR_TAG_RE, см. комментарий там.
+    const fio = fioRaw.replace(FIO_SECTOR_TAG_RE, "");
     if(!current) continue;
     // "Регион УК" / "ПП" / "Увеличители" — сборная группа из разных ролей:
     // ЗДР идёт в "Регион УК", ПП — в свою группу "ПП", Увеличители — в
@@ -1589,13 +1593,6 @@ async function buildChannelSettings(groups){
 // ---------- ranking helpers ----------
 function rankDesc(arr, v){ return arr.filter(x => x > v).length + 1; }
 function rankAsc(arr, v){ return arr.filter(x => x < v).length + 1; }
-// Плотный ранг (без пропусков): все с одинаковым значением получают одно место,
-// следующее по величине значение получает следующее место (не место+кол-во дублей).
-// Нужен для % ошибок, где часто много людей с 0% и обычный RANK давал бы разрыв в местах.
-function rankAscDense(arr, v){
-  const uniq = [...new Set(arr)].sort((a, b) => a - b);
-  return uniq.indexOf(v) + 1;
-}
 
 function channelFields(e, channel){
   return channel === "inet"
@@ -1789,12 +1786,26 @@ function computeTieredChannelPlaces(items){
   return places;
 }
 
+// Время/контакт и % ошибок — "asc" (меньше = лучше). 0 у Н/О сотрудника
+// (не было в линии в этот день/эту неделю — тот же naFn, что решает его
+// официальное место) означает НЕ "мгновенное обслуживание", а "нет
+// данных" — плоский плотный ранг по всем сотрудникам подряд отдал бы
+// такому сотруднику 1-е место, обгоняя реальных исполнителей (реальный
+// сбой на проде: ОП вне линии получали место 1 по времени/контакту — см.
+// историю). Ранжируем ТОЛЬКО среди тех, кто прошёл бы naFn=false — у Н/О
+// место ХУЖЕ любого из них (тот же приём, что и у тира В категории ЛК:
+// сдвиг за пределы группы реальных показателей, а не "0 = лучший").
+function rankAscDenseSkippingNa(items, valueFn, naFn){
+  const evaluated = items.filter(e => !naFn(e));
+  const uniq = [...new Set(evaluated.map(valueFn))].sort((a, b) => a - b);
+  const worst = uniq.length + 1;
+  return items.map(e => naFn(e) ? worst : uniq.indexOf(valueFn(e)) + 1);
+}
+
 function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategories, lkActiveFn, forceLk1){
   if(items.length === 0) return [];
   const active = activeCategories || { c1:true, lk:true, ch:true, time:true, errors:true };
   const c1pc = items.map(e=>e.c1_pc);
-  const time = items.map(e=>e.time);
-  const err  = items.map(e=>e.errors_pct);
 
   // Тир канала — считается ПЕРВЫМ и полностью самостоятельно (см.
   // docstring computeTieredChannelPlaces): не зависит от мест других
@@ -1813,14 +1824,20 @@ function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategorie
     chPlaces = items.map(e => rankDesc(chpc, channelOf(e).pc));
   }
 
-  // первый проход: остальные обычные категории (1 обращение, время, ошибки) — независимы
-  const pass1 = items.map((e, i) => {
+  // Канал разрешаем заранее (не только внутри pass1 ниже) — naFn нужен
+  // ДО построения времени/ошибок, а некоторым naFn (например, у "ПП"/
+  // "Увеличители") требуется уже готовый e.ch_sum.
+  const withChannel = items.map(e => {
     const ch = channelOf(e);
+    return {...e, ch_sum: ch.sum, ch_check: ch.check, ch_conv: ch.conv, ch_pc: ch.pc, ch_cards: ch.cards};
+  });
+  const timePlaces = rankAscDenseSkippingNa(withChannel, e => e.time, naFn);
+  const errorsPlaces = rankAscDenseSkippingNa(withChannel, e => e.errors_pct, naFn);
+
+  // первый проход: остальные обычные категории (1 обращение, время, ошибки) — независимы
+  const pass1 = withChannel.map((e, i) => {
     const c1_place = rankDesc(c1pc, e.c1_pc);
-    const time_place = rankAscDense(time, e.time);
-    const errors_place = rankAscDense(err, e.errors_pct);
-    return {...e, ch_sum: ch.sum, ch_check: ch.check, ch_conv: ch.conv, ch_pc: ch.pc, ch_cards: ch.cards,
-                  c1_place, ch_place: chPlaces[i], time_place, errors_place};
+    return {...e, c1_place, ch_place: chPlaces[i], time_place: timePlaces[i], errors_place: errorsPlaces[i]};
   });
 
   // Тир ЛК — ПОСЛЕ канала: среднее для тиров Б/В использует уже
