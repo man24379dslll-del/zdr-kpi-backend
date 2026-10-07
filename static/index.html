@@ -571,7 +571,7 @@
     </div>
 
     <div class="tab-panel" id="tab-sector2Groups">
-      <div class="sub" style="margin-bottom:16px;">4 группы супервайзеров Сектора №2 (Болотов, Владыкин, Гулуа, Потапова) вместе — то же, что видит руководитель сектора в своей "Моей группе".</div>
+      <div class="sub" style="margin-bottom:16px;">7 групп супервайзеров Сектора №2 (Болотов, Владыкин, Гулуа, Потапова, Оганесян, Никитина, Буряк) вместе — то же, что видит руководитель сектора в своей "Моей группе".</div>
       <div id="sector2GroupsContainer"></div>
     </div>
 
@@ -584,7 +584,7 @@
     </div>
 
     <div class="tab-panel" id="tab-sector2Supervisors">
-      <div class="sub" style="margin-bottom:16px;">Сравнение только 4 групп Сектора №2 (Болотов, Владыкин, Гулуа, Потапова) между собой — отдельно от общего рейтинга супервайзеров, т.к. у них другая формула баллов (ЛК не в счёт).</div>
+      <div class="sub" style="margin-bottom:16px;">Сравнение только 7 групп Сектора №2 (Болотов, Владыкин, Гулуа, Потапова, Оганесян, Никитина, Буряк) между собой — отдельно от общего рейтинга супервайзеров, т.к. у них другая формула баллов (ЛК не в счёт).</div>
       <div id="sector2SupervisorContainer"></div>
     </div>
 
@@ -714,7 +714,7 @@ function onLoggedIn(){
     $("openPayrollBtn").style.display = "none";
     $("openRequisitesBtn").style.display = "none";
     // Руководитель сектора — тот же аккаунт/RLS-механизм, что у обычного
-    // супервайзера (просто supervisor_names = все 4 группы сектора), только
+    // супервайзера (просто supervisor_names = все 7 групп сектора), только
     // заголовок меняем для ясности — "Моя группа" по названию не подходит,
     // когда групп сразу 4 (renderGroupBlocks выше это уже покажет блоками).
     const isSector2Head = profile.supervisor_names && profile.supervisor_names.length === SECTOR_2_SUPERVISORS.size
@@ -740,7 +740,7 @@ function onLoggedIn(){
     }
     $("pageTitle").textContent = isSector2Head ? "Сектор №2 — рейтинг" : isSector3Head ? "Сектор №3 — рейтинг" : "Моя группа — рейтинг";
     $("pageSub").textContent = isSector2Head
-      ? "Здесь показаны все 4 группы Сектора №2. Данные обновляет администратор/руководитель после загрузки очередного отчёта."
+      ? "Здесь показаны все 7 групп Сектора №2. Данные обновляет администратор/руководитель после загрузки очередного отчёта."
       : isSector3Head
       ? "Здесь показаны все 3 группы Сектора №3. Данные обновляет администратор/руководитель после загрузки очередного отчёта."
       : "Здесь показаны только сотрудники вашей группы. Данные обновляет администратор/руководитель после загрузки очередного отчёта.";
@@ -904,7 +904,7 @@ async function buildSupervisorViewer(){
       <div id="viewerContainer"></div>
     </div>
     <div class="tab-panel" id="tab-viewerSupervisors2">
-      <div class="sub" style="margin-bottom:16px;">Сравнение 4 групп Сектора №2 между собой — та же логика, что в общем расчёте (ЛК не в счёт, новички участвуют).</div>
+      <div class="sub" style="margin-bottom:16px;">Сравнение 7 групп Сектора №2 между собой — та же логика, что в общем расчёте (ЛК не в счёт, новички участвуют).</div>
       <div id="viewerSupervisorContainer2"></div>
     </div>
     <div class="tab-panel" id="tab-viewerSupervisors3">
@@ -1634,6 +1634,9 @@ const SECTOR_2_SUPERVISORS = new Set([
   "Супервайзер - Владыкин Сергей Александрович",
   "Супервайзер - Гулуа Анна Эдуардовна",
   "Супервайзер - Потапова Алина Дамировна",
+  "Супервайзер Оганесян Каринэ Кароевна",
+  "Супервайзер Никитина Елена Викторовна",
+  "Супервайзер Буряк Юлия Ивановна",
 ]);
 const SECTOR_2_LK_WEIGHT_EXCEPTIONS_FIO = new Set([
   "ЗДР ЛК Ремизов А. Г.",
@@ -1786,23 +1789,25 @@ function computeTieredChannelPlaces(items){
   return places;
 }
 
-// Время/контакт и % ошибок — "asc" (меньше = лучше). 0 у Н/О сотрудника
-// (не было в линии в этот день/эту неделю — тот же naFn, что решает его
-// официальное место) означает НЕ "мгновенное обслуживание", а "нет
-// данных" — плоский плотный ранг по всем сотрудникам подряд отдал бы
-// такому сотруднику 1-е место, обгоняя реальных исполнителей (реальный
-// сбой на проде: ОП вне линии получали место 1 по времени/контакту — см.
-// историю). Ранжируем ТОЛЬКО среди тех, кто прошёл бы naFn=false — у Н/О
-// место ХУЖЕ любого из них (тот же приём, что и у тира В категории ЛК:
-// сдвиг за пределы группы реальных показателей, а не "0 = лучший").
-function rankAscDenseSkippingNa(items, valueFn, naFn){
-  const evaluated = items.filter(e => !naFn(e));
+// Время/контакт и % ошибок — "asc" (меньше = лучше). 0 у сотрудника БЕЗ
+// активности (не было в линии: 0 обращений) означает НЕ "мгновенное
+// обслуживание", а "нет данных" — плотный ранг по всем подряд отдал бы
+// такому сотруднику 1-е место и сдвинул места реальных исполнителей
+// (реальный сбой на проде: ОП вне линии получали место 1 по времени/
+// контакту). Ранжируем ТОЛЬКО среди тех, у кого активность есть — у "нулевых"
+// место ХУЖЕ любого из них (тот же приём, что у тира В категории ЛК). Н/О по
+// СТАТУСУ (новичок, отпуск) сюда не относятся — у них данные настоящие.
+function rankAscDenseSkippingNoActivity(items, valueFn, noActivityFn){
+  const evaluated = items.filter(e => !noActivityFn(e));
   const uniq = [...new Set(evaluated.map(valueFn))].sort((a, b) => a - b);
   const worst = uniq.length + 1;
-  return items.map(e => naFn(e) ? worst : uniq.indexOf(valueFn(e)) + 1);
+  return items.map(e => noActivityFn(e) ? worst : uniq.indexOf(valueFn(e)) + 1);
 }
+const hasNoActivityMain = e => e.c1_sum === 0;
+const hasNoActivityPeaks = e => e.ch_sum === 0;
 
-function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategories, lkActiveFn, forceLk1){
+function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategories, lkActiveFn, forceLk1, noActivityFn){
+  noActivityFn = noActivityFn || hasNoActivityMain;
   if(items.length === 0) return [];
   const active = activeCategories || { c1:true, lk:true, ch:true, time:true, errors:true };
   const c1pc = items.map(e=>e.c1_pc);
@@ -1824,15 +1829,15 @@ function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategorie
     chPlaces = items.map(e => rankDesc(chpc, channelOf(e).pc));
   }
 
-  // Канал разрешаем заранее (не только внутри pass1 ниже) — naFn нужен
-  // ДО построения времени/ошибок, а некоторым naFn (например, у "ПП"/
-  // "Увеличители") требуется уже готовый e.ch_sum.
+  // Канал разрешаем заранее (не только внутри pass1 ниже) — noActivityFn
+  // нужен ДО построения времени/ошибок, а у "ПП"/"Увеличители" ему нужен
+  // уже готовый e.ch_sum.
   const withChannel = items.map(e => {
     const ch = channelOf(e);
     return {...e, ch_sum: ch.sum, ch_check: ch.check, ch_conv: ch.conv, ch_pc: ch.pc, ch_cards: ch.cards};
   });
-  const timePlaces = rankAscDenseSkippingNa(withChannel, e => e.time, naFn);
-  const errorsPlaces = rankAscDenseSkippingNa(withChannel, e => e.errors_pct, naFn);
+  const timePlaces = rankAscDenseSkippingNoActivity(withChannel, e => e.time, noActivityFn);
+  const errorsPlaces = rankAscDenseSkippingNoActivity(withChannel, e => e.errors_pct, noActivityFn);
 
   // первый проход: остальные обычные категории (1 обращение, время, ошибки) — независимы
   const pass1 = withChannel.map((e, i) => {
@@ -1906,7 +1911,7 @@ function computeMainRating(groups, prevCoeffMap, tierCoefficients){
     // — как раньше, isNaMain.
     const naFn = g.isPeaks ? isNaPeaks : (forceLk1 || isSector3) ? (e => !isNarrowSectorEvaluated(e)) : isNaMain;
     const lkActiveFn = e => !sector2ZeroesLk(g.supervisor, e.fio);
-    const scored = scoreSlice(g.employees, e => channelFields(e, channel), naFn, "c1_sum", true, active, lkActiveFn, forceLk1);
+    const scored = scoreSlice(g.employees, e => channelFields(e, channel), naFn, "c1_sum", true, active, lkActiveFn, forceLk1, g.isPeaks ? hasNoActivityPeaks : hasNoActivityMain);
     out.push(...scored.map(e => ({...e, supervisor: g.supervisor, channel, isRegionUK: !!g.isRegionUK, isPeaks: !!g.isPeaks})));
   }
   if(periodType === "week"){

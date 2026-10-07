@@ -152,7 +152,7 @@ def test_sector2_exception_and_regular_employee_in_same_group():
 def test_normal_group_is_unaffected_by_sector2_logic():
     # Контроль: обычная группа (не Сектор 2) — ЛК как всегда, независимо
     # от того, что ФИО сотрудника совпадает с одним из 3 исключений
-    # (исключение действует ТОЛЬКО внутри 4 групп Сектора 2).
+    # (исключение действует ТОЛЬКО внутри 7 групп Сектора 2).
     raw = _build_excel_bytes([
         _group_row("Супервайзер - Иванов И.И."),
         _row(EXCEPTION_FIO, 100, 50, 200, 20, 1),

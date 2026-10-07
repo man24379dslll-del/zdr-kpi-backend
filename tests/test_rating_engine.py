@@ -1,4 +1,4 @@
-from app.services.rating_engine import RatingCategory, compute_ratings
+from app.services.rating_engine import EmployeeScore, RatingCategory, apply_category_ranks, compute_ratings
 
 
 def test_basic_two_category_ranking():
@@ -47,45 +47,42 @@ def test_na_excluded_from_final_place():
     assert by_fio["B"].final_place is None
 
 
-def test_na_employee_with_zero_value_does_not_win_asc_category():
-    """Реальный сбой на проде: ОП, которых не было в линии в этот день
-    (0 обращений -> Н/О), получали место 1 по "время/контакт" (asc,
-    меньше = лучше) — 0 формально наименьшее число, но означает "нет
-    данных", а не "мгновенное обслуживание". Сотрудник Н/О должен
-    получать место ХУЖЕ любого реального исполнителя, а не 1-е."""
-    categories = [
-        RatingCategory(key="time", label="Время", source_column="time", weight=1, direction="asc"),
-    ]
-    employees = [
+def _scores(employees):
+    return [EmployeeScore(fio=e["fio"], raw=e) for e in employees]
+
+
+def test_no_activity_employee_with_zero_does_not_win_asc_category():
+    """Реальный сбой на проде: ОП, которых не было в линии (0 обращений),
+    получали место 1 по "время/контакт" (asc, меньше = лучше) — 0 формально
+    наименьшее число, но означает "нет данных". Такой сотрудник должен
+    получать место ХУЖЕ любого реального исполнителя, а места реальных не
+    должны сдвигаться его присутствием."""
+    categories = [RatingCategory(key="time", label="Время", source_column="time", weight=1, direction="asc")]
+    results = _scores([
         {"fio": "Реальный медленный", "c1_sum": 1000, "time": 20},
         {"fio": "Реальный быстрый", "c1_sum": 1000, "time": 5},
         {"fio": "Не было в линии", "c1_sum": 0, "time": 0},
-    ]
-    results = compute_ratings(employees, categories, na_predicate=lambda row: row["c1_sum"] == 0)
+    ])
+    apply_category_ranks(results, categories, lambda raw: raw["c1_sum"] == 0)
     by_fio = {r.fio: r for r in results}
-
-    # Реальные исполнители ранжируются МЕЖДУ СОБОЙ, как будто "нулевого"
-    # сотрудника нет вообще — их места не сдвинуты его присутствием.
     assert by_fio["Реальный быстрый"].places["time"] == 1
     assert by_fio["Реальный медленный"].places["time"] == 2
-    # "Нулевой" — строго хуже обоих, а не 1-е место.
     assert by_fio["Не было в линии"].places["time"] == 3
 
 
-def test_na_employee_does_not_shift_desc_category_either():
-    # Для "desc"-категорий 0 у Н/О и так естественно ранжируется хуже
-    # всех — исключение из пула не должно ничего ломать (тот же
-    # результат, что и раньше).
-    categories = [
-        RatingCategory(key="sales", label="Продажи", source_column="sales", weight=1, direction="desc"),
-    ]
-    employees = [
+def test_without_predicate_ranking_is_unchanged():
+    categories = [RatingCategory(key="time", label="Время", source_column="time", weight=1, direction="asc")]
+    results = _scores([{"fio": "A", "time": 5}, {"fio": "B", "time": 0}])
+    apply_category_ranks(results, categories)
+    assert {r.fio: r.places["time"] for r in results} == {"A": 2, "B": 1}
+
+
+def test_desc_category_unaffected_by_no_activity_exclusion():
+    categories = [RatingCategory(key="sales", label="Продажи", source_column="sales", weight=1, direction="desc")]
+    results = _scores([
         {"fio": "A", "c1_sum": 1000, "sales": 100},
         {"fio": "B", "c1_sum": 1000, "sales": 50},
         {"fio": "C", "c1_sum": 0, "sales": 0},
-    ]
-    results = compute_ratings(employees, categories, na_predicate=lambda row: row["c1_sum"] == 0)
-    by_fio = {r.fio: r for r in results}
-    assert by_fio["A"].places["sales"] == 1
-    assert by_fio["B"].places["sales"] == 2
-    assert by_fio["C"].places["sales"] == 3
+    ])
+    apply_category_ranks(results, categories, lambda raw: raw["c1_sum"] == 0)
+    assert {r.fio: r.places["sales"] for r in results} == {"A": 1, "B": 2, "C": 3}

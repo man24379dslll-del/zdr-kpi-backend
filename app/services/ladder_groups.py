@@ -17,7 +17,7 @@
     ЗП = (ставка_за_час × рабочее_время_ч + бонус075 + бонус2) × коэффициент_ПРОШЛОЙ_недели
 
 (если для человека нет данных за прошлую неделю — коэффициент = 1.0).
-Сектор №2 (4 группы, см. group_naming.SECTOR_2_SUPERVISORS) и Сектор №3
+Сектор №2 (7 групп, см. group_naming.SECTOR_2_SUPERVISORS) и Сектор №3
 (3 группы, group_naming.SECTOR_3_SUPERVISORS) — исключение из общего
 правила: не 10 тиров, а 5 (1.3...1.0, см. group_naming.
 SECTOR_2_TIER_COEFFICIENTS/SECTOR_3_TIER_COEFFICIENTS), по прямому

@@ -38,7 +38,7 @@ PEAKS_SCORE_KEYS), но не в сумме. Часовая ставка в фо�
 
 "Сектор №2" (4 обычные группы супервайзеров, см.
 group_naming.SECTOR_2_SUPERVISORS) — место по ЛК (lk_place) ВСЕГДА 1-е,
-для ВСЕХ сотрудников этих 4 групп (переопределяет обычный тир ЛК). В
+для ВСЕХ сотрудников этих 7 групп (переопределяет обычный тир ЛК). В
 total_score категория "ЛК" при этом входит только у 3 конкретных
 сотрудников-исключений (по точному ФИО, см.
 SECTOR_2_LK_WEIGHT_EXCEPTIONS_FIO) — у остальных вес 0, как и раньше, но
@@ -87,6 +87,16 @@ LK_TIER_PLACE_FIELDS = {
     "time": "time_place",
     "errors": "errors_place",
 }
+
+
+def _has_no_activity(raw: dict, supervisor_field: str) -> bool:
+    """Нет реальной активности за период: 0 обращений (у "ПП"/"Увеличители"
+    c1 структурно всегда 0 — для них сигнал 0 по каналу, тот же принцип,
+    что в excel_parsing.is_na_row). Только активностная часть Н/О — без
+    статуса новичка/отпуска."""
+    if PEAKS_GROUP_RE.search(raw.get(supervisor_field) or ""):
+        return raw.get("ch_sum") == 0
+    return raw.get("c1_sum") == 0
 
 
 def compute_weekly_rating(
@@ -154,12 +164,14 @@ def compute_weekly_rating(
                 r.scores["channel"] = place * channel_category.weight
 
         # 2. Обычные категории конструктора (1 обращение, время, % ошибок,
-        # любые кастомные) — независимы, обычный спортивный ранг. na_predicate
-        # передаём и сюда (не только в finalize_final_places ниже) — иначе
-        # 0 у Н/О сотрудника (нет данных, не было в линии) ранжировался бы
-        # как ЛУЧШИЙ результат для asc-категорий (время/контакт, % ошибок),
-        # см. docstring apply_category_ranks.
-        apply_category_ranks(group_results, other_categories, na_predicate)
+        # любые кастомные) — независимы, обычный спортивный ранг. Сотрудники
+        # БЕЗ активности (не было в линии) исключаются из пула — иначе их 0 по
+        # время/контакт и % ошибок ранжировался бы как ЛУЧШИЙ результат, см.
+        # docstring apply_category_ranks.
+        apply_category_ranks(
+            group_results, other_categories,
+            lambda raw: _has_no_activity(raw, supervisor_field),
+        )
 
         # 3. Тир ЛК — ПОСЛЕ канала: среднее для тиров Б/В использует уже
         # ФИНАЛЬНОЕ (не промежуточное) место по каналу из шага 1, циклической

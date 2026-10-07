@@ -135,3 +135,25 @@ def test_restrict_to_sector_pair_keeps_both_sectors_drops_everyone_else():
 
 def test_restrict_to_sector_pair_empty_input():
     assert restrict_to_sector_pair([]) == []
+
+
+def test_sector2_has_seven_groups_including_newly_added():
+    # Оганесян/Никитина/Буряк добавлены в Сектор 2 позже; в файле их группы
+    # называются БЕЗ дефиса после "Супервайзер".
+    assert len(SECTOR_2_SUPERVISORS) == 7
+    for name in (
+        "Супервайзер Оганесян Каринэ Кароевна",
+        "Супервайзер Никитина Елена Викторовна",
+        "Супервайзер Буряк Юлия Ивановна",
+    ):
+        assert name in SECTOR_2_SUPERVISORS
+        assert name not in SECTOR_3_SUPERVISORS
+
+
+def test_is_sector2_head_requires_all_seven_groups():
+    # Профиль руководителя сектора со старыми 4 группами больше не
+    # считается руководителем — профиль нужно обновить на все 7.
+    old_four = [s for s in SECTOR2_LIST if " - " in s]
+    assert len(old_four) == 4
+    assert _user("supervisor", old_four).is_sector2_head is False
+    assert _user("supervisor", SECTOR2_LIST).is_sector2_head is True

@@ -40,7 +40,7 @@ class CurrentUser:
     @property
     def is_sector2_head(self) -> bool:
         """Руководитель Сектора №2 — supervisor с supervisor_names, РОВНО
-        совпадающим с 4 группами Сектора 2 (см. group_naming.SECTOR_2_SUPERVISORS,
+        совпадающим с 7 группами Сектора 2 (см. group_naming.SECTOR_2_SUPERVISORS,
         аккаунт Бочиус Е.М.). По прямому запросу заказчика получает
         просмотр (не запись/редактирование) Ведомости ЗП/Дашбордов,
         ограниченный данными Сектора 2 — см. routers/payroll.py."""

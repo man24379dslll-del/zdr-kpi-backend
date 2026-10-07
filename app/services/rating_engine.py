@@ -65,33 +65,32 @@ def rank_standard(values: list[float], value: float, direction: str) -> int:
 def apply_category_ranks(
     results: list[EmployeeScore],
     categories: list[RatingCategory],
-    na_predicate=None,
+    no_activity_predicate=None,
 ) -> None:
     """Проставляет r.places[cat.key]/r.scores[cat.key] по обычному спортивному
     рангу для каждой категории. Общая часть, которую переиспользует как
     compute_ratings, так и services/weekly_rating.py (там она применяется
     только к категориям, кроме 'lk' — та считается через tier_lk.py).
 
-    na_predicate: та же функция, что определяет Н/О для finalize_final_places
-    ниже (аналог naFn в JS scoreSlice, см. static/index.html). Если
-    передана — сотрудники, для которых na_predicate(r.raw) истинно, НЕ
-    участвуют в ранжировании наравне с остальными: их 0 (нет реальной
-    активности за период — не было в линии в этот день/неделю) иначе
-    выглядел бы "лучшим" результатом для asc-категорий (время/контакт,
-    % ошибок), обгоняя реальных исполнителей — реальный сбой на проде
-    (см. историю). Место такого сотрудника — ХУЖЕ любого из оценённых,
-    независимо от direction (для 'desc' 0 и так ранжируется последним —
-    исключение просто не меняет результат, для 'asc' — исправляет его).
-    Точный перенос JS rankAscDenseSkippingNa."""
+    no_activity_predicate: функция(raw) -> bool — "у сотрудника нет реальной
+    активности за период" (0 обращений; не было в линии). Только такие
+    сотрудники исключаются из пула ранжирования и получают место ХУЖЕ любого
+    из оценённых: их 0 по время/контакт или % ошибок — это "нет данных", а
+    не "мгновенное обслуживание", и иначе давал бы 1-е место для
+    asc-категорий, сдвигая места реальных исполнителей (реальный сбой на
+    проде). Н/О по статусу (новичок, отпуск) сюда НЕ относятся — у них
+    данные настоящие, они остаются в пуле как раньше. Для 'desc' 0 и так
+    ранжируется последним — результат не меняется. Точный перенос JS
+    rankAscDenseSkippingNa (static/index.html::scoreSlice)."""
     for cat in categories:
-        if na_predicate:
-            evaluated = [r for r in results if not na_predicate(r.raw)]
+        if no_activity_predicate:
+            evaluated = [r for r in results if not no_activity_predicate(r.raw)]
         else:
             evaluated = results
         values = [r.raw.get(cat.source_column) or 0 for r in evaluated]
         worst_place = len(evaluated) + 1
         for r in results:
-            if na_predicate and na_predicate(r.raw):
+            if no_activity_predicate and no_activity_predicate(r.raw):
                 place = worst_place
             else:
                 v = r.raw.get(cat.source_column) or 0
@@ -153,6 +152,6 @@ def compute_ratings(
     """
     active = [c for c in categories if c.enabled]
     results = [EmployeeScore(fio=row.get(fio_field, ""), raw=row) for row in employees]
-    apply_category_ranks(results, active, na_predicate)
+    apply_category_ranks(results, active)
     finalize_final_places(results, na_predicate, tie_break_field)
     return results
