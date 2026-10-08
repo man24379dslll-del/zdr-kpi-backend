@@ -1,11 +1,11 @@
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.config import settings
-from app.routers import categories, dashboards, ladder_tiers, payroll, ratings, shifts, supervisor_channels
+from app.routers import categories, dashboards, external, ladder_tiers, payroll, ratings, shifts, supervisor_channels
 
 STATIC_DIR = Path(__file__).parent.parent / "static"
 
@@ -19,8 +19,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+
+@app.middleware("http")
+async def api_key_only_for_external(request: Request, call_next):
+    """Внешний ключ (X-API-Key) открывает только /external/* — на любом
+    другом пути запрос с этим заголовком отклоняется (403)."""
+    if "x-api-key" in request.headers and not request.url.path.startswith("/external/"):
+        return JSONResponse(status_code=403, content={"detail": "API-ключ действует только на /external/*"})
+    return await call_next(request)
+
+
 app.include_router(categories.router)
 app.include_router(dashboards.router)
+app.include_router(external.router)
 app.include_router(ladder_tiers.router)
 app.include_router(payroll.router)
 app.include_router(ratings.router)

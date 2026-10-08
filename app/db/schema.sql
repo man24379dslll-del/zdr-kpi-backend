@@ -308,3 +308,35 @@ create policy "payroll_markers_select" on payroll_employee_markers
 drop policy if exists "payroll_markers_write" on payroll_employee_markers;
 create policy "payroll_markers_write" on payroll_employee_markers
   for all using (is_admin_or_manager()) with check (is_admin_or_manager());
+
+-- ============================================================
+-- Внешние API-ключи (только чтение, GET /external/*)
+-- ============================================================
+-- Аффилейт-направление Force читает данные операторов по заголовку
+-- X-API-Key (см. app/routers/external.py). В базе хранится ТОЛЬКО SHA-256
+-- хэш ключа, сам ключ показывается один раз при создании
+-- (scripts/create_api_key.py печатает ключ и готовый INSERT).
+-- Отзыв: update api_keys set revoked_at = now() where id = '...';
+-- allowed_ips — необязательный список адресов/подсетей ('1.2.3.4',
+-- '10.0.0.0/24'); пустой/null — без ограничения по IP.
+create table if not exists api_keys (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  key_hash text not null unique,
+  scope text not null default 'operators_read' check (scope in ('operators_read')),
+  allowed_ips text[],
+  created_at timestamptz not null default now(),
+  revoked_at timestamptz,
+  last_used_at timestamptz
+);
+
+alter table api_keys enable row level security;
+
+-- Только admin (service_role обходит RLS — бэкенд ходит им).
+drop policy if exists "api_keys_admin" on api_keys;
+create policy "api_keys_admin" on api_keys
+  for all using (
+    exists (select 1 from user_profiles p where p.id = auth.uid() and p.role = 'admin')
+  ) with check (
+    exists (select 1 from user_profiles p where p.id = auth.uid() and p.role = 'admin')
+  );
