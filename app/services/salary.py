@@ -56,6 +56,13 @@ group_naming.PEAKS_GROUP_RE, supervisor заканчивается на " [Пи�
 work_hours для этих групп игнорируется целиком, даже если колонка
 заполнена. Для ВСЕХ остальных групп (включая "Регион УК") формула
 обычная, с часовой ставкой.
+
+ИСКЛЮЧЕНИЕ — группы с каналом "Интернет" (employee["channel"] == "inet",
+настройка supervisor_channels; по прямому запросу заказчика): итоговая
+ЗП = (week_base + (бонус075 + бонус2) × coefficient) × 20%
+(INET_SALARY_FACTOR) — то есть ЗП обычной формулы умножается на 0.2 целиком,
+включая часовую ставку. work_hours по-прежнему обязателен (нет — salary None).
+ПП/Увеличители (у них нет часовой ставки) этого правила не касаются.
 """
 from __future__ import annotations
 
@@ -64,6 +71,8 @@ from app.services.rating_engine import EmployeeScore
 
 DEFAULT_MONTHLY_BASE_RATE = 40000
 DEFAULT_HOURS_NORM = 160
+INET_SALARY_FACTOR = 0.2
+INET_CHANNEL = "inet"
 
 
 def _resolve_coefficient(r: EmployeeScore, prev_coefficient_by_fio: dict[str, float]) -> float:
@@ -111,3 +120,5 @@ def assign_salary(
             continue
         week_base = hourly_rate * work_hours
         r.salary = week_base + (bonus075 + bonus2) * coefficient
+        if r.raw.get("channel") == INET_CHANNEL:
+            r.salary *= INET_SALARY_FACTOR

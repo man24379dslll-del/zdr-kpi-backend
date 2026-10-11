@@ -192,3 +192,37 @@ def test_peaks_group_respects_na_coefficient_floor():
     ]
     assign_salary(results, {"Отпускник Пиков": 0.7}, hours_norm=160, monthly_base_rate=40000)
     assert results[0].salary == (200 + 300) * 1.0
+
+
+def _inet(fio, work_hours, bonus075=0, bonus2=0, channel="inet", supervisor="Супервайзер - Иванов И.И."):
+    return EmployeeScore(
+        fio=fio,
+        raw={"work_hours": work_hours, "bonus075": bonus075, "bonus2": bonus2,
+             "supervisor": supervisor, "channel": channel},
+    )
+
+
+def test_inet_group_salary_is_20_percent_of_full_formula():
+    # (ставка×часы + (оформл. + достав.) × коэфф) × 20%
+    results = [_inet("И", work_hours=40, bonus075=100, bonus2=50)]
+    assign_salary(results, {"И": 1.4}, hours_norm=160, monthly_base_rate=40000)
+    expected = ((40000 / 160) * 40 + (100 + 50) * 1.4) * 0.2
+    assert abs(results[0].salary - expected) < 1e-9
+
+
+def test_radio_group_salary_unchanged():
+    results = [_inet("Р", work_hours=40, bonus075=100, bonus2=50, channel="radio")]
+    assign_salary(results, {"Р": 1.4}, hours_norm=160, monthly_base_rate=40000)
+    assert results[0].salary == (40000 / 160) * 40 + (100 + 50) * 1.4
+
+
+def test_inet_without_work_hours_is_still_none():
+    results = [_inet("И", work_hours=None, bonus075=100)]
+    assign_salary(results, {}, hours_norm=160, monthly_base_rate=40000)
+    assert results[0].salary is None
+
+
+def test_inet_factor_does_not_apply_to_peaks_groups():
+    results = [_inet("П", work_hours=40, bonus075=100, bonus2=50, supervisor="операторы без супервизора [Пики-ПП]")]
+    assign_salary(results, {"П": 1.4}, hours_norm=160, monthly_base_rate=40000)
+    assert results[0].salary == (100 + 50) * 1.4
