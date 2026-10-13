@@ -143,3 +143,24 @@ def test_fio_without_tag_and_initial_s_are_unaffected():
     ])
     employees = parse_weekly_rating_excel(raw)
     assert employees[0]["fio"] == "ЗДР Сидоров С. С."
+
+
+def test_sector_label_stripped_and_typo_fixed_for_erokhina_group():
+    # Реальная группа из файла: метка "С3" + опечатка "Супервазйер".
+    raw = _build_excel_bytes([
+        _group_row("С3 Супервазйер Ерохина Эльвира Евгеньевна"),
+        _row("Сотрудник Первый"),
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    assert employees[0]["supervisor"] == "Супервайзер Ерохина Эльвира Евгеньевна"
+
+
+def test_typo_fixed_even_without_sector_label():
+    # Если заказчик уберёт метку, но опечатка останется (или наоборот) —
+    # название группы всё равно одно и то же.
+    raw = _build_excel_bytes([
+        _group_row("Супервазйер Ерохина Эльвира Евгеньевна"),
+        _row("Сотрудник Первый"),
+    ])
+    employees = parse_weekly_rating_excel(raw)
+    assert employees[0]["supervisor"] == "Супервайзер Ерохина Эльвира Евгеньевна"

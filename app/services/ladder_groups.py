@@ -18,7 +18,7 @@
 
 (если для человека нет данных за прошлую неделю — коэффициент = 1.0).
 Сектор №2 (8 групп, см. group_naming.SECTOR_2_SUPERVISORS) и Сектор №3
-(3 группы, group_naming.SECTOR_3_SUPERVISORS) — исключение из общего
+(5 групп, group_naming.SECTOR_3_SUPERVISORS) — исключение из общего
 правила: не 10 тиров, а 5 (1.3...1.0, см. group_naming.
 SECTOR_2_TIER_COEFFICIENTS/SECTOR_3_TIER_COEFFICIENTS), по прямому
 запросу заказчика. Настраиваемая через /ladder-tiers таблица

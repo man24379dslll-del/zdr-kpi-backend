@@ -158,3 +158,17 @@ def test_is_sector2_head_requires_all_groups():
     assert len(old_four) == 4
     assert _user("supervisor", old_four).is_sector2_head is False
     assert _user("supervisor", SECTOR2_LIST).is_sector2_head is True
+
+
+def test_sector3_has_five_groups_including_newly_added():
+    assert len(SECTOR_3_SUPERVISORS) == 5
+    for name in ("Супервайзер Конакова Алиса Дмитриевна", "Супервайзер Ерохина Эльвира Евгеньевна"):
+        assert name in SECTOR_3_SUPERVISORS
+        assert name not in SECTOR_2_SUPERVISORS
+
+
+def test_is_sector3_head_requires_all_five_groups():
+    old_three = [s for s in SECTOR3_LIST if " - " in s]
+    assert len(old_three) == 3
+    assert _user("supervisor", old_three).is_sector3_head is False
+    assert _user("supervisor", SECTOR3_LIST).is_sector3_head is True

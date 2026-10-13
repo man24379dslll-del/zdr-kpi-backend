@@ -720,7 +720,7 @@ function onLoggedIn(){
     const isSector2Head = profile.supervisor_names && profile.supervisor_names.length === SECTOR_2_SUPERVISORS.size
       && profile.supervisor_names.every(s => SECTOR_2_SUPERVISORS.has(s));
     // Руководитель Сектора 3 (Сорокин Н.) — тот же принцип, что у Сектора 2
-    // выше, только 3 группы вместо 4. См. group_naming.SECTOR_3_SUPERVISORS.
+    // выше, только его группы (не 8). См. group_naming.SECTOR_3_SUPERVISORS.
     const isSector3Head = profile.supervisor_names && profile.supervisor_names.length === SECTOR_3_SUPERVISORS.size
       && profile.supervisor_names.every(s => SECTOR_3_SUPERVISORS.has(s));
     // На profile — чтобы buildSupervisorViewer (и другой код) мог
@@ -742,7 +742,7 @@ function onLoggedIn(){
     $("pageSub").textContent = isSector2Head
       ? "Здесь показаны все 8 групп Сектора №2. Данные обновляет администратор/руководитель после загрузки очередного отчёта."
       : isSector3Head
-      ? "Здесь показаны все 3 группы Сектора №3. Данные обновляет администратор/руководитель после загрузки очередного отчёта."
+      ? "Здесь показаны все 5 групп Сектора №3. Данные обновляет администратор/руководитель после загрузки очередного отчёта."
       : "Здесь показаны только сотрудники вашей группы. Данные обновляет администратор/руководитель после загрузки очередного отчёта.";
     buildSupervisorViewer();
   } else {
@@ -908,7 +908,7 @@ async function buildSupervisorViewer(){
       <div id="viewerSupervisorContainer2"></div>
     </div>
     <div class="tab-panel" id="tab-viewerSupervisors3">
-      <div class="sub" style="margin-bottom:16px;">Сравнение 3 групп Сектора №3 между собой — та же логика, что в общем расчёте (новички участвуют).</div>
+      <div class="sub" style="margin-bottom:16px;">Сравнение 5 групп Сектора №3 между собой — та же логика, что в общем расчёте (новички участвуют).</div>
       <div id="viewerSupervisorContainer3"></div>
     </div>
   ` : `<div id="viewerContainer"></div>`;
@@ -1396,7 +1396,9 @@ function parseWorkbook(arrayBuffer){
   // app/services/excel_parsing.py::SECTOR_LABEL_PREFIX_RE — точный
   // перенос, тот же реальный сбой на проде). Срезаются сразу, до того как
   // название попадёт в group.supervisor.
-  const SECTOR_LABEL_PREFIX_RE = /^С\d+\s+(?=Супервайзер|Супервизор|операторы)/i;
+  const SECTOR_LABEL_PREFIX_RE = /^С\d+\s+(?=Супер|операторы)/i;
+  // Опечатка в файле "Супервазйер" — исправляем (тот же перенос normalize_group_name).
+  const SUPERVISOR_WORD_TYPO_RE = /^Супервазйер/i;
   const FIO_SECTOR_TAG_RE = /\s+[СC]\d+(?=\s)/g;
 
   for(let r = 1; r < rows.length; r++){
@@ -1404,7 +1406,7 @@ function parseWorkbook(arrayBuffer){
     if(!row || row[0] === null || row[0] === undefined || row[0] === "") continue;
     const fioRaw = row[0].toString();
     if(fioRaw.startsWith("ГРУППА")){
-      const rawName = fioRaw.replace("ГРУППА:","").trim().replace(SECTOR_LABEL_PREFIX_RE, "");
+      const rawName = fioRaw.replace("ГРУППА:","").trim().replace(SECTOR_LABEL_PREFIX_RE, "").replace(SUPERVISOR_WORD_TYPO_RE, "Супервайзер");
       const isSpecial = REGION_UK_RE.test(rawName);
       current = { supervisor: rawName, employees: [], isRegionUK: isSpecial };
       groups.push(current);
@@ -1648,7 +1650,7 @@ function sector2ZeroesLk(supervisor, fio){
   return SECTOR_2_SUPERVISORS.has(supervisor) && !SECTOR_2_LK_WEIGHT_EXCEPTIONS_FIO.has(fio);
 }
 
-// Сектор №3 (3 обычные группы, отдельный руководитель — Сорокин Никита).
+// Сектор №3 (5 обычных групп, отдельный руководитель — Сорокин Никита).
 // В ОТЛИЧИЕ от Сектора 2: ЛК считается ОБЫЧНО (вес 1.5, без исключений,
 // без форсированного 1-го места) — по прямому запросу заказчика урезание
 // веса ЛК для Сектора 3 не нужно. Общее с Сектором 2 — только 2 правила:
@@ -1660,6 +1662,8 @@ const SECTOR_3_SUPERVISORS = new Set([
   "Супервайзер - Курилова Марина Вадимовна",
   "Супервайзер - Бровкова Елена Александровна",
   "Супервайзер - Басараб Станислав Федорович",
+  "Супервайзер Конакова Алиса Дмитриевна",
+  "Супервайзер Ерохина Эльвира Евгеньевна",
 ]);
 
 // Тиры для места ЛК:

@@ -175,7 +175,19 @@ GROUP_ROW_PREFIX = "группа:"
 # см. историю). Срезаются сразу при разборе строки "ГРУППА: ...", ДО
 # того как название попадёт в kpi_ratings.supervisor — сама пометка
 # нигде дальше не нужна.
-SECTOR_LABEL_PREFIX_RE = re.compile(r"^С\d+\s+(?=Супервайзер|Супервизор|операторы)", re.IGNORECASE)
+SECTOR_LABEL_PREFIX_RE = re.compile(r"^С\d+\s+(?=Супер|операторы)", re.IGNORECASE)
+# Опечатка в исходном файле: "С3 Супервазйер Ерохина ..." (вместо
+# "Супервайзер") — без исправления группа не совпадала бы с аккаунтом/
+# сектором, а исправление заказчиком в файле позже не должно ломать связь.
+SUPERVISOR_WORD_TYPO_RE = re.compile(r"^Супервазйер", re.IGNORECASE)
+
+
+def normalize_group_name(name: str) -> str:
+    """Название группы после "ГРУППА:" — без метки сектора и с исправленной
+    опечаткой в слове "Супервайзер"."""
+    name = SECTOR_LABEL_PREFIX_RE.sub("", name)
+    return SUPERVISOR_WORD_TYPO_RE.sub("Супервайзер", name)
+
 
 # С 2026-10-02 та же метка "С1/С2/С3" стоит уже в самом ФИО сотрудника
 # ("ЗДР С2 Алиева Ш. А." вместо "ЗДР Алиева Ш. А."). ФИО — ключ связи
@@ -371,7 +383,7 @@ def parse_weekly_rating_excel(raw: bytes, supervisor_channels: dict[str, str] | 
         if not fio:
             continue
         if fio.lower().startswith(GROUP_ROW_PREFIX):
-            current_supervisor = SECTOR_LABEL_PREFIX_RE.sub("", fio[len(GROUP_ROW_PREFIX):].strip())
+            current_supervisor = normalize_group_name(fio[len(GROUP_ROW_PREFIX):].strip())
             current_group_splits_region_uk = bool(REGION_UK_GROUP_RE.search(current_supervisor))
             if current_group_splits_region_uk:
                 current_peaks_pp_supervisor = current_supervisor + PEAKS_PP_SUFFIX

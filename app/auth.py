@@ -49,7 +49,7 @@ class CurrentUser:
     @property
     def is_sector3_head(self) -> bool:
         """Руководитель Сектора №3 — тот же принцип, что is_sector2_head
-        выше, но для 3 групп Сектора 3 (см. group_naming.SECTOR_3_SUPERVISORS,
+        выше, но для 5 групп Сектора 3 (см. group_naming.SECTOR_3_SUPERVISORS,
         аккаунт Сорокина Н.)."""
         return self.role == "supervisor" and bool(self.supervisor_names) and set(self.supervisor_names) == SECTOR_3_SUPERVISORS
 
