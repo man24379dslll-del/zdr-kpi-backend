@@ -202,11 +202,11 @@ def _inet(fio, work_hours, bonus075=0, bonus2=0, channel="inet", supervisor="С�
     )
 
 
-def test_inet_group_salary_is_20_percent_of_full_formula():
-    # (ставка×часы + (оформл. + достав.) × коэфф) × 20%
+def test_inet_group_salary_has_20_percent_markup():
+    # (ставка×часы + (оформл. + достав.) × коэфф) × 1.2
     results = [_inet("И", work_hours=40, bonus075=100, bonus2=50)]
     assign_salary(results, {"И": 1.4}, hours_norm=160, monthly_base_rate=40000)
-    expected = ((40000 / 160) * 40 + (100 + 50) * 1.4) * 0.2
+    expected = ((40000 / 160) * 40 + (100 + 50) * 1.4) * 1.2
     assert abs(results[0].salary - expected) < 1e-9
 
 

@@ -59,9 +59,9 @@ work_hours для этих групп игнорируется целиком, �
 
 ИСКЛЮЧЕНИЕ — группы с каналом "Интернет" (employee["channel"] == "inet",
 настройка supervisor_channels; по прямому запросу заказчика): итоговая
-ЗП = (week_base + (бонус075 + бонус2) × coefficient) × 20%
-(INET_SALARY_FACTOR) — то есть ЗП обычной формулы умножается на 0.2 целиком,
-включая часовую ставку. work_hours по-прежнему обязателен (нет — salary None).
+ЗП = (week_base + (бонус075 + бонус2) × coefficient) × 1.2
+(INET_SALARY_FACTOR) — то есть к ЗП обычной формулы добавляется надбавка 20%
+целиком, включая часовую ставку. work_hours по-прежнему обязателен (нет — salary None).
 ПП/Увеличители (у них нет часовой ставки) этого правила не касаются.
 """
 from __future__ import annotations
@@ -71,7 +71,7 @@ from app.services.rating_engine import EmployeeScore
 
 DEFAULT_MONTHLY_BASE_RATE = 40000
 DEFAULT_HOURS_NORM = 160
-INET_SALARY_FACTOR = 0.2
+INET_SALARY_FACTOR = 1.2
 INET_CHANNEL = "inet"
 
 
