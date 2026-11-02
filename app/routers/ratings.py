@@ -9,7 +9,7 @@ HTTP-обвязка (приём файла, авторизация, чтение
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
+from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, status
 
 from app.auth import CurrentUser, get_current_user
 from app.services.excel_parsing import is_na_row, parse_weekly_rating_excel
@@ -18,6 +18,12 @@ from app.services.payroll import is_weekly_period_label
 from app.services.periods import find_previous_period
 from app.services.rating_engine import RatingCategory
 from app.services.ratings_repository import maybe_save_weekly_rating, save_weekly_rating
+from app.services.ratings_upload import (
+    UploadValidationError,
+    find_previous_upload,
+    period_type_of,
+    sanitize_rows,
+)
 from app.services.salary import DEFAULT_HOURS_NORM, DEFAULT_MONTHLY_BASE_RATE, assign_salary
 from app.services.weekly_rating import compute_weekly_rating
 from app.supabase_client import as_service, as_user
@@ -41,6 +47,110 @@ async def get_ratings_by_upload(upload_id: str, user: CurrentUser = Depends(get_
         return restrict_to_sector_pair(rows)
     client = as_user(user.access_token)
     return await client.get("kpi_ratings", params={"upload_id": f"eq.{upload_id}", "select": "*"})
+
+
+def _require_sector_head(user: CurrentUser) -> None:
+    if not (user.is_sector2_head or user.is_sector3_head):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Загрузка отчёта доступна только администратору и руководителям секторов",
+        )
+
+
+async def _all_rows(client, table: str, params: dict) -> list[dict]:
+    """PostgREST отдаёт максимум 1000 строк за запрос — выбираем страницами."""
+    out: list[dict] = []
+    offset = 0
+    while True:
+        page = await client.get(table, params={**params, "limit": "1000", "offset": str(offset)})
+        out.extend(page)
+        if len(page) < 1000:
+            return out
+        offset += 1000
+
+
+@router.get("/upload-context")
+async def get_upload_context(period_label: str, user: CurrentUser = Depends(get_current_user)):
+    """Контекст загрузки отчёта руководителем сектора: есть ли уже загрузка
+    за этот период (повторная блокируется — иначе ЗП в Ведомости удвоилась
+    бы) и данные ПРЕДЫДУЩЕГО периода ПО ВСЕЙ КОМПАНИИ (место/баллы/
+    коэффициент по ФИО) — они нужны браузеру для коэффициента прошлой недели
+    в ЗП и дельт, а RLS урезает его собственное чтение до своих групп (иначе
+    у всех остальных коэффициент стал бы 1.0 и записался бы в базу).
+    Возвращаются только поля, нужные для этого (см. buildPrevMap)."""
+    _require_sector_head(user)
+    period_type = period_type_of(period_label)
+    if period_type is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Некорректная метка периода")
+    client = as_service()
+    uploads = await _all_rows(
+        client, "kpi_uploads",
+        {"select": "id,period_label,uploaded_at,source_filename", "order": "uploaded_at.desc"},
+    )
+    existing = next((u for u in uploads if u.get("period_label") == period_label), None)
+    prev = find_previous_upload(uploads, period_label, period_type)
+    prev_rows: list[dict] = []
+    if prev:
+        prev_rows = await _all_rows(client, "kpi_ratings", {
+            "upload_id": f"eq.{prev['id']}",
+            "select": "fio,final_place,total_score,coefficient,is_na,is_novice",
+            "order": "id.asc",
+        })
+    return {
+        "existing": existing,
+        "prev_upload": {"id": prev["id"], "period_label": prev["period_label"]} if prev else None,
+        "prev_rows": prev_rows,
+    }
+
+
+@router.post("/save-computed")
+async def save_computed_ratings(
+    payload: dict = Body(...),
+    user: CurrentUser = Depends(get_current_user),
+):
+    """Запись рассчитанного в браузере рейтинга руководителем сектора
+    (Бочиус/Сорокин) — у него нет прав записи в Supabase напрямую. Строки
+    чистятся по белому списку колонок (services/ratings_upload.py).
+    Повторная загрузка того же period_label блокируется (409). При ошибке
+    записи созданная загрузка удаляется целиком — частичных записей не
+    остаётся. Видит руководитель после этого только данные своего сектора
+    (restrict_to_sector_pair), как и раньше."""
+    _require_sector_head(user)
+    period_label = payload.get("period_label")
+    if period_type_of(period_label) is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Некорректная метка периода")
+    source_filename = payload.get("source_filename")
+    if source_filename is not None and (not isinstance(source_filename, str) or len(source_filename) > 300):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Некорректное имя файла")
+    try:
+        rows = sanitize_rows(payload.get("rows"))
+    except UploadValidationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+
+    client = as_service()
+    existing = await client.get(
+        "kpi_uploads",
+        params={"period_label": f"eq.{period_label}", "select": "id", "limit": "1"},
+    )
+    if existing:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"За период {period_label} отчёт уже загружен — повторная загрузка заблокирована",
+        )
+
+    created = await client.post("kpi_uploads", [{"period_label": period_label, "source_filename": source_filename}])
+    upload_id = created[0]["id"]
+    try:
+        for i in range(0, len(rows), 200):
+            chunk = [{**r, "upload_id": upload_id} for r in rows[i:i + 200]]
+            await client.post("kpi_ratings", chunk, prefer="return=minimal")
+    except Exception:
+        try:
+            await client.delete(f"kpi_uploads?id=eq.{upload_id}")
+        except Exception:
+            pass
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Не удалось записать рейтинг, загрузка отменена")
+    return {"upload_id": upload_id, "rows": len(rows)}
 
 
 async def _load_categories(user: CurrentUser) -> list[RatingCategory]:

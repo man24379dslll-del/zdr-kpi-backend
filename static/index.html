@@ -168,6 +168,16 @@
     font-family:var(--sans);font-weight:600;cursor:pointer;border-bottom:2.5px solid transparent;margin-bottom:-1px;
   }
   .dash-tab-btn.active{color:var(--accent-text);border-bottom-color:var(--accent);}
+  /* Руководитель сектора после расчёта видит только сводку и кнопку записи —
+     полные таблицы всех групп файла не показываем (видит только свой сектор). */
+  #resultsPanel.sector-upload-mode .stats,
+  #resultsPanel.sector-upload-mode #editChannelsBtn,
+  #resultsPanel.sector-upload-mode .tab-bar,
+  #resultsPanel.sector-upload-mode .tab-panel,
+  #resultsPanel.sector-upload-mode #exportBtn,
+  #resultsPanel.sector-upload-mode #compareBackendBtn,
+  #resultsPanel.sector-upload-mode #backendCompareLog,
+  #resultsPanel.sector-upload-mode #backendCompareContainer{display:none !important;}
   .dash-tab-btn:hover:not(.active){color:var(--text);}
 
   .group-block{margin-bottom:36px;}
@@ -487,6 +497,7 @@
 
   <div class="panel" id="adminOnlyPanel1">
     <h2>1 · Файл и период</h2>
+    <div id="sectorUploadHint" class="sub" style="display:none;margin-bottom:16px;">Загрузите общий файл отчёта (со всеми группами): он рассчитывается целиком, а после записи вы видите данные только своего сектора. Если за выбранный период отчёт уже загружен, повторная загрузка заблокирована.</div>
 
     <label class="field">
       <span>Тип отчёта</span>
@@ -548,6 +559,7 @@
     <div class="row" style="justify-content:space-between;align-items:baseline;">
       <h2 style="margin:0;">3 · Результат <span id="periodBadge" class="group-title chan-tag" style="font-size:12px;margin-left:6px;"></span></h2>
     </div>
+    <div id="sectorUploadSummary" style="display:none;margin:10px 0 16px;font-size:13.5px;"></div>
     <div class="row" style="justify-content:space-between;">
       <div class="stats" id="stats"></div>
       <button class="btn btn-ghost" id="editChannelsBtn" style="padding:8px 14px;font-size:12.5px;">Изменить каналы</button>
@@ -737,6 +749,18 @@ function onLoggedIn(){
     // компании настройки/данные, см. обсуждение с заказчиком).
     if(isSector2Head || isSector3Head){
       $("openPayrollBtn").style.display = "";
+      // Руководители секторов (Бочиус/Сорокин) могут сами загружать общий
+      // файл отчёта: рассчитывается целиком, записывается через бэкенд
+      // (POST /ratings/save-computed), а видят они после этого только свой
+      // сектор. Ставка зафиксирована (100 ₽/ч) — как у админа, чтобы
+      // нечаянно введённая другая ставка не испортила ЗП всей компании.
+      $("adminOnlyPanel1").style.display = "block";
+      $("sectorUploadHint").style.display = "block";
+      $("monthlyBaseRate").value = SECTOR_UPLOAD_MONTHLY_BASE_RATE;
+      $("hoursNorm").value = SECTOR_UPLOAD_HOURS_NORM;
+      $("monthlyBaseRate").disabled = true;
+      $("hoursNorm").disabled = true;
+      checkExistingPeriod();
     }
     $("pageTitle").textContent = isSector2Head ? "Сектор №2 — рейтинг" : isSector3Head ? "Сектор №3 — рейтинг" : "Моя группа — рейтинг";
     $("pageSub").textContent = isSector2Head
@@ -748,9 +772,21 @@ function onLoggedIn(){
   } else {
     $("adminOnlyPanel1").style.display = "block";
     $("openConstructorBtn").style.display = "";
+    // после входа руководителя сектора в этой же вкладке — вернуть поля
+    // ставки администратору (см. блок руководителей секторов выше)
+    if($("monthlyBaseRate").disabled){
+      $("monthlyBaseRate").disabled = false; $("hoursNorm").disabled = false;
+      $("monthlyBaseRate").value = 20000; $("hoursNorm").value = 160;
+    }
+    $("sectorUploadHint").style.display = "none";
+    $("resultsPanel").classList.remove("sector-upload-mode");
+    $("sectorUploadSummary").style.display = "none";
+    $("uploadBtn").textContent = "Записать в Supabase";
     checkExistingPeriod();
   }
 }
+const SECTOR_UPLOAD_MONTHLY_BASE_RATE = 16000; // 16000 / 160 = 100 ₽/ч
+const SECTOR_UPLOAD_HOURS_NORM = 160;
 
 // ---------- упрощённый режим просмотра для супервайзера ----------
 function dbRowToDisplayRow(r){
@@ -1075,6 +1111,14 @@ async function buildSupervisorViewer(){
   });
   panel.querySelector("#viewerPeriodSelect").addEventListener("change", load);
 
+  // После записи отчёта руководителем сектора (uploadAsSectorHead) —
+  // сразу показать свежий период в этой же панели.
+  sectorViewerRefresh = async (type) => {
+    panel.querySelectorAll("#viewerTypeToggle button").forEach(b => b.classList.toggle("active", b.dataset.type === type));
+    await populatePeriodSelect(type);
+    await load();
+  };
+
   await populatePeriodSelect("week");
   load();
 }
@@ -1182,16 +1226,29 @@ async function loadOccupiedDaysChips(){
     hintEl.textContent = "";
   }
 }
+// Руководитель сектора (Бочиус/Сорокин) может загружать общий отчёт — см.
+// isSectorUploader. У него на странице ещё и панель просмотра "Моя группа",
+// которая сама переключает глобальный periodType (недели/дни) — поэтому для
+// загрузки тип периода берётся напрямую с переключателя панели загрузки.
+function isSectorUploader(){
+  return !!(profile && profile.role === "supervisor" && (profile.isSector2Head || profile.isSector3Head));
+}
+function uploadPanelPeriodType(){
+  return $("periodTypeToggle").querySelector(".active").dataset.type;
+}
 function currentPeriodValue(){
-  if(periodType === "day") return $("periodDate").value;
+  const type = isSectorUploader() ? uploadPanelPeriodType() : periodType;
+  if(type === "day") return $("periodDate").value;
   return `${$("periodMonth").value}-${$("periodWeek").value}`;
 }
 
 // ---------- проверка: не загружен ли уже этот период ----------
+let sectorPeriodBlocked = false; // только для руководителей секторов, см. isSectorUploader
 async function checkExistingPeriod(){
   const box = $("existingPeriodNotice");
   box.style.display = "none";
   box.innerHTML = "";
+  sectorPeriodBlocked = false;
   const label = currentPeriodValue();
   if(!label) return;
   try{
@@ -1200,6 +1257,14 @@ async function checkExistingPeriod(){
     const u = rows[0];
     const when = new Date(u.uploaded_at).toLocaleString("ru");
     box.style.display = "block";
+    if(isSectorUploader()){
+      // Руководитель сектора не может перезаписать/удвоить уже загруженный
+      // период (замена — только через администратора), поэтому без кнопки
+      // "Показать" и с явным запретом (бэкенд тоже вернёт 409).
+      sectorPeriodBlocked = true;
+      box.innerHTML = `За период <b>${escapeHtml(u.period_label)}</b> отчёт уже загружен (${when}${u.source_filename ? `, файл "${escapeHtml(u.source_filename)}"` : ""}). Повторная загрузка заблокирована — данные периода смотрите ниже в «Моей группе». Если отчёт нужно заменить, обратитесь к администратору.`;
+      return;
+    }
     box.innerHTML = `За период <b>${u.period_label}</b> уже есть сохранённый отчёт (загружен ${when}${u.source_filename ? `, файл "${u.source_filename}"` : ""}). <button class="btn btn-primary" id="showExistingBtn" style="padding:7px 14px;font-size:12.5px;margin-left:6px;">Показать без повторной загрузки</button>`;
     $("showExistingBtn").addEventListener("click", () => loadSavedPeriod(u));
   } catch(err){
@@ -1469,6 +1534,14 @@ function parseWorkbook(arrayBuffer){
 $("parseBtn").addEventListener("click", async () => {
   if(!selectedFile) return;
   clearLog();
+  if(isSectorUploader()){
+    periodType = uploadPanelPeriodType();
+    await checkExistingPeriod();
+    if(sectorPeriodBlocked){
+      log("За этот период отчёт уже загружен — повторная загрузка заблокирована. Выберите другой период или обратитесь к администратору.", "err");
+      return;
+    }
+  }
   $("parseBtn").disabled = true;
   log("Читаю файл…");
   try{
@@ -2428,15 +2501,36 @@ $("calcBtn").addEventListener("click", async () => {
     let prevUpload = null, prevCoeffMap = null, prevMainMap = null, prevNoviceMap = null;
     log("Ищу предыдущий период в Supabase…", null, uploadLogEl);
     try{
-      prevUpload = await fetchLatestUpload(periodType, currentPeriodValue());
-      if(prevUpload){
-        log(`Нашёл предыдущий период: ${prevUpload.period_label}`, "ok", uploadLogEl);
-        const map = await fetchRatingsMap(prevUpload.id);
-        prevCoeffMap = map; prevMainMap = map; prevNoviceMap = map;
+      if(isSectorUploader()){
+        // Руководитель сектора: RLS урезает его собственное чтение kpi_ratings
+        // до своих групп, а коэффициент прошлой недели нужен ВСЕМ группам
+        // файла — берём его через бэкенд (по всей компании) и сразу же
+        // проверяем, что период ещё не загружен.
+        periodType = uploadPanelPeriodType();
+        const ctx = await apiGet("/ratings/upload-context", { period_label: currentPeriodValue() });
+        if(ctx.existing) throw new Error("За этот период отчёт уже загружен — повторная загрузка заблокирована.");
+        prevUpload = ctx.prev_upload;
+        if(prevUpload){
+          log(`Нашёл предыдущий период: ${prevUpload.period_label}`, "ok", uploadLogEl);
+          const map = buildPrevMap(ctx.prev_rows);
+          prevCoeffMap = map; prevMainMap = map; prevNoviceMap = map;
+        } else {
+          log("Предыдущих периодов в базе не нашлось — коэффициент будет 1.0, дельты не покажутся.", "warn", uploadLogEl);
+        }
       } else {
-        log("Предыдущих периодов в базе не нашлось — коэффициент будет 1.0, дельты не покажутся.", "warn", uploadLogEl);
+        prevUpload = await fetchLatestUpload(periodType, currentPeriodValue());
+        if(prevUpload){
+          log(`Нашёл предыдущий период: ${prevUpload.period_label}`, "ok", uploadLogEl);
+          const map = await fetchRatingsMap(prevUpload.id);
+          prevCoeffMap = map; prevMainMap = map; prevNoviceMap = map;
+        } else {
+          log("Предыдущих периодов в базе не нашлось — коэффициент будет 1.0, дельты не покажутся.", "warn", uploadLogEl);
+        }
       }
     } catch(err){
+      // Для руководителя сектора молча считать "без прошлой недели" нельзя:
+      // коэффициент 1.0 у всех записался бы в базу — расчёт прерываем.
+      if(isSectorUploader()) throw err;
       log("Не удалось загрузить предыдущий период (" + err.message + ") — считаю без него.", "warn", uploadLogEl);
     }
 
@@ -2454,6 +2548,10 @@ $("calcBtn").addEventListener("click", async () => {
       } catch(err){
         log("Не удалось загрузить коэффициенты ЛГ (" + err.message + ") — использую значения по умолчанию.", "warn", uploadLogEl);
       }
+    }
+
+    if(isSectorUploader() && periodType === "week" && !tierCoefficients){
+      throw new Error("Не загрузились коэффициенты ЛГ из настроек — расчёт остановлен, чтобы не записать неверные значения. Обновите страницу и повторите.");
     }
 
     const mainRated = computeMainRating(parsedGroups, prevCoeffMap, tierCoefficients);
@@ -2487,9 +2585,33 @@ $("calcBtn").addEventListener("click", async () => {
     currentSector2SupervisorRows = sector2SupervisorRated;
 
     $("channelPanel").style.display = "none";
-    renderResults();
+    if(isSectorUploader()){
+      // Руководитель сектора загружает ОБЩИЙ файл, но видит только свой
+      // сектор — полную таблицу всех групп не рисуем: только сводка и
+      // кнопка записи. Строки для записи фиксируем здесь (снимок), потому
+      // что панель просмотра "Моя группа" на этой же странице переписывает
+      // currentRows при смене периода.
+      pendingSectorUpload = {
+        period_label: currentPeriodValue(),
+        source_filename: currentFilename,
+        rows: [...currentNoviceRows.map(e => toDbRow(e, true)), ...currentRows.map(e => toDbRow(e, false))],
+        employees: currentRows.length,
+        groups: new Set(currentRows.map(r => r.supervisor)).size,
+      };
+      renderSectorUploadReady();
+    } else {
+      renderResults();
+    }
   } catch(err){
     log("Ошибка расчёта: " + err.message, "err", uploadLogEl);
+    if(isSectorUploader()){
+      // панель с логом иначе скрыта — ошибку расчёта нужно показать
+      pendingSectorUpload = null;
+      $("resultsPanel").style.display = "block";
+      $("resultsPanel").classList.add("sector-upload-mode");
+      $("sectorUploadSummary").style.display = "none";
+      $("uploadBtn").disabled = true;
+    }
   } finally {
     $("calcBtn").disabled = false;
   }
@@ -4680,7 +4802,52 @@ $("exportBtn").addEventListener("click", () => {
 });
 
 // ---------- upload to supabase ----------
+// Руководитель сектора пишет рассчитанные строки через бэкенд
+// (POST /ratings/save-computed): прямой записи в Supabase у него нет, а
+// повторная загрузка уже существующего периода блокируется (409).
+let pendingSectorUpload = null;
+let sectorViewerRefresh = null; // ставится в buildSupervisorViewer
+function renderSectorUploadReady(){
+  const panel = $("resultsPanel");
+  panel.style.display = "block";
+  panel.classList.add("sector-upload-mode");
+  const p = pendingSectorUpload;
+  $("periodBadge").textContent = p ? p.period_label : "";
+  const box = $("sectorUploadSummary");
+  box.style.display = "block";
+  box.innerHTML = p
+    ? `Файл разобран и рассчитан: <b>${p.employees}</b> сотрудников в <b>${p.groups}</b> группах за период <b>${escapeHtml(p.period_label)}</b>. Нажмите «Записать отчёт» — после этого вы увидите данные своего сектора в «Моей группе».`
+    : "";
+  $("uploadBtn").disabled = !p;
+  $("uploadBtn").textContent = "Записать отчёт";
+  clearLog(uploadLogEl);
+  panel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+async function uploadAsSectorHead(){
+  const p = pendingSectorUpload;
+  if(!p) return;
+  $("uploadBtn").disabled = true;
+  clearLog(uploadLogEl);
+  log(`Записываю отчёт за ${p.period_label} (${p.rows.length} строк)…`, null, uploadLogEl);
+  try{
+    const res = await apiSend("POST", "/ratings/save-computed", {
+      period_label: p.period_label, source_filename: p.source_filename, rows: p.rows,
+    });
+    log(`Готово: отчёт за ${p.period_label} записан (${res.rows} строк).`, "ok", uploadLogEl);
+    pendingSectorUpload = null;
+    $("sectorUploadSummary").innerHTML = `Отчёт за <b>${escapeHtml(p.period_label)}</b> записан. Ваш сектор — ниже, в «Моей группе».`;
+    await checkExistingPeriod();
+    if(sectorViewerRefresh) await sectorViewerRefresh(/^\d{4}-/.test(p.period_label) ? "day" : "week");
+  } catch(err){
+    let msg = err.message;
+    try{ msg = JSON.parse(msg).detail || msg; }catch(e){ /* не JSON */ }
+    log("Ошибка записи: " + msg, "err", uploadLogEl);
+    $("uploadBtn").disabled = false;
+  }
+}
+
 $("uploadBtn").addEventListener("click", async () => {
+  if(isSectorUploader()){ await uploadAsSectorHead(); return; }
   if(!currentRows) return;
   $("uploadBtn").disabled = true;
   clearLog(uploadLogEl);
