@@ -25,9 +25,12 @@ from app.services.ratings_upload import (
     sanitize_rows,
 )
 from app.services.salary import DEFAULT_HOURS_NORM, DEFAULT_MONTHLY_BASE_RATE, assign_salary
+from app.services.supervisor_stats import STATS_COLUMNS, sector_group_stats
 from app.services.sector_weights import (
+    SECTOR_NAMES,
     WeightsValidationError,
     load_effective,
+    sector_of_supervisor,
     parse_snapshot,
     snapshot_of,
     weights_by_sector,
@@ -108,6 +111,27 @@ async def get_upload_context(period_label: str, user: CurrentUser = Depends(get_
         "existing": existing,
         "prev_upload": {"id": prev["id"], "period_label": prev["period_label"]} if prev else None,
         "prev_rows": prev_rows,
+    }
+
+
+@router.get("/sector-supervisor-stats")
+async def get_sector_supervisor_stats(upload_id: str, user: CurrentUser = Depends(get_current_user)):
+    """Для "Рейтинга супервайзеров сектора" в рабочем окне супервайзера: агрегаты
+    по ВСЕМ группам сектора(ов), в который входят группы пользователя (у
+    супервайзера RLS оставляет только его группу, а рейтинг нужен по сектору).
+    Только средние/суммы по группам — без ФИО и без денег
+    (services/supervisor_stats.py); места и баллы считает фронтенд."""
+    if user.role != "supervisor" or not user.supervisor_names:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Рейтинг сектора доступен только супервайзерам")
+    sectors = sorted({sector_of_supervisor(name) for name in user.supervisor_names})
+    rows = await _all_rows(as_service(), "kpi_ratings", {
+        "upload_id": f"eq.{upload_id}", "select": STATS_COLUMNS, "order": "id.asc",
+    })
+    return {
+        "sectors": [
+            {"sector": sector, "name": SECTOR_NAMES[sector], "stats": sector_group_stats(rows, sector)}
+            for sector in sectors
+        ],
     }
 
 

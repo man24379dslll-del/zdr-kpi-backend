@@ -945,6 +945,34 @@ function buildViewerWorkbook(headSector, rows, periodLabel, weightsInfo){
   return { wb, filename, rowsCount: own.length };
 }
 
+// "Рейтинг супервайзеров сектора" в рабочем окне обычного супервайзера. У него
+// RLS оставляет только его группу, поэтому бэкенд присылает показатели ВСЕХ
+// групп сектора (средние/суммы, без ФИО и денег), а места считаются тем же
+// кодом, что у руководителя сектора (rankSupervisorStats), по весам периода.
+async function renderSectorRankingForSupervisor(box, uploadId, weightsInfo){
+  box.innerHTML = `<div class="history-empty">Загружаю…</div>`;
+  try{
+    const res = await apiGet("/ratings/sector-supervisor-stats", { upload_id: uploadId });
+    const mine = new Set(profile.supervisor_names || []);
+    box.innerHTML = "";
+    let any = false;
+    for(const sec of res.sectors){
+      if(!sec.stats.length) continue;
+      any = true;
+      const key = sec.sector === 2 ? SECTOR_2_SUPERVISORS : sec.sector === 3 ? SECTOR_3_SUPERVISORS : null;
+      const title = document.createElement("div");
+      title.className = "sub-title";
+      title.textContent = sec.name;
+      const holder = document.createElement("div");
+      box.append(title, holder);
+      renderSupervisorTable(holder, rankSupervisorStats(sec.stats, key, weightsInfo), { highlight: mine });
+    }
+    if(!any) box.innerHTML = `<div class="history-empty">За этот период данных по сектору нет.</div>`;
+  } catch(err){
+    box.innerHTML = `<div class="history-empty">Не удалось загрузить рейтинг сектора: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
 async function buildSupervisorViewer(){
   // Идемпотентность на случай прямого повторного вызова (защита от
   // накопления дублей в дополнение к очистке в onLoggedIn выше) — панель
@@ -991,7 +1019,19 @@ async function buildSupervisorViewer(){
       <div class="sub" style="margin-bottom:16px;">Сравнение 5 групп Сектора №3 между собой — та же логика, что в общем расчёте (новички участвуют).</div>
       <div id="viewerSupervisorContainer3"></div>
     </div>
-  ` : `<div id="viewerContainer"></div>`;
+  ` : `
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="viewerGroups">Моя группа</button>
+      <button class="tab-btn" data-tab="viewerSectorSupervisors">Рейтинг супервайзеров сектора</button>
+    </div>
+    <div class="tab-panel active" id="tab-viewerGroups">
+      <div id="viewerContainer"></div>
+    </div>
+    <div class="tab-panel" id="tab-viewerSectorSupervisors">
+      <div class="sub" style="margin-bottom:16px;">Сравнение групп вашего сектора между собой за выбранный период — та же логика, что в общем рейтинге супервайзеров. Ваша группа выделена. Показатели группы — средние по оценённым сотрудникам; личные данные коллег и деньги не показываются.</div>
+      <div id="viewerSectorSupervisorsContainer"></div>
+    </div>
+  `;
   panel.innerHTML = `
     <h2>Моя группа</h2>
     <div class="row" style="gap:14px;flex-wrap:wrap;margin-bottom:16px;align-items:center;">
@@ -1122,6 +1162,9 @@ async function buildSupervisorViewer(){
       // Сектора 2 — ЛК не в счёт + новички участвуют, для Сектора 3 —
       // ЛК считается обычно, новички тоже участвуют) — раздельно, не
       // единым сравнением (см. комментарий про tabsHtml выше).
+      if(!isSectorPairHead){
+        await renderSectorRankingForSupervisor(panel.querySelector("#viewerSectorSupervisorsContainer"), latest.id, currentViewerWeightsInfo);
+      }
       if(isSectorPairHead){
         const sector2Rows = computeSupervisorRatingFromRows(currentRows, SECTOR_2_SUPERVISORS, currentViewerWeightsInfo);
         renderSupervisorTable(panel.querySelector("#viewerSupervisorContainer2"), sector2Rows);
@@ -2468,6 +2511,18 @@ function computeSupervisorRatingFromRows(mainRows, sectorSupervisors, weightsInf
       time: avg("time"), errors_pct: avg("errors_pct"),
     };
   }).filter(Boolean);
+  return rankSupervisorStats(groupStats, sectorSupervisors, weightsInfo);
+}
+
+// Места, баллы и коэффициент по уже посчитанным показателям групп (groupStats:
+// supervisor, channel, n_evaluated, n_total, c1_*/lk_*/ch_*, time, errors_pct).
+// Показатели собираются из строк периода (computeSupervisorRatingFromRows) или
+// приходят с бэкенда готовыми (рабочее окно обычного супервайзера —
+// /ratings/sector-supervisor-stats, см. renderSectorRankingForSupervisor):
+// так у супервайзера и у руководителя сектора места считаются ОДНИМ кодом.
+// sectorSupervisors: SECTOR_2_SUPERVISORS/SECTOR_3_SUPERVISORS — сравнение в
+// секторе, null — Сектор №1 / общее сравнение (веса Сектора 1).
+function rankSupervisorStats(groupStats, sectorSupervisors, weightsInfo){
   // Сектор №2 — ЛК не в счёт при сравнении групп между собой, см. тот же
   // комментарий в computeSupervisorRating выше.
   const active = sectorSupervisors === SECTOR_2_SUPERVISORS ? { c1:true, lk:false, ch:true, time:true, errors:true } : undefined;
@@ -3133,7 +3188,8 @@ function renderSector2Supervisors(){
   renderSupervisorTable($("sector2SupervisorContainer"), currentSector2SupervisorRows || []);
 }
 
-function renderSupervisorTable(container, sourceRows){
+// opts.highlight — Set названий групп, которые подсветить (своя группа).
+function renderSupervisorTable(container, sourceRows, opts){
   container.innerHTML = "";
   const sorted = sortByPlace(sourceRows);
   const wrap = document.createElement("div");
@@ -3172,8 +3228,10 @@ function renderSupervisorTable(container, sourceRows){
   const timeMap = gradientMap(sourceRows, "time_place");
   const errMap = gradientMap(sourceRows, "errors_place");
   const finalMap = gradientMap(sourceRows, "final_place");
+  const highlight = opts && opts.highlight;
   for(const r of sorted){
     const tr = document.createElement("tr");
+    if(highlight && highlight.has(r.supervisor)){ tr.style.background = "var(--panel-2)"; tr.style.fontWeight = "800"; }
     tr.innerHTML = `
       <td class="col-fio">${cleanSupervisorName(r.supervisor)}</td>
       <td>${r.channel === "inet" ? "Интернет" : "Радио+ТВ"}</td>
