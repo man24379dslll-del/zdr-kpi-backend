@@ -353,6 +353,7 @@
       <button class="dash-tab-btn" data-dashtab="anomalies">Аномалии</button>
       <button class="dash-tab-btn" data-dashtab="bystatus">По уровням</button>
       <button class="dash-tab-btn" data-dashtab="statuses">По статусам</button>
+      <button class="dash-tab-btn" data-dashtab="sectors" id="dashSectorsTabBtn" style="display:none;">Сравнение секторов</button>
     </div>
     <div id="dashLog" class="log"></div>
     <div class="tab-panel active" id="dashtab-summary"><div id="dashSummaryContainer"></div></div>
@@ -361,6 +362,7 @@
     <div class="tab-panel" id="dashtab-anomalies"><div id="dashAnomaliesContainer"></div></div>
     <div class="tab-panel" id="dashtab-bystatus"><div id="dashByStatusContainer"></div></div>
     <div class="tab-panel" id="dashtab-statuses"><div id="dashStatusesContainer"></div></div>
+    <div class="tab-panel" id="dashtab-sectors"><div id="dashSectorsContainer"></div></div>
   </div>
 
   <div class="panel" id="payrollPanel" style="display:none;">
@@ -753,6 +755,7 @@ function onLoggedIn(){
     // kpi_ratings до его групп, отдельного кода не потребовалось).
     // Реквизиты — сознательно НЕ даём (данные всей компании). Конструктор —
     // только свой сектор, см. ниже.
+    setSectorCompareAccess(!!(isSector2Head || isSector3Head)); // обычному супервайзеру вкладка недоступна
     if(isSector2Head || isSector3Head){
       $("openPayrollBtn").style.display = "";
       // Конструктор СВОЕГО сектора: руководитель правит веса категорий (с
@@ -783,6 +786,7 @@ function onLoggedIn(){
     $("adminOnlyPanel1").style.display = "block";
     $("openConstructorBtn").style.display = "";
     $("openConstructorBtn").textContent = "⚙️ Конструктор рейтинга";
+    setSectorCompareAccess(true);
     refreshConstructorBadge();
     // после входа руководителя сектора в этой же вкладке — вернуть поля
     // ставки администратору (см. блок руководителей секторов выше)
@@ -4032,6 +4036,161 @@ async function renderDashAnomalies(){
   c.innerHTML = html;
 }
 
+// ---------- "Сравнение секторов" ----------
+// Секторы / супервайзеры / операторы всех секторов в одной таблице, БЕЗ денег
+// (ни ЗП, ни бонусов, ни ЛГ). Видят админ, менеджер и руководители секторов
+// (на бэкенде 403 остальным). Считает бэкенд (/dashboards/sectors,
+// services/sector_compare.py): места по каждой категории — по ВСЕМ секторам
+// сразу, сумма — с фиксированными весами, не зависящими от настроек секторов.
+let sectorCompareCache = { uploadId: null, data: null };
+let sectorCompareView = "sectors"; // sectors | supervisors | operators
+let sectorCompareFilters = { sector: "all", status: "all", search: "" };
+const SC_VIEWS = [["sectors", "Секторы"], ["supervisors", "Супервайзеры"], ["operators", "Операторы"]];
+
+// Вкладка видна админу/менеджеру и руководителям секторов.
+function setSectorCompareAccess(allowed){
+  $("dashSectorsTabBtn").style.display = allowed ? "" : "none";
+  if(!allowed && $("dashSectorsTabBtn").classList.contains("active")){
+    $("dashboardsPanel").querySelector('.dash-tab-btn[data-dashtab="summary"]').click();
+  }
+}
+
+function scNum(v, digits){ return (v === null || v === undefined) ? "—" : Number(v).toFixed(digits); }
+function scSectorShort(n){ return n === 1 ? "№1" : n === 2 ? "№2" : "№3"; }
+
+function scMetricHead(d){
+  const chans = d.mode === "dual" ? [["radio", "Радио+ТВ"], ["inet", "Интернет"]] : [["ch", "Канал группы"]];
+  const four = `<th>сумма,₽</th><th>с контакта</th><th>конв.,%</th><th class="block-end">место</th>`;
+  return {
+    top: `<th colspan="4" class="block-end">1 обращение</th>`
+      + chans.map(([, label]) => `<th colspan="4" class="block-end">${label}</th>`).join("")
+      + `<th class="block-end">ЛК</th><th colspan="2" class="block-end">Время/контакт</th><th colspan="2" class="block-end">% ошибок</th>`
+      + `<th rowspan="2">Балл</th><th rowspan="2">Место</th>`,
+    sub: four + chans.map(() => four).join("")
+      + `<th class="block-end">с контакта</th><th>чч:мм:сс</th><th class="block-end">место</th><th>%</th><th class="block-end">место</th>`,
+  };
+}
+
+function scMetricCells(e, gm, d){
+  const m = e.metrics, p = e.places;
+  const badge = (key) => p ? rankBadge(p[key], gm[key](p[key])) : "";
+  const chanKeys = d.mode === "dual" ? ["radio", "inet"] : ["ch"];
+  let html = `<td>${fmtLevelSum(Math.round(m.c1_sum))}</td><td>${scNum(m.c1_pc, 0)}</td><td>${scNum(m.c1_conv, 1)}</td><td class="block-end">${badge("c1")}</td>`;
+  for(const k of chanKeys){
+    html += `<td>${fmtLevelSum(Math.round(m[k + "_sum"]))}</td><td>${scNum(m[k + "_pc"], 0)}</td><td>${scNum(m[k + "_conv"], 1)}</td><td class="block-end">${badge(k)}</td>`;
+  }
+  html += `<td class="block-end">${scNum(m.lk_pc, 0)}</td>`
+    + `<td>${m.time === null || m.time === undefined ? "—" : fmtTime(m.time)}</td><td class="block-end">${badge("time")}</td>`
+    + `<td>${scNum(m.errors_pct, 2)}</td><td class="block-end">${badge("errors")}</td>`;
+  return html;
+}
+
+function scGradients(entries, d){
+  const maps = {};
+  for(const key of Object.keys(d.weights)){
+    maps[key] = gradientMap(entries.map(e => ({ v: e.places ? e.places[key] : null })), "v");
+  }
+  return maps;
+}
+
+function scScoreCells(e, placeMap){
+  const score = e.score === null || e.score === undefined ? "—" : fmt(e.score);
+  const place = e.place === null || e.place === undefined
+    ? `<span class="chan-hint">${escapeHtml(e.special_label || "—")}</span>`
+    : rankBadge(e.place, placeMap(e.place));
+  return `<td style="font-weight:700;">${score}</td><td class="place-cell">${place}</td>`;
+}
+
+function scMySector(){
+  return profile && profile.isSector2Head ? 2 : profile && profile.isSector3Head ? 3 : null;
+}
+
+function renderScTable(d){
+  const box = $("scTable");
+  const mine = scMySector();
+  let entries, lead, leadHead;
+  if(sectorCompareView === "sectors"){
+    entries = d.sectors;
+    leadHead = `<th rowspan="2" class="col-fio">Сектор</th><th rowspan="2">Групп</th><th rowspan="2" class="block-end">Чел.</th>`;
+    lead = e => `<td class="col-fio" style="font-family:var(--sans);font-weight:700;">${escapeHtml(e.name)}</td><td>${e.groups}</td><td class="block-end">${e.people}</td>`;
+  } else if(sectorCompareView === "supervisors"){
+    entries = d.supervisors;
+    leadHead = `<th rowspan="2" class="col-fio">Группа</th><th rowspan="2">Сектор</th><th rowspan="2" class="block-end">Чел.</th>`;
+    lead = e => `<td class="col-fio" style="font-family:var(--sans);font-weight:600;">${escapeHtml(e.name)}</td><td>${scSectorShort(e.sector)}</td><td class="block-end">${e.people}</td>`;
+  } else {
+    const f = sectorCompareFilters;
+    const q = f.search.trim().toLowerCase();
+    entries = d.operators.filter(o =>
+      (f.sector === "all" || String(o.sector) === f.sector)
+      && (f.status === "all" || o.status === f.status)
+      && (!q || (o.fio || "").toLowerCase().includes(q)));
+    leadHead = `<th rowspan="2" class="col-fio">ФИО</th><th rowspan="2">Группа</th><th rowspan="2">Сектор</th><th rowspan="2" class="block-end">Статус</th>`;
+    lead = e => `<td class="col-fio" style="font-family:var(--sans);font-weight:600;">${escapeHtml(e.fio || "")}</td><td style="font-family:var(--sans);">${escapeHtml(e.group)}</td><td>${scSectorShort(e.sector)}</td><td class="block-end" style="font-family:var(--sans);">${escapeHtml(e.status || "")}</td>`;
+  }
+  if(!entries.length){
+    box.innerHTML = `<div class="history-empty">Нет данных по выбранным условиям.</div>`;
+    return;
+  }
+  const head = scMetricHead(d);
+  const gm = scGradients(entries, d);
+  const placeMap = gradientMap(entries.filter(e => e.place !== null && e.place !== undefined), "place");
+  box.innerHTML = `<div class="subtable-wrap"><table class="detail"><thead>
+      <tr class="cat">${leadHead}${head.top}</tr>
+      <tr class="sub">${head.sub}</tr>
+    </thead><tbody>${entries.map(e => `<tr${mine && e.sector === mine ? ' style="background:var(--panel-2);"' : ""}>${lead(e)}${scMetricCells(e, gm, d)}${scScoreCells(e, placeMap)}</tr>`).join("")}</tbody></table></div>
+    <div class="chan-hint" style="margin-top:8px;">Показано строк: ${entries.length}${mine ? ". Ваш сектор выделен фоном." : ""}</div>`;
+}
+
+function renderScControls(d){
+  const box = $("scControls");
+  const toggle = `<div class="chan-toggle" id="scViewToggle" style="display:inline-flex;">${SC_VIEWS.map(([k, label]) => `<button type="button" data-view="${k}" class="${k === sectorCompareView ? "active" : ""}">${label}</button>`).join("")}</div>`;
+  let filters = "";
+  if(sectorCompareView === "operators"){
+    const sectors = [...new Set(d.operators.map(o => o.sector))].sort();
+    const statuses = [...new Set(d.operators.map(o => o.status).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ru"));
+    const f = sectorCompareFilters;
+    filters = `<select id="scSector"><option value="all">Все секторы</option>${sectors.map(n => `<option value="${n}" ${f.sector === String(n) ? "selected" : ""}>Сектор ${scSectorShort(n)}</option>`).join("")}</select>
+      <select id="scStatus"><option value="all">Все статусы</option>${statuses.map(st => `<option value="${escapeHtml(st)}" ${f.status === st ? "selected" : ""}>${escapeHtml(st)}</option>`).join("")}</select>
+      <input type="text" id="scSearch" placeholder="Поиск по ФИО…" value="${escapeHtml(f.search)}" style="width:240px;">`;
+  }
+  box.innerHTML = `<div class="row" style="gap:12px;flex-wrap:wrap;align-items:center;margin:10px 0 14px;">${toggle}${filters}</div>`;
+  box.querySelectorAll("#scViewToggle button").forEach(btn => btn.addEventListener("click", () => {
+    sectorCompareView = btn.dataset.view;
+    renderScControls(d);
+    renderScTable(d);
+  }));
+  if(sectorCompareView === "operators"){
+    $("scSector").addEventListener("change", e => { sectorCompareFilters.sector = e.target.value; renderScTable(d); });
+    $("scStatus").addEventListener("change", e => { sectorCompareFilters.status = e.target.value; renderScTable(d); });
+    $("scSearch").addEventListener("input", e => { sectorCompareFilters.search = e.target.value; renderScTable(d); });
+  }
+}
+
+async function renderDashSectors(){
+  const c = $("dashSectorsContainer");
+  c.innerHTML = "";
+  $("wrap").classList.add("wide");
+  const data = await loadDashboardData();
+  if(!data){ c.innerHTML = `<div class="history-empty">Периодов ещё нет в базе.</div>`; return; }
+  const { latest } = data;
+  if(sectorCompareCache.uploadId !== latest.id){
+    sectorCompareCache = { uploadId: latest.id, data: await apiGet("/dashboards/sectors", { upload_id: latest.id }) };
+  }
+  const d = sectorCompareCache.data;
+  const w = d.weights, lab = d.labels;
+  const formula = Object.keys(w).map(k => `${lab[k]} ×${w[k]}`).join(" + ");
+  const legacyNote = d.mode === "legacy"
+    ? ` Период загружен до перехода на две категории канала: по каналу сравнивается канал группы (Радио+ТВ или Интернет), а не оба канала отдельно.`
+    : "";
+  c.innerHTML = `
+    <div style="margin-bottom:6px;color:var(--muted);font-size:13px;">Период: <b style="color:var(--text);">${escapeHtml(latest.period_label)}</b> · оценено людей: <b style="color:var(--text);">${d.totals.operators}</b> в <b style="color:var(--text);">${d.totals.groups}</b> группах</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">Единый балл для сравнения: ${escapeHtml(formula)}. Места по каждой категории считаются по ВСЕМ секторам сразу, веса фиксированы и не зависят от настроек секторов; ЛК в балл не входит (в Секторе №2 она не применима) и показана отдельно. Чем меньше балл, тем лучше место. «Сектор №1» — все остальные обычные группы; Уволенные/Нераспределённые, ПП, Увеличители и Васько в сравнение не входят. Средние по группе и сектору по каналу и ЛК — только по тем, кто с ними работал. Без ЗП и бонусов.${legacyNote}</div>
+    <div id="scControls"></div>
+    <div id="scTable"></div>`;
+  renderScControls(d);
+  renderScTable(d);
+}
+
 // ---------- Ведомость ЗП (гибкий выбор недель) ----------
 let currentPayrollRows = null;
 let currentPayrollMeta = null;
@@ -4448,7 +4607,7 @@ $("downloadPayrollBtn").addEventListener("click", () => {
   XLSX.utils.book_append_sheet(wb, ws, "Ведомость ЗП");
   XLSX.writeFile(wb, `Ведомость_ЗП_${meta.periodsKey.replace(/,/g, "_")}.xlsx`);
 });
-const DASH_RENDERERS = { summary: renderDashSummary, funnel: renderDashFunnel, channels: renderDashChannels, anomalies: renderDashAnomalies, bystatus: renderDashByStatus, statuses: renderDashStatuses };
+const DASH_RENDERERS = { summary: renderDashSummary, funnel: renderDashFunnel, channels: renderDashChannels, anomalies: renderDashAnomalies, bystatus: renderDashByStatus, statuses: renderDashStatuses, sectors: renderDashSectors };
 async function loadActiveDashboard(){
   const activeTab = $("dashboardsPanel").querySelector(".dash-tab-btn.active").dataset.dashtab;
   clearLog($("dashLog"));

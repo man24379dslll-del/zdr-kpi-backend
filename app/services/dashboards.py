@@ -408,6 +408,26 @@ def _statuses_entry(rows: list[dict]) -> dict:
     }
 
 
+def evaluated_unique_rows(ratings: list[dict]) -> list[dict]:
+    """Оценённые сотрудники для срезов без денег ("По статусам", сравнение
+    секторов): не Н/О и не Регион УК/ПП/Увеличители/Васько, ОДНА строка на
+    человека. У новичка в kpi_ratings две строки (основная и дубль для
+    общего списка новичков) — в Секторах 2/3 обе не Н/О, и без дедупликации
+    он попал бы в среднее дважды. Берём основную строку, если она оценена,
+    иначе дубль (у новичков остальных секторов основная — Н/О)."""
+    included = [
+        r for r in ratings
+        if not r.get("is_na") and not _is_excluded_from_levels(r.get("supervisor"))
+    ]
+    by_fio: dict[str, dict] = {}
+    for r in included:
+        fio = r.get("fio")
+        existing = by_fio.get(fio)
+        if existing is None or (existing.get("is_novice") and not r.get("is_novice")):
+            by_fio[fio] = r
+    return list(by_fio.values())
+
+
 def build_statuses_dashboard(ratings: list[dict]) -> dict:
     """Срез "По статусам" для ВСЕХ ролей, БЕЗ денег и ЛГ/коэффициентов:
     1 обращение, Радио+ТВ и Интернет ОТДЕЛЬНЫМИ блоками, время на контакт,
@@ -419,17 +439,7 @@ def build_statuses_dashboard(ratings: list[dict]) -> dict:
     (основная и дубль для общего списка новичков) — в Секторах 2/3 обе не
     Н/О, и без дедупликации по ФИО он попал бы в среднее дважды. Берём
     основную строку, если есть, иначе дубль."""
-    included = [
-        r for r in ratings
-        if not r.get("is_na") and not _is_excluded_from_levels(r.get("supervisor"))
-    ]
-    by_fio: dict[str, dict] = {}
-    for r in included:
-        fio = r.get("fio")
-        existing = by_fio.get(fio)
-        if existing is None or (existing.get("is_novice") and not r.get("is_novice")):
-            by_fio[fio] = r
-    rows = list(by_fio.values())
+    rows = evaluated_unique_rows(ratings)
 
     statuses = sorted({r.get("status") for r in rows if r.get("status")}, key=_level_sort_key)
     levels = []

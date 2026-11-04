@@ -10,7 +10,7 @@ previous_upload_id) — у фронтенда уже есть список пе�
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.auth import CurrentUser, get_current_user
 from app.services.dashboards import (
@@ -22,6 +22,7 @@ from app.services.dashboards import (
     build_summary_dashboard,
 )
 from app.services.group_naming import restrict_to_sector_pair
+from app.services.sector_compare import build_sector_comparison
 from app.supabase_client import as_service, as_user
 
 router = APIRouter(prefix="/dashboards", tags=["dashboards"])
@@ -104,6 +105,39 @@ async def get_statuses_dashboard(upload_id: str, user: CurrentUser = Depends(get
     (RLS/сектор), как и у остальных дашбордов."""
     client = _client_for(user)
     return build_statuses_dashboard(await _load_ratings(client, upload_id, user))
+
+
+async def _load_all_ratings(client, upload_id: str) -> list[dict]:
+    """ВСЕ строки периода (PostgREST отдаёт максимум 1000 за запрос —
+    выбираем страницами, порядок по id, чтобы страницы не пересекались)."""
+    out: list[dict] = []
+    offset = 0
+    while True:
+        page = await client.get("kpi_ratings", params={
+            "upload_id": f"eq.{upload_id}", "select": "*", "order": "id.asc", "limit": "1000", "offset": str(offset),
+        })
+        out.extend(page)
+        if len(page) < 1000:
+            return out
+        offset += 1000
+
+
+@router.get("/sectors")
+async def get_sector_comparison(upload_id: str, user: CurrentUser = Depends(get_current_user)):
+    """Сравнение секторов, супервайзеров и операторов между собой — без денег
+    (services/sector_compare.py). Админ, менеджер и руководители секторов:
+    данные ВСЕХ секторов (в обход RLS, как и просмотр руководителей — см.
+    _client_for), поэтому остальным ролям — 403."""
+    if not (user.is_admin_or_manager or user.is_sector2_head or user.is_sector3_head):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Сравнение секторов доступно руководителям секторов, администратору и менеджеру",
+        )
+    client = as_service()
+    ratings = await _load_all_ratings(client, upload_id)
+    result = build_sector_comparison(ratings)
+    result["period_label"] = await _load_period_label(client, upload_id)
+    return result
 
 
 @router.get("/anomalies")
