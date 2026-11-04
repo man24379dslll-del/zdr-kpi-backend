@@ -113,8 +113,8 @@ def test_sector2_regular_employee_has_lk_excluded_from_total_score():
     assert "lk" in r.places
     # ... но НЕ входит в total_score
     assert "lk" not in r.scores
-    assert set(r.scores.keys()) == {"c1", "channel", "time", "errors"}
-    assert r.total_score == r.scores["c1"] + r.scores["channel"] + r.scores["time"] + r.scores["errors"]
+    assert set(r.scores.keys()) == {"c1", "radio", "inet", "time", "errors"}
+    assert r.total_score == r.scores["c1"] + r.scores["radio"] + r.scores["inet"] + r.scores["time"] + r.scores["errors"]
 
 
 def test_sector2_exception_employee_keeps_normal_lk_weight():
@@ -127,7 +127,7 @@ def test_sector2_exception_employee_keeps_normal_lk_weight():
     r = results[0]
 
     assert "lk" in r.scores
-    assert set(r.scores.keys()) == {"c1", "lk", "channel", "time", "errors"}
+    assert set(r.scores.keys()) == {"c1", "lk", "radio", "inet", "time", "errors"}
     assert r.total_score == sum(r.scores.values())
     assert r.scores["lk"] == r.places["lk"] * 1.5  # обычный вес ЛК, как у всех остальных сотрудников
 

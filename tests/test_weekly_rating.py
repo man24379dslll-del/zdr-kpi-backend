@@ -477,7 +477,8 @@ def test_best_overall_performer_gets_final_place_one():
     by_fio = _compute()
     komarov = by_fio["Комаров К."]
     assert all(place == 1 for place in komarov.places.values())
-    assert komarov.total_score == 3 + 1.5 + 2.5 + 1 + 1
+    # c1 + ЛК + Радио+ТВ + Интернет (две отдельные категории по 2.5) + время + ошибки
+    assert komarov.total_score == 3 + 1.5 + 2.5 + 2.5 + 1 + 1
     assert komarov.final_place == 1
 
 
@@ -593,14 +594,16 @@ def test_channel_tier_is_self_contained_and_lk_uses_its_final_place():
     assert by_fio["X"].places["channel"] != 1.0
 
     xr = by_fio["X"]
-    # ЛК тир Б (карточек ЛК нет): среднее МЕСТО по c1/каналу(ФИНАЛЬНОЕ!)/
-    # времени/ошибкам, БЕЗ сдвига на размер тира A (по прямому запросу
-    # заказчика) = (3+3+3+3)/4 = 3
-    assert xr.places["lk"] == pytest.approx(3.0)
-    # Если бы вместо финального (тированного) места канала использовался
+    # ЛК тир Б (карточек ЛК нет): среднее МЕСТО по c1/Радио+ТВ(ФИНАЛЬНОЕ!)/
+    # Интернет/времени/ошибкам, БЕЗ сдвига на размер тира A (по прямому
+    # запросу заказчика). Интернет у всех троих без карточек (общий тир Б)
+    # -> место 1: (3+3+1+3+3)/5 = 2.6
+    assert xr.places["inet"] == 1.0
+    assert xr.places["lk"] == pytest.approx(2.6)
+    # Если бы вместо финального (тированного) места Радио+ТВ использовался
     # сырой ранг по ch_pc (у X он был бы =1, лучший во всей группе),
-    # получилось бы (3+1+3+3)/4 = 2.5 — другое число.
-    assert xr.places["lk"] != pytest.approx(2.5)
+    # получилось бы (3+1+1+3+3)/5 = 2.2 — другое число.
+    assert xr.places["lk"] != pytest.approx(2.2)
 
 
 def test_lk_average_reconciles_exactly_with_places_visible_in_the_table():
@@ -628,7 +631,9 @@ def test_lk_average_reconciles_exactly_with_places_visible_in_the_table():
     by_fio = {r.fio: r for r in results}
     xr = by_fio["X"]
 
-    manual_avg = (xr.places["c1"] + xr.places["channel"] + xr.places["time"] + xr.places["errors"]) / 4
+    manual_avg = (
+        xr.places["c1"] + xr.places["radio"] + xr.places["inet"] + xr.places["time"] + xr.places["errors"]
+    ) / 5
     assert xr.places["lk"] == pytest.approx(manual_avg)
 
 
@@ -675,3 +680,96 @@ def test_build_kpi_rating_row_maps_computed_fields_for_supabase():
     # выше) — не None, хотя final_place остаётся null.
     assert novikov_row["tier"] == 5
     assert novikov_row["coefficient"] == TIER_COEFFICIENTS[4] == 1.05
+
+
+# ---------- Радио+ТВ и Интернет — две отдельные категории ----------
+
+def _both_channels_group():
+    """Три сотрудника одной группы; у каждого есть и Радио+ТВ, и Интернет
+    (карточки/конверсия > 0 в обоих каналах), суммы с контакта разные."""
+    def emp(fio, radio_pc, inet_pc):
+        row = _employee_row(fio, "", 100, 50, radio_pc, 20, 1, 5, 20, 5000, "radio")
+        row[RADIO_COUNT] = 4
+        row[RADIO_CONV] = 10
+        row[INET_SUM] = 800.0
+        row[INET_PC] = inet_pc
+        row[INET_CHECK] = 100
+        row[INET_CONV] = 12
+        row["Интернет: кол-во"] = 3
+        return row
+
+    return [
+        _group_row("Супервайзер - Тестов Тест Тестович"),
+        emp("Радио-лидер", 900, 100),   # лучший в Радио+ТВ, худший в Интернете
+        emp("Инет-лидер", 100, 900),    # худший в Радио+ТВ, лучший в Интернете
+        emp("Середняк", 500, 500),
+    ]
+
+
+def _compute_rows(rows, supervisor_channels=None):
+    employees = parse_weekly_rating_excel(_build_excel_bytes(rows), supervisor_channels)
+    results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+    return {r.fio: r for r in results}
+
+
+def test_radio_and_inet_are_two_separate_categories_each_with_own_place_and_score():
+    by_fio = _compute_rows(_both_channels_group())
+    radio_leader, inet_leader = by_fio["Радио-лидер"], by_fio["Инет-лидер"]
+
+    assert (radio_leader.places["radio"], radio_leader.places["inet"]) == (1, 3)
+    assert (inet_leader.places["radio"], inet_leader.places["inet"]) == (3, 1)
+    # вес каждой категории канала — прежний вес "channel" (2.5)
+    assert radio_leader.scores["radio"] == 1 * 2.5 and radio_leader.scores["inet"] == 3 * 2.5
+    assert inet_leader.scores["radio"] == 3 * 2.5 and inet_leader.scores["inet"] == 1 * 2.5
+    # обе категории входят в итог
+    assert radio_leader.total_score == sum(radio_leader.scores.values())
+    assert {"radio", "inet"} <= set(radio_leader.scores)
+    assert "channel" not in radio_leader.scores  # единой категории канала в сумме больше нет
+
+
+def test_group_channel_setting_does_not_change_places_or_total_score():
+    as_radio = _compute_rows(_both_channels_group(), {"Супервайзер - Тестов Тест Тестович": "radio"})
+    as_inet = _compute_rows(_both_channels_group(), {"Супервайзер - Тестов Тест Тестович": "inet"})
+    for fio, a in as_radio.items():
+        b = as_inet[fio]
+        assert a.places["radio"] == b.places["radio"] and a.places["inet"] == b.places["inet"]
+        assert a.total_score == b.total_score
+        assert a.final_place == b.final_place
+    # меняется только единый "канал группы" (для ch_* в просмотре и дашбордах)
+    assert as_radio["Радио-лидер"].places["channel"] == as_radio["Радио-лидер"].places["radio"] == 1
+    assert as_inet["Радио-лидер"].places["channel"] == as_inet["Радио-лидер"].places["inet"] == 3
+
+
+def test_kpi_row_has_both_channels_and_group_channel_in_ch_columns():
+    by_fio = _compute_rows(_both_channels_group(), {"Супервайзер - Тестов Тест Тестович": "inet"})
+    row = build_kpi_rating_row("u1", by_fio["Радио-лидер"])
+
+    assert row["radio_per_contact"] == 900 and row["radio_cards"] == 4 and row["radio_place"] == 1
+    assert row["inet_per_contact"] == 100 and row["inet_cards"] == 3 and row["inet_place"] == 3
+    assert row["radio_score"] == 2.5 and row["inet_score"] == 7.5
+    # ch_* — тот канал, что настроен группе (здесь Интернет): данные, место, балл
+    assert row["channel"] == "inet"
+    assert row["ch_per_contact"] == row["inet_per_contact"] == 100
+    assert row["ch_place"] == row["inet_place"] == 3
+    assert row["ch_score"] == row["inet_score"] == 7.5
+    # места — целые числа (JSON "3.0" в integer-колонку Postgres не принимается)
+    for key in ("radio_place", "inet_place", "ch_place"):
+        assert type(row[key]) is int
+
+
+def test_peaks_group_total_uses_both_channels_and_is_na_only_if_both_are_zero():
+    def peaks(fio, radio, inet):
+        row = _employee_row(fio, "", 0, 0, 100, 20, 1, 0, 0, 0, "radio")
+        row[RADIO_SUM] = radio
+        row[INET_SUM] = inet
+        return row
+
+    by_fio = _compute_rows([
+        _group_row("операторы без супервизора [Пики-ПП]"),
+    ] + [{**peaks("ПП Только радио", 500, 0), FIO: "ПП Только радио"},
+         {**peaks("ПП Только инет", 0, 500), FIO: "ПП Только инет"},
+         {**peaks("ПП Пустой", 0, 0), FIO: "ПП Пустой"}])
+    assert by_fio["ПП Только радио"].is_na is False
+    assert by_fio["ПП Только инет"].is_na is False
+    assert by_fio["ПП Пустой"].is_na is True
+    assert set(by_fio["ПП Только радио"].scores) == {"radio", "inet"}

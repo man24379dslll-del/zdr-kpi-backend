@@ -164,3 +164,19 @@ def test_typo_fixed_even_without_sector_label():
     ])
     employees = parse_weekly_rating_excel(raw)
     assert employees[0]["supervisor"] == "Супервайзер Ерохина Эльвира Евгеньевна"
+
+
+def test_both_channels_are_parsed_separately_and_ch_follows_group_channel():
+    row = _row("Сотрудник Первый")
+    row.update({INET_SUM: 700, INET_CHECK: 70, INET_CONV: 15, INET_PC: 300})
+    raw = _build_excel_bytes([_group_row("Супервайзер - Тестов Тест Тестович"), row])
+
+    as_radio = parse_weekly_rating_excel(raw, {"Супервайзер - Тестов Тест Тестович": "radio"})[0]
+    assert (as_radio["radio_sum"], as_radio["radio_per_contact"]) == (1000, 200)
+    assert (as_radio["inet_sum"], as_radio["inet_per_contact"], as_radio["inet_conv"]) == (700, 300, 15)
+    assert as_radio["channel"] == "radio" and as_radio["ch_sum"] == 1000 and as_radio["ch_per_contact"] == 200
+
+    as_inet = parse_weekly_rating_excel(raw, {"Супервайзер - Тестов Тест Тестович": "inet"})[0]
+    # оба канала те же — меняется только единый ch_* (канал группы)
+    assert (as_inet["radio_sum"], as_inet["inet_sum"]) == (1000, 700)
+    assert as_inet["channel"] == "inet" and as_inet["ch_sum"] == 700 and as_inet["ch_per_contact"] == 300

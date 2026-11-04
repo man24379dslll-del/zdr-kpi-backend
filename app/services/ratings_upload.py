@@ -28,6 +28,8 @@ NUMERIC_FIELDS = (
     "c1_sum", "c1_check", "c1_conv", "c1_per_contact", "c1_cards", "c1_place", "c1_score",
     "lk_sum", "lk_check", "lk_conv", "lk_per_contact", "lk_cards", "lk_place", "lk_score",
     "ch_sum", "ch_check", "ch_conv", "ch_per_contact", "ch_cards", "ch_place", "ch_score",
+    "radio_sum", "radio_check", "radio_conv", "radio_per_contact", "radio_cards", "radio_place", "radio_score",
+    "inet_sum", "inet_check", "inet_conv", "inet_per_contact", "inet_cards", "inet_place", "inet_score",
     "time_per_contact", "time_place", "time_score",
     "errors_pct", "errors_place", "errors_score", "errors_count",
     "total_score", "final_place", "tier", "coefficient",

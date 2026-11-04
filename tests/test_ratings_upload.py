@@ -50,6 +50,17 @@ def test_sanitize_rows_rejects_bad_types(bad):
         sanitize_rows([bad])
 
 
+def test_sanitize_rows_accepts_radio_and_inet_columns_and_rejects_bad_types():
+    # Радио+ТВ и Интернет — две отдельные категории (radio_*/inet_*)
+    clean = sanitize_rows([_row(radio_sum=1500.5, radio_place=2, radio_cards=None, inet_per_contact=3.2, inet_place=1)])
+    assert clean[0]["radio_sum"] == 1500.5 and clean[0]["radio_place"] == 2
+    assert clean[0]["radio_cards"] is None and clean[0]["inet_place"] == 1
+    for field in ("radio_place", "inet_score", "radio_per_contact", "inet_cards"):
+        assert field in ALLOWED_FIELDS
+        with pytest.raises(UploadValidationError):
+            sanitize_rows([_row(**{field: "1"})])
+
+
 def test_sanitize_rows_rejects_empty_and_too_many():
     with pytest.raises(UploadValidationError):
         sanitize_rows([])

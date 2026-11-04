@@ -220,9 +220,10 @@ _MANDATORY_COLUMNS = {
 # практически 100% состава каждую неделю, final_place/тир/коэффициент ЛГ
 # для них никогда не считались (нашли на реальных данных: 55/55 строк с
 # c1_sum==0 у ПП+Увеличители против 106/288 у обычных групп той же
-# недели). Для них сигналом служит ch_sum (уже разрешённый канал этого
-# сотрудника, кладётся в row **channel_values ниже по коду, до вызова
-# этой функции) — тот же принцип "структурно применимая категория".
+# недели). Для них сигналом служит оборот по каналам: Радио+ТВ и Интернет
+# оба нулевые (radio_sum/inet_sum, кладутся в row **channel_values ниже по
+# коду, до вызова этой функции; выбора одного канала группы больше нет) —
+# тот же принцип "структурно применимая категория".
 NA_STATUSES = {"тренер", "руководитель", "отпуск", "больничный"}
 
 
@@ -242,7 +243,7 @@ def is_na_row(row: dict) -> bool:
     if status_value.startswith("новичок") or status_value in NA_STATUSES:
         return True
     if supervisor and PEAKS_GROUP_RE.search(supervisor):
-        return (row.get("ch_sum") or 0) == 0
+        return (row.get("radio_sum") or 0) == 0 and (row.get("inet_sum") or 0) == 0
     return (row.get("c1_sum") or 0) == 0
 
 
@@ -331,22 +332,25 @@ def _pick_channel(row: pd.Series, supervisor: str | None, supervisor_channels: d
     else:
         channel, is_guessed = ("inet" if inet_sum > radio_sum else "radio"), True
 
-    if channel == "inet":
-        values = {
-            "ch_sum": inet_sum,
-            "ch_check": _num(row.get(INET_CHECK_COLUMN)),
-            "ch_conv": _num(row.get(INET_CONV_COLUMN)),
-            "ch_per_contact": _num(row.get(INET_PER_CONTACT_COLUMN)),
-            "ch_cards": _optional_num(row, INET_COUNT_COLUMN),
-        }
-    else:
-        values = {
-            "ch_sum": radio_sum,
-            "ch_check": _num(row.get(RADIO_CHECK_COLUMN)),
-            "ch_conv": _num(row.get(RADIO_CONV_COLUMN)),
-            "ch_per_contact": _num(row.get(RADIO_PER_CONTACT_COLUMN)),
-            "ch_cards": _optional_num(row, RADIO_COUNT_COLUMN),
-        }
+    # Оба канала — отдельные категории рейтинга (см. weekly_rating.py):
+    # radio_*/inet_* несут сырые значения КАЖДОГО канала. ch_* — данные того
+    # канала, что настроен группе (для просмотра/дашбордов и надбавки к ЗП),
+    # на места они не влияют.
+    values = {
+        "radio_sum": radio_sum,
+        "radio_check": _num(row.get(RADIO_CHECK_COLUMN)),
+        "radio_conv": _num(row.get(RADIO_CONV_COLUMN)),
+        "radio_per_contact": _num(row.get(RADIO_PER_CONTACT_COLUMN)),
+        "radio_cards": _optional_num(row, RADIO_COUNT_COLUMN),
+        "inet_sum": inet_sum,
+        "inet_check": _num(row.get(INET_CHECK_COLUMN)),
+        "inet_conv": _num(row.get(INET_CONV_COLUMN)),
+        "inet_per_contact": _num(row.get(INET_PER_CONTACT_COLUMN)),
+        "inet_cards": _optional_num(row, INET_COUNT_COLUMN),
+    }
+    own = "inet" if channel == "inet" else "radio"
+    for field in ("sum", "check", "conv", "per_contact", "cards"):
+        values[f"ch_{field}"] = values[f"{own}_{field}"]
     return channel, is_guessed, values
 
 

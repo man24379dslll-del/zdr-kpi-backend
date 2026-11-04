@@ -1,13 +1,17 @@
 from app.services.tier_lk import compute_tiered_lk_places
 
 
-def _row(lk_cards, lk_conv, lk_pc, c1_place, ch_place, time_place, errors_place):
+def _row(lk_cards, lk_conv, lk_pc, c1_place, ch_place, time_place, errors_place, inet_place=None):
+    # Радио+ТВ и Интернет — две отдельные категории; ch_place задаёт место
+    # Радио+ТВ, а Интернет по умолчанию то же (inet_place=None) — так в
+    # тестах ниже "все 4 категории равны" остаётся читаемым.
     return {
         "lk_cards": lk_cards,
         "lk_conv": lk_conv,
         "lk_pc": lk_pc,
         "c1_place": c1_place,
-        "ch_place": ch_place,
+        "radio_place": ch_place,
+        "inet_place": ch_place if inet_place is None else inet_place,
         "time_place": time_place,
         "errors_place": errors_place,
     }
@@ -24,7 +28,7 @@ def test_tier_a_ranked_by_sum_per_contact_desc():
 
 def test_tier_b_equals_plain_average_without_any_offset():
     # По прямому запросу заказчика: размер тира A НЕ входит в формулу
-    # тира Б — просто среднее место по остальным 4 категориям, без сдвига.
+    # тира Б — просто среднее место по остальным категориям, без сдвига.
     items = [
         _row(5, 10, 100, 1, 1, 1, 1),  # тир A -> место 1
         _row(0, 0, 0, 3, 3, 3, 3),     # тир Б: карточек 0
@@ -197,3 +201,9 @@ def test_positive_cards_zero_conversion_is_tier_b_not_a():
     items = [_row(5, 0, 999, 1, 1, 1, 1)]  # карточки есть, но конверсия 0
     places = compute_tiered_lk_places(items)
     assert places[0] == 1.0  # тир Б: среднее место (1,1,1,1), не ранг по lk_pc
+
+
+def test_tier_b_average_counts_radio_and_inet_as_two_separate_categories():
+    # c1=1, Радио+ТВ=1, Интернет=4, время=1, ошибки=3 -> (1+1+4+1+3)/5 = 2.0
+    items = [_row(0, 0, 0, 1, 1, 1, 3, inet_place=4)]
+    assert compute_tiered_lk_places(items) == [2.0]

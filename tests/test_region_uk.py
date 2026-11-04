@@ -139,26 +139,27 @@ def test_region_uk_and_peaks_have_mirrored_score_key_restrictions():
     by_fio = {r.fio: r for r in results}
 
     fedotova = by_fio["ЗДР Федотова М. Д."]
-    # Места по каналу/ошибкам всё равно посчитаны (нужны тиру ЛК) ...
+    # Места по каналам/ошибкам всё равно посчитаны (нужны тиру ЛК) ...
     assert "channel" in fedotova.places
+    assert "radio" in fedotova.places and "inet" in fedotova.places
     assert "errors" in fedotova.places
     # ... но НЕ идут в total_score
     assert set(fedotova.scores.keys()) == {"c1", "lk", "time"}
     assert fedotova.total_score == fedotova.scores["c1"] + fedotova.scores["lk"] + fedotova.scores["time"]
 
-    kozlov = by_fio["ПП Козлов А. А."]  # "ПП" -> total_score ТОЛЬКО по каналу
+    kozlov = by_fio["ПП Козлов А. А."]  # "ПП" -> total_score ТОЛЬКО по каналам (Радио+ТВ и Интернет)
     # Места по остальным категориям всё равно посчитаны (нужны тиру ЛК,
     # видны в таблице) ...
     assert "c1" in kozlov.places
     assert "time" in kozlov.places
     assert "errors" in kozlov.places
     # ... но НЕ идут в total_score
-    assert set(kozlov.scores.keys()) == {"channel"}
-    assert kozlov.total_score == kozlov.scores["channel"]
+    assert set(kozlov.scores.keys()) == {"radio", "inet"}
+    assert kozlov.total_score == kozlov.scores["radio"] + kozlov.scores["inet"]
 
     uvelichiteli = by_fio["Увеличители Орлов О. О."]  # "Увеличители" -> тот же принцип
-    assert set(uvelichiteli.scores.keys()) == {"channel"}
-    assert uvelichiteli.total_score == uvelichiteli.scores["channel"]
+    assert set(uvelichiteli.scores.keys()) == {"radio", "inet"}
+    assert uvelichiteli.total_score == uvelichiteli.scores["radio"] + uvelichiteli.scores["inet"]
 
 
 def test_region_uk_pp_and_uvelichiteli_get_separate_ladder_groups():

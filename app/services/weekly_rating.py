@@ -1,13 +1,24 @@
 """
-Полный недельный расчёт: тир канала → категории конструктора рейтинга →
-тир ЛК → итоговое место → распределение по ЛГ (лестничным группам).
+Полный недельный расчёт: тир канала (отдельно Радио+ТВ и Интернет) →
+категории конструктора рейтинга → тир ЛК → итоговое место → распределение
+по ЛГ (лестничным группам).
+
+Радио+ТВ и Интернет — ДВЕ отдельные категории (ключи "radio" и "inet"):
+выбора канала у группы больше нет, у каждого сотрудника считаются оба, у
+каждого своё место и балл. Вес каждой — вес категории "channel" из
+конструктора рейтинга (она остаётся одной настройкой для обеих, 2.5).
+Канал группы (supervisor_channels, employee['channel']) влияет только на
+то, какой из двух каналов пишется в "единый" ch_* для просмотра и
+дашбордов (r.places["channel"]), и на надбавку к ЗП (salary.py) — но не на
+места и total_score.
 
 Соединяет самостоятельные модули в один пайплайн, НЕ сливая их логику
 воедино (так и просили при переносе тира ЛК и ЛГ):
   - rating_engine.py  — обобщённое ранжирование категорий конструктора
-  - tier_channel.py   — особый случай для категории 'channel' (тир A/Б/В
-                         по картам+конверсии канала); считается ПЕРВЫМ,
-                         ни от чего не зависит
+  - tier_channel.py   — особый случай для каналов (тир A/Б/В по
+                         картам+конверсии канала), для каждого из двух
+                         каналов отдельно; считается ПЕРВЫМ, ни от чего
+                         не зависит
   - tier_lk.py         — особый случай для категории 'lk' (тир A/Б/В по
                          картам+конверсии ЛК); считается ПОСЛЕ тира
                          канала, использует его финальное место в
@@ -26,12 +37,12 @@ rating_engine.py невозможен.
 "Регион УК" (Уволенные/Нераспределенные, employee['is_region_uk'] = True,
 см. excel_parsing.py) — особый случай: место по каждой категории
 считается как обычно (внутри своей группы, нужно для тира ЛК и для
-хранения в kpi_ratings), но в total_score идут только c1/lk/time — канал
+хранения в kpi_ratings), но в total_score идут только c1/lk/time — каналы
 и % ошибок для этих сотрудников не в счёт (см. REGION_UK_SCORE_KEYS).
 
 "ПП"/"Увеличители" (supervisor матчит PEAKS_GROUP_RE — обе подгруппы
-бывшей общей "Пики") — зеркальный случай: в total_score идёт ТОЛЬКО
-channel, остальные 4 категории считаются как обычно (см.
+бывшей общей "Пики") — зеркальный случай: в total_score идут ТОЛЬКО
+каналы (radio и inet), остальные категории считаются как обычно (см.
 PEAKS_SCORE_KEYS), но не в сумме. Часовая ставка в формуле ЗП для этих
 групп тоже отменена — см. services/salary.py, это отдельный, не
 связанный с total_score механизм.
@@ -76,17 +87,30 @@ from app.services.rating_engine import (
 from app.services.tier_channel import compute_tiered_channel_places
 from app.services.tier_lk import compute_tiered_lk_places
 
+# Каналы — две отдельные категории вместо одной "channel": ключи мест и
+# имена сырых полей (radio_cards/radio_conv/radio_per_contact, то же для
+# inet). Их вес один — вес категории "channel" конструктора рейтинга.
+CHANNEL_KEYS = ("radio", "inet")
+
 # Тир ЛК (в отличие от остальных категорий конструктора) жёстко завязан
-# на эти 4 конкретные категории — как в старой JS-версии. Это не
-# настраивается через конструктор рейтинга. "channel" здесь — уже
-# ФИНАЛЬНОЕ место по каналу (тир канала считается раньше и ни от чего
+# на эти конкретные категории — как в старой JS-версии. Это не
+# настраивается через конструктор рейтинга. "radio"/"inet" здесь — уже
+# ФИНАЛЬНЫЕ места по каналам (тир канала считается раньше и ни от чего
 # не зависит, см. compute_weekly_rating и docstring tier_channel.py).
 LK_TIER_PLACE_FIELDS = {
     "c1": "c1_place",
-    "channel": "ch_place",
+    "radio": "radio_place",
+    "inet": "inet_place",
     "time": "time_place",
     "errors": "errors_place",
 }
+
+
+def group_channel_key(raw: dict) -> str:
+    """Какой из двух каналов настроен группе сотрудника (employee['channel'],
+    supervisor_channels): 'inet' или 'radio' (по умолчанию). На места и
+    total_score не влияет — только на единый ch_* и надбавку к ЗП."""
+    return "inet" if raw.get("channel") == "inet" else "radio"
 
 
 def _has_no_activity(raw: dict, supervisor_field: str) -> bool:
@@ -95,7 +119,7 @@ def _has_no_activity(raw: dict, supervisor_field: str) -> bool:
     что в excel_parsing.is_na_row). Только активностная часть Н/О — без
     статуса новичка/отпуска."""
     if PEAKS_GROUP_RE.search(raw.get(supervisor_field) or ""):
-        return raw.get("ch_sum") == 0
+        return (raw.get("radio_sum") or 0) == 0 and (raw.get("inet_sum") or 0) == 0
     return raw.get("c1_sum") == 0
 
 
@@ -121,9 +145,12 @@ def compute_weekly_rating(
                 передан — ladder_groups сам подставит запасной вариант.
     """
     active = [c for c in categories if c.enabled]
-    active_keys = {c.key for c in active}
     lk_category = next((c for c in active if c.key == "lk"), None)
     channel_category = next((c for c in active if c.key == "channel"), None)
+    # Категория конструктора "channel" развёртывается в две — radio и inet.
+    active_keys = {c.key for c in active if c.key != "channel"}
+    if channel_category is not None:
+        active_keys.update(CHANNEL_KEYS)
     # Ни 'lk', ни 'channel' не участвуют в обычном apply_category_ranks —
     # у обеих свой особый расчёт (см. ниже).
     other_categories = [c for c in active if c.key not in ("lk", "channel")]
@@ -148,20 +175,23 @@ def compute_weekly_rating(
         groups.setdefault(r.raw.get(supervisor_field), []).append(r)
 
     for group_results in groups.values():
-        # 1. Тир канала — считается ПЕРВЫМ и полностью самостоятельно: не
-        # зависит от мест других категорий вообще, только от собственных
-        # ch_cards/ch_conv/ch_per_contact (см. docstring tier_channel.py).
+        # 1. Тир канала — считается ПЕРВЫМ и полностью самостоятельно, для
+        # КАЖДОГО из двух каналов отдельно: не зависит от мест других
+        # категорий вообще, только от собственных <канал>_cards/_conv/
+        # _per_contact (см. docstring tier_channel.py).
         if channel_category is not None:
-            channel_items = []
-            for r in group_results:
-                channel_items.append({
-                    "ch_cards": r.raw.get("ch_cards") or 0,
-                    "ch_conv": r.raw.get("ch_conv") or 0,
-                    "ch_per_contact": r.raw.get(channel_category.source_column) or 0,
-                })
-            for r, place in zip(group_results, compute_tiered_channel_places(channel_items)):
-                r.places["channel"] = place
-                r.scores["channel"] = place * channel_category.weight
+            for key in CHANNEL_KEYS:
+                channel_items = [
+                    {
+                        "ch_cards": r.raw.get(f"{key}_cards") or 0,
+                        "ch_conv": r.raw.get(f"{key}_conv") or 0,
+                        "ch_per_contact": r.raw.get(f"{key}_per_contact") or 0,
+                    }
+                    for r in group_results
+                ]
+                for r, place in zip(group_results, compute_tiered_channel_places(channel_items)):
+                    r.places[key] = place
+                    r.scores[key] = place * channel_category.weight
 
         # 2. Обычные категории конструктора (1 обращение, время, % ошибок,
         # любые кастомные) — независимы, обычный спортивный ранг. Сотрудники
@@ -198,10 +228,19 @@ def compute_weekly_rating(
                     r.places["lk"] = 1
                     r.scores["lk"] = 1 * lk_category.weight
 
+        # Единый "канал группы" (для просмотра/дашбордов и ch_* в kpi_ratings):
+        # место того из двух каналов, что настроен группе. Только место —
+        # балл в r.scores не дублируем, иначе он попал бы в total_score дважды
+        # (см. ratings_repository.build_kpi_rating_row).
+        if channel_category is not None:
+            for r in group_results:
+                r.places["channel"] = r.places[group_channel_key(r.raw)]
+
         # "Регион УК": total_score только по c1/lk/time. "ПП"/"Увеличители":
-        # наоборот, total_score только по channel. Места (r.places) в обоих
-        # случаях не трогаем — они уже посчитаны внутри группы и нужны тиру
-        # ЛК (LK_TIER_PLACE_FIELDS) плюс для хранения в kpi_ratings.
+        # наоборот, total_score только по каналам (radio и inet). Места
+        # (r.places) в обоих случаях не трогаем — они уже посчитаны внутри
+        # группы и нужны тиру ЛК (LK_TIER_PLACE_FIELDS) плюс для хранения в
+        # kpi_ratings.
         for r in group_results:
             if r.raw.get("is_region_uk"):
                 r.scores = {k: v for k, v in r.scores.items() if k in REGION_UK_SCORE_KEYS}

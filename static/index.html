@@ -171,7 +171,6 @@
   /* Руководитель сектора после расчёта видит только сводку и кнопку записи —
      полные таблицы всех групп файла не показываем (видит только свой сектор). */
   #resultsPanel.sector-upload-mode .stats,
-  #resultsPanel.sector-upload-mode #editChannelsBtn,
   #resultsPanel.sector-upload-mode .tab-bar,
   #resultsPanel.sector-upload-mode .tab-panel,
   #resultsPanel.sector-upload-mode #exportBtn,
@@ -353,6 +352,7 @@
       <button class="dash-tab-btn" data-dashtab="channels">Каналы</button>
       <button class="dash-tab-btn" data-dashtab="anomalies">Аномалии</button>
       <button class="dash-tab-btn" data-dashtab="bystatus">По уровням</button>
+      <button class="dash-tab-btn" data-dashtab="statuses">По статусам</button>
     </div>
     <div id="dashLog" class="log"></div>
     <div class="tab-panel active" id="dashtab-summary"><div id="dashSummaryContainer"></div></div>
@@ -360,6 +360,7 @@
     <div class="tab-panel" id="dashtab-channels"><div id="dashChannelsContainer"></div></div>
     <div class="tab-panel" id="dashtab-anomalies"><div id="dashAnomaliesContainer"></div></div>
     <div class="tab-panel" id="dashtab-bystatus"><div id="dashByStatusContainer"></div></div>
+    <div class="tab-panel" id="dashtab-statuses"><div id="dashStatusesContainer"></div></div>
   </div>
 
   <div class="panel" id="payrollPanel" style="display:none;">
@@ -547,9 +548,9 @@
   </div>
 
   <div class="panel" id="channelPanel" style="display:none;">
-    <h2>2 · Какой канал считать группе: Радио или Интернет</h2>
-    <div class="sub" style="margin-bottom:16px;">По каждой группе супервайзера в категории "Радио/Интернет" учитывается только один из каналов. Угадать по сумме продаж нельзя — у части групп основной канал не совпадает с тем, где больше денег. Проверьте/поправьте вручную.</div>
-    <div id="channelList"></div>
+    <h2>2 · Расчёт рейтинга</h2>
+    <div class="sub" style="margin-bottom:16px;">Выбирать канал группы больше не нужно: у каждого сотрудника считаются все категории — 1 обращение, ЛК, Радио+ТВ, Интернет, время на контакт и ошибки. Радио+ТВ и Интернет — отдельные категории, у каждой свой вес (2,5).</div>
+    <div id="channelHint" class="log" style="margin-bottom:6px;"></div>
     <div class="row" style="margin-top:20px;">
       <button class="btn btn-primary" id="calcBtn">Посчитать рейтинг</button>
     </div>
@@ -562,7 +563,6 @@
     <div id="sectorUploadSummary" style="display:none;margin:10px 0 16px;font-size:13.5px;"></div>
     <div class="row" style="justify-content:space-between;">
       <div class="stats" id="stats"></div>
-      <button class="btn btn-ghost" id="editChannelsBtn" style="padding:8px 14px;font-size:12.5px;">Изменить каналы</button>
     </div>
 
     <div class="tab-bar">
@@ -795,6 +795,13 @@ function dbRowToDisplayRow(r){
     c1_sum: r.c1_sum, c1_check: r.c1_check, c1_conv: r.c1_conv, c1_pc: r.c1_per_contact, c1_cards: r.c1_cards, c1_place: r.c1_place,
     lk_sum: r.lk_sum, lk_check: r.lk_check, lk_conv: r.lk_conv, lk_pc: r.lk_per_contact, lk_cards: r.lk_cards, lk_place: r.lk_place,
     ch_sum: r.ch_sum, ch_check: r.ch_check, ch_conv: r.ch_conv, ch_pc: r.ch_per_contact, ch_cards: r.ch_cards, ch_place: r.ch_place,
+    // Периоды, загруженные по новой формуле, хранят обе категории канала
+    // отдельно; у старых периодов radio_place/inet_place пустые — таблицы
+    // тогда рисуют прежний единый блок канала (см. isDualRows).
+    radio_sum: r.radio_sum ?? null, radio_check: r.radio_check ?? null, radio_conv: r.radio_conv ?? null,
+    radio_pc: r.radio_per_contact ?? null, radio_cards: r.radio_cards ?? null, radio_place: r.radio_place ?? null,
+    inet_sum: r.inet_sum ?? null, inet_check: r.inet_check ?? null, inet_conv: r.inet_conv ?? null,
+    inet_pc: r.inet_per_contact ?? null, inet_cards: r.inet_cards ?? null, inet_place: r.inet_place ?? null,
     time: r.time_per_contact, time_place: r.time_place,
     errors_pct: r.errors_pct, errors_place: r.errors_place, errors_count: r.errors_count ?? null,
     total_score: r.total_score, final_place: r.final_place,
@@ -1572,7 +1579,7 @@ $("parseBtn").addEventListener("click", async () => {
       log(`Нашёл колонку "Рабочее время, ч" — база ЗП будет посчитана по отработанным часам.`, "ok");
     }
 
-    await buildChannelSettings(groups);
+    await resolveGroupChannels(groups);
     $("channelPanel").style.display = "block";
     $("channelPanel").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch(err){
@@ -1610,59 +1617,49 @@ function matchSupervisorChannel(supervisor, supervisorChannels){
   return null;
 }
 
-// Приоритет: supervisor_channels из Supabase (настройка admin/manager,
-// см. app/routers/supervisor_channels.py) → CHANNEL_HINTS (устаревший
-// захардкоженный список, оставлен как запасной вариант для супервайзеров,
-// ещё не заведённых в Supabase) → эвристика "больше сумма".
+// Канал группы больше не выбирается вручную и не определяет, какой канал
+// считается (считаются оба, см. scoreSlice/BOTH_CHANNELS). Он остаётся
+// настройкой группы только для надбавки к ЗП (INET_SALARY_FACTOR) и меток
+// в таблицах. Приоритет: supervisor_channels из Supabase (настройка
+// admin/manager, см. app/routers/supervisor_channels.py) → CHANNEL_HINTS
+// (устаревший захардкоженный список) → "radio". Прежней эвристики "больше
+// сумма" здесь нет: она ошибалась примерно в 40% случаев, раньше это
+// поправляли вручную, а сейчас ошибка тихо дала бы лишние +20% к ЗП.
 function guessChannel(group, supervisorChannels){
   const matched = matchSupervisorChannel(group.supervisor, supervisorChannels || {});
   if(matched) return matched;
   for(const hint of CHANNEL_HINTS){
     if(group.supervisor.includes(hint.match)) return hint.channel;
   }
-  const rtot = group.employees.reduce((s,e)=>s+e.radio_sum,0);
-  const itot = group.employees.reduce((s,e)=>s+e.inet_sum,0);
-  return itot > rtot ? "inet" : "radio";
+  return null;
 }
 
-async function buildChannelSettings(groups){
+async function resolveGroupChannels(groups){
   groupChannels = {};
   let supervisorChannels = {};
   try{
     const rows = await apiGet("/supervisor-channels");
     supervisorChannels = Object.fromEntries(rows.map(r => [r.supervisor, r.channel]));
   } catch(err){
-    log("Не удалось загрузить настройки каналов супервайзеров из Supabase, использую резервную эвристику: " + err.message, "warn");
+    log("Не удалось загрузить настройки каналов супервайзеров из Supabase — все группы считаются без надбавки интернет-групп: " + err.message, "warn");
   }
-  const box = $("channelList");
-  box.innerHTML = "";
+  const unset = [];
   for(const g of groups){
-    const guess = guessChannel(g, supervisorChannels);
-    groupChannels[g.supervisor] = guess;
-
-    const rtot = g.employees.reduce((s,e)=>s+e.radio_sum,0);
-    const itot = g.employees.reduce((s,e)=>s+e.inet_sum,0);
-
-    const row = document.createElement("div");
-    row.className = "chan-row";
-    row.innerHTML = `
-      <div class="chan-name">${g.supervisor}<br><span class="chan-hint">радио: ${rtot.toLocaleString("ru")} · интернет: ${itot.toLocaleString("ru")}</span></div>
-      <div class="chan-toggle" data-supervisor="${encodeURIComponent(g.supervisor)}">
-        <button type="button" data-ch="radio" class="${guess==='radio'?'active':''}">Радио+ТВ</button>
-        <button type="button" data-ch="inet" class="${guess==='inet'?'active':''}">Интернет</button>
-      </div>
-    `;
-    box.appendChild(row);
+    const channel = guessChannel(g, supervisorChannels);
+    // "операторы без супервизора" (Регион УК/ПП/Увеличители) надбавки не
+    // имеют в любом случае — в предупреждение их не включаем.
+    if(channel === null && !/операторы\s+без\s+супервизора/i.test(g.supervisor)) unset.push(g.supervisor);
+    groupChannels[g.supervisor] = channel || "radio";
   }
-  box.querySelectorAll(".chan-toggle").forEach(toggle => {
-    const supervisor = decodeURIComponent(toggle.dataset.supervisor);
-    toggle.querySelectorAll("button").forEach(btn => {
-      btn.addEventListener("click", () => {
-        groupChannels[supervisor] = btn.dataset.ch;
-        toggle.querySelectorAll("button").forEach(b => b.classList.toggle("active", b === btn));
-      });
-    });
-  });
+  const inetGroups = groups.filter(g => groupChannels[g.supervisor] === "inet").map(g => displayGroupName(g.supervisor));
+  const hint = $("channelHint");
+  hint.innerHTML = "";
+  log(inetGroups.length
+    ? `Группы с каналом «Интернет» (надбавка к ЗП ×1,2): ${inetGroups.join(", ")}.`
+    : "Групп с каналом «Интернет» (надбавка к ЗП ×1,2) нет.", "ok", hint);
+  if(unset.length){
+    log(`Канал группы не настроен в supervisor_channels, считаются как Радио+ТВ (без надбавки): ${unset.map(displayGroupName).join(", ")}.`, "warn", hint);
+  }
 }
 
 // ---------- ranking helpers ----------
@@ -1673,6 +1670,20 @@ function channelFields(e, channel){
   return channel === "inet"
     ? { sum: e.inet_sum, check: e.inet_check, conv: e.inet_conv, pc: e.inet_pc, cards: e.inet_cards }
     : { sum: e.radio_sum, check: e.radio_check, conv: e.radio_conv, pc: e.radio_pc, cards: e.radio_cards };
+}
+// "Канал группы" (supervisor_channels) больше не выбирается вручную и не
+// определяет, КАКОЙ канал считается (считаются оба), но остаётся меткой
+// группы: от него зависит надбавка к ЗП (INET_SALARY_FACTOR), а также
+// просмотр/дашборды, которые читают единый ch_* (данные, место и балл ТОГО
+// канала, что настроен группе). На total_score ch_* не влияет — сумма уже
+// содержит обе категории (radio_score + inet_score).
+function withGroupChannelFields(e, channel){
+  const key = channel === "inet" ? "inet" : "radio";
+  return {
+    ...e, channel,
+    ch_sum: e[key + "_sum"], ch_check: e[key + "_check"], ch_conv: e[key + "_conv"], ch_pc: e[key + "_pc"],
+    ch_cards: e[key + "_cards"], ch_place: e[key + "_place"], ch_score: e[key + "_score"],
+  };
 }
 function isNaMain(e){ return EXCLUDED_STATUSES.includes(e.status) || e.c1_sum === 0; }
 // "Рейтинг супервайзеров (Сектор №2)" — по прямому запросу заказчика
@@ -1690,11 +1701,12 @@ function isNaNovice(e){ return e.c1_sum === 0; }
 // total_score считается ТОЛЬКО по каналу (см. computeMainRating ниже),
 // они физически не работают по категории "1 обращение" — c1_sum у них
 // СТРУКТУРНО всегда 0 (не "нет продаж", категория не применима). Сигнал
-// Н/О для них — ch_sum (уже разрешённый канал, см. pass1 в scoreSlice).
+// Н/О для них — оборот по каналам (Радио+ТВ и Интернет оба нулевые: оба
+// канала теперь считаются у всех, выбора канала группы больше нет).
 // Точный перенос app/services/excel_parsing.py::is_na_row — там та же
 // причина/фикс, найдено на реальных данных (55/55 ПП+Увеличители-строк
 // с c1_sum==0 против 106/288 у обычных групп той же недели).
-function isNaPeaks(e){ return EXCLUDED_STATUSES.includes(e.status) || (e.ch_sum || 0) === 0; }
+function isNaPeaks(e){ return EXCLUDED_STATUSES.includes(e.status) || ((e.radio_sum || 0) === 0 && (e.inet_sum || 0) === 0); }
 
 // Сектор №2 (4 обычные группы супервайзеров) — категория "ЛК" не входит
 // в total_score для всех сотрудников этих групп, КРОМЕ 3 исключений (по
@@ -1783,7 +1795,7 @@ function rankByKeys(idxList, keyFns){
 // (computeTieredChannelPlaces ниже) считается ПЕРВЫМ, самостоятельно —
 // не зависит от мест других категорий вообще, поэтому циклической
 // зависимости между тиром ЛК и тиром канала больше нет.
-function computeTieredLkPlaces(items){
+function computeTieredLkPlaces(items, dual){
   const idxA = [], idxB = [], idxC = [];
   items.forEach((e, i) => {
     const cards = e.lk_cards ?? 0;
@@ -1794,7 +1806,15 @@ function computeTieredLkPlaces(items){
   });
 
   const places = new Array(items.length).fill(1);
-  const avgOthers = (i) => (items[i].c1_place + items[i].ch_place + items[i].time_place + items[i].errors_place) / 4;
+  // Среднее по ВСЕМ остальным категориям: у новой формулы (dual) Радио+ТВ и
+  // Интернет — две отдельные категории, значит 5 мест, а не 4.
+  const avgOthers = (i) => {
+    const e = items[i];
+    const parts = dual
+      ? [e.c1_place, e.radio_place, e.inet_place, e.time_place, e.errors_place]
+      : [e.c1_place, e.ch_place, e.time_place, e.errors_place];
+    return parts.reduce((s, p) => s + p, 0) / parts.length;
+  };
 
   const pcA = idxA.map(i => items[i].lk_pc);
   idxA.forEach(i => { places[i] = rankDesc(pcA, items[i].lk_pc); });
@@ -1882,11 +1902,35 @@ function rankAscDenseSkippingNoActivity(items, valueFn, noActivityFn){
   return items.map(e => noActivityFn(e) ? worst : uniq.indexOf(valueFn(e)) + 1);
 }
 const hasNoActivityMain = e => e.c1_sum === 0;
-const hasNoActivityPeaks = e => e.ch_sum === 0;
+const hasNoActivityPeaks = e => (e.radio_sum || 0) === 0 && (e.inet_sum || 0) === 0;
+
+// Вес КАЖДОЙ из двух категорий канала (Радио+ТВ и Интернет) — прежний вес
+// единой категории "канал". Выбора канала у группы больше нет: считаются
+// оба канала у всех, у каждого своё место и свой балл.
+const CHANNEL_WEIGHT = 2.5;
+// Значение channelOf для scoreSlice: считать ОБА канала по полям radio_* и
+// inet_* самих строк. Функция channelOf вместо него — прежний режим с одним
+// каналом (используется только сравнением групп между собой, см.
+// computeSupervisorRating).
+const BOTH_CHANNELS = "both";
+
+// Места по одной категории канала: с тиром A/Б/В (specialLK) или плоским
+// рангом по "сумме с контакта" (см. computeTieredChannelPlaces).
+function channelCategoryPlaces(items, fieldsOf, specialLK){
+  if(specialLK){
+    return computeTieredChannelPlaces(items.map(e => {
+      const ch = fieldsOf(e);
+      return { ch_pc: ch.pc, ch_cards: ch.cards, ch_conv: ch.conv };
+    }));
+  }
+  const pcs = items.map(e => fieldsOf(e).pc);
+  return items.map(e => rankDesc(pcs, fieldsOf(e).pc));
+}
 
 function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategories, lkActiveFn, forceLk1, noActivityFn){
   noActivityFn = noActivityFn || hasNoActivityMain;
   if(items.length === 0) return [];
+  const dual = channelOf === BOTH_CHANNELS;
   const active = activeCategories || { c1:true, lk:true, ch:true, time:true, errors:true };
   const c1pc = items.map(e=>e.c1_pc);
 
@@ -1895,22 +1939,18 @@ function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategorie
   // категорий вообще, только от собственных карточек/конверсии/суммы с
   // контакта. Применяется там же, где тир ЛК (specialLK) — глобальный
   // список новичков и рейтинг супервайзеров тиры не используют.
-  let chPlaces;
-  if(specialLK){
-    const channelItems = items.map(e => {
-      const ch = channelOf(e);
-      return { ch_pc: ch.pc, ch_cards: ch.cards, ch_conv: ch.conv };
-    });
-    chPlaces = computeTieredChannelPlaces(channelItems);
+  let chPlaces, radioPlaces, inetPlaces;
+  if(dual){
+    radioPlaces = channelCategoryPlaces(items, e => channelFields(e, "radio"), specialLK);
+    inetPlaces = channelCategoryPlaces(items, e => channelFields(e, "inet"), specialLK);
   } else {
-    const chpc = items.map(e => channelOf(e).pc);
-    chPlaces = items.map(e => rankDesc(chpc, channelOf(e).pc));
+    chPlaces = channelCategoryPlaces(items, channelOf, specialLK);
   }
 
   // Канал разрешаем заранее (не только внутри pass1 ниже) — noActivityFn
-  // нужен ДО построения времени/ошибок, а у "ПП"/"Увеличители" ему нужен
-  // уже готовый e.ch_sum.
-  const withChannel = items.map(e => {
+  // нужен ДО построения времени/ошибок. В режиме с двумя каналами строки уже
+  // несут radio_*/inet_* — отдельного "разрешённого" канала нет.
+  const withChannel = dual ? items : items.map(e => {
     const ch = channelOf(e);
     return {...e, ch_sum: ch.sum, ch_check: ch.check, ch_conv: ch.conv, ch_pc: ch.pc, ch_cards: ch.cards};
   });
@@ -1920,15 +1960,16 @@ function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategorie
   // первый проход: остальные обычные категории (1 обращение, время, ошибки) — независимы
   const pass1 = withChannel.map((e, i) => {
     const c1_place = rankDesc(c1pc, e.c1_pc);
-    return {...e, c1_place, ch_place: chPlaces[i], time_place: timePlaces[i], errors_place: errorsPlaces[i]};
+    const channelPlaces = dual ? { radio_place: radioPlaces[i], inet_place: inetPlaces[i] } : { ch_place: chPlaces[i] };
+    return {...e, c1_place, ...channelPlaces, time_place: timePlaces[i], errors_place: errorsPlaces[i]};
   });
 
   // Тир ЛК — ПОСЛЕ канала: среднее для тиров Б/В использует уже
-  // ФИНАЛЬНОЕ (не промежуточное) место по каналу из pass1.ch_place —
+  // ФИНАЛЬНЫЕ (не промежуточные) места по каналу из pass1 —
   // циклической зависимости между тиром ЛК и тиром канала больше нет.
   let lkPlaces;
   if(specialLK){
-    lkPlaces = computeTieredLkPlaces(pass1);
+    lkPlaces = computeTieredLkPlaces(pass1, dual);
   } else {
     const lkpc = pass1.map(e => e.lk_pc);
     lkPlaces = pass1.map(e => rankDesc(lkpc, e.lk_pc));
@@ -1940,13 +1981,22 @@ function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategorie
     // на total_score (lkActiveFn ниже, вес 0), у 3 исключений — даёт
     // максимальный балл по ЛК (1×вес) независимо от реальных продаж.
     const lk_place = forceLk1 ? 1 : lkPlaces[i];
-    const ch_place = e.ch_place;
-    const c1_score = e.c1_place*3, lk_score = lk_place*1.5, ch_score = ch_place*2.5;
+    const c1_score = e.c1_place*3, lk_score = lk_place*1.5;
     const time_score = e.time_place*1, errors_score = e.errors_place*1;
     // lkActiveFn — поэлементное переопределение поверх группового active.lk
     // (Сектор №2: у большинства сотрудников группы ЛК не в счёт, у 3
     // исключений — как обычно, см. sector2ZeroesLk/computeMainRating).
     const lkActive = active.lk && (lkActiveFn ? lkActiveFn(e) : true);
+    // Порядок слагаемых сохранён как был (c1, ЛК, канал, время, ошибки):
+    // total_score сравнивается на строгое равенство при ничьих, а
+    // перестановка слагаемых могла бы изменить последний бит суммы.
+    if(dual){
+      const radio_score = e.radio_place*CHANNEL_WEIGHT, inet_score = e.inet_place*CHANNEL_WEIGHT;
+      const total_score = (active.c1?c1_score:0)+(lkActive?lk_score:0)+(active.ch?radio_score:0)+(active.ch?inet_score:0)+(active.time?time_score:0)+(active.errors?errors_score:0);
+      return {...e, lk_place, c1_score, lk_score, radio_score, inet_score, time_score, errors_score, total_score};
+    }
+    const ch_place = e.ch_place;
+    const ch_score = ch_place*CHANNEL_WEIGHT;
     const total_score = (active.c1?c1_score:0)+(lkActive?lk_score:0)+(active.ch?ch_score:0)+(active.time?time_score:0)+(active.errors?errors_score:0);
     return {...e, lk_place, ch_place, c1_score, lk_score, ch_score, time_score, errors_score, total_score};
   });
@@ -1989,8 +2039,8 @@ function computeMainRating(groups, prevCoeffMap, tierCoefficients){
     // — как раньше, isNaMain.
     const naFn = g.isPeaks ? isNaPeaks : (forceLk1 || isSector3) ? (e => !isNarrowSectorEvaluated(e)) : isNaMain;
     const lkActiveFn = e => !sector2ZeroesLk(g.supervisor, e.fio);
-    const scored = scoreSlice(g.employees, e => channelFields(e, channel), naFn, "c1_sum", true, active, lkActiveFn, forceLk1, g.isPeaks ? hasNoActivityPeaks : hasNoActivityMain);
-    out.push(...scored.map(e => ({...e, supervisor: g.supervisor, channel, isRegionUK: !!g.isRegionUK, isPeaks: !!g.isPeaks})));
+    const scored = scoreSlice(g.employees, BOTH_CHANNELS, naFn, "c1_sum", true, active, lkActiveFn, forceLk1, g.isPeaks ? hasNoActivityPeaks : hasNoActivityMain);
+    out.push(...scored.map(e => ({...withGroupChannelFields(e, channel), supervisor: g.supervisor, isRegionUK: !!g.isRegionUK, isPeaks: !!g.isPeaks})));
   }
   if(periodType === "week"){
     assignTierCoefficients(out, tierCoefficients);
@@ -2191,7 +2241,7 @@ function computeGlobalNovices(groups){
       if(NOVICE_STATUSES.includes(e.status)) all.push({...e, supervisor: g.supervisor, channel});
     }
   }
-  return scoreSlice(all, e => channelFields(e, e.channel), isNaNovice, "c1_sum", true);
+  return scoreSlice(all, BOTH_CHANNELS, isNaNovice, "c1_sum", true).map(e => withGroupChannelFields(e, e.channel));
 }
 
 // ---------- "Коэффициент" в "Рейтинг супервайзеров" (ПОКА ТОЛЬКО ОТОБРАЖЕНИЕ,
@@ -2328,6 +2378,14 @@ function toDbRow(e, isNovice){
     ch_sum: e.ch_sum, ch_check: e.ch_check, ch_conv: e.ch_conv, ch_per_contact: e.ch_pc,
     ch_cards: e.ch_cards ?? null,
     ch_place: e.ch_place, ch_score: e.ch_score,
+    // Обе категории канала отдельно (см. scoreSlice, BOTH_CHANNELS). ch_*
+    // выше — канал группы, оставлен для просмотра/дашбордов/старых периодов.
+    radio_sum: e.radio_sum ?? null, radio_check: e.radio_check ?? null, radio_conv: e.radio_conv ?? null,
+    radio_per_contact: e.radio_pc ?? null, radio_cards: e.radio_cards ?? null,
+    radio_place: e.radio_place ?? null, radio_score: e.radio_score ?? null,
+    inet_sum: e.inet_sum ?? null, inet_check: e.inet_check ?? null, inet_conv: e.inet_conv ?? null,
+    inet_per_contact: e.inet_pc ?? null, inet_cards: e.inet_cards ?? null,
+    inet_place: e.inet_place ?? null, inet_score: e.inet_score ?? null,
     time_per_contact: e.time, time_place: e.time_place, time_score: e.time_score,
     errors_pct: e.errors_pct, errors_place: e.errors_place, errors_score: e.errors_score,
     errors_count: e.errors_count ?? null,
@@ -2735,7 +2793,15 @@ function rankBadge(value, hex, extraText){
   return `<span class="rank-badge" style="background:${bg};color:${fg};">${value}</span>`;
 }
 
-function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk){
+// Строки новой формулы несут обе категории канала отдельно (radio_*/inet_*,
+// см. scoreSlice/BOTH_CHANNELS); у периодов, загруженных раньше, место по
+// каналам пустое — для них остаётся прежний единый блок канала.
+function isDualRows(rows){
+  return rows.some(r => r.radio_place !== null && r.radio_place !== undefined);
+}
+
+function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk, dual){
+  const chanSub = `<th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>`;
   return `
     <thead>
       <tr class="cat">
@@ -2744,7 +2810,9 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
         ${extraCol ? `<th class="col-group block-end" rowspan="2">Группа</th>` : ``}
         <th colspan="6" class="block-end">1 обращение</th>
         ${hideLk ? `` : `<th colspan="6" class="block-end">ЛК</th>`}
-        <th colspan="6" class="block-end">${channelLabel || "Радио+ТВ / Интернет"}</th>
+        ${dual
+          ? `<th colspan="6" class="block-end">Радио+ТВ</th><th colspan="6" class="block-end">Интернет</th>`
+          : `<th colspan="6" class="block-end">${channelLabel || "Радио+ТВ / Интернет"}</th>`}
         <th colspan="2" class="block-end">Время/контакт (без звонка)</th>
         <th colspan="3" class="block-end">% ошибок</th>
         <th rowspan="2">Сумма баллов</th>
@@ -2756,7 +2824,7 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
       <tr class="sub">
         <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
         ${hideLk ? `` : `<th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>`}
-        <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
+        ${dual ? chanSub + chanSub : chanSub}
         <th>чч:мм:сс</th><th class="block-end">место</th>
         <th>кол-во</th><th>%</th><th class="block-end">место</th>
       </tr>
@@ -2771,16 +2839,19 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
 // renderSector2LkCards), не этой таблицей.
 function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk){
   const sorted = sortByPlace(rows);
+  const dual = isDualRows(rows);
   const wrap = document.createElement("div");
   wrap.className = "subtable-wrap";
   const table = document.createElement("table");
   table.className = "detail";
-  table.innerHTML = detailTableHead(showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk) + `<tbody></tbody>`;
+  table.innerHTML = detailTableHead(showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk, dual) + `<tbody></tbody>`;
   const tbody = table.querySelector("tbody");
 
   const c1Map = gradientMap(rows, "c1_place");
   const lkMap = gradientMap(rows, "lk_place");
   const chMap = gradientMap(rows, "ch_place");
+  const radioMap = gradientMap(rows, "radio_place");
+  const inetMap = gradientMap(rows, "inet_place");
   const timeMap = gradientMap(rows, "time_place");
   const errMap = gradientMap(rows, "errors_place");
   const finalRows = rows.filter(r => !r.is_na);
@@ -2795,7 +2866,10 @@ function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvSt
       ${showGroupCol ? `<td class="col-group block-end">${displayGroupName(r.supervisor)}</td>` : ``}
       <td>${fmtCards(r.c1_cards)}</td><td>${fmt(r.c1_sum)}</td><td>${fmt(r.c1_check)}</td><td>${fmtPct(r.c1_conv)}</td><td>${fmt(r.c1_pc)}</td><td class="block-end">${rankBadge(r.c1_place, c1Map(r.c1_place))}</td>
       ${hideLk ? `` : `<td>${fmtCards(r.lk_cards)}</td><td>${fmt(r.lk_sum)}</td><td>${fmt(r.lk_check)}</td><td>${fmtPct(r.lk_conv)}</td><td>${fmt(r.lk_pc)}</td><td class="block-end">${rankBadge(fmtPlace(r.lk_place), lkMap(r.lk_place))}</td>`}
-      <td>${fmtCards(r.ch_cards)}</td><td>${fmt(r.ch_sum)}</td><td>${fmt(r.ch_check)}</td><td>${fmtPct(r.ch_conv)}</td><td>${fmt(r.ch_pc)}</td><td class="block-end">${rankBadge(r.ch_place, chMap(r.ch_place))}</td>
+      ${dual
+        ? `<td>${fmtCards(r.radio_cards)}</td><td>${fmt(r.radio_sum)}</td><td>${fmt(r.radio_check)}</td><td>${fmtPct(r.radio_conv)}</td><td>${fmt(r.radio_pc)}</td><td class="block-end">${rankBadge(r.radio_place, radioMap(r.radio_place))}</td>
+           <td>${fmtCards(r.inet_cards)}</td><td>${fmt(r.inet_sum)}</td><td>${fmt(r.inet_check)}</td><td>${fmtPct(r.inet_conv)}</td><td>${fmt(r.inet_pc)}</td><td class="block-end">${rankBadge(r.inet_place, inetMap(r.inet_place))}</td>`
+        : `<td>${fmtCards(r.ch_cards)}</td><td>${fmt(r.ch_sum)}</td><td>${fmt(r.ch_check)}</td><td>${fmtPct(r.ch_conv)}</td><td>${fmt(r.ch_pc)}</td><td class="block-end">${rankBadge(r.ch_place, chMap(r.ch_place))}</td>`}
       <td>${fmtTime(r.time)}</td><td class="block-end">${rankBadge(r.time_place, timeMap(r.time_place))}</td>
       <td>${fmtCards(r.errors_count)}</td><td>${fmtPct(r.errors_pct)}</td><td class="block-end">${rankBadge(r.errors_place, errMap(r.errors_place))}</td>
       <td>${fmt(r.total_score)}</td>
@@ -3752,6 +3826,63 @@ async function renderDashByStatus(){
   levelsObserver.observe($("levelsSentinel"));
 }
 
+// "По статусам" — 1 обращение, Радио+ТВ и Интернет ОТДЕЛЬНЫМИ блоками,
+// время на контакт, ошибки по каждому статусу (Профи, Новичок, ...) за
+// выбранный период (недельный ИЛИ дневной). Доступно ВСЕМ ролям; без ЗП/
+// бонусов/ЛГ/коэффициентов. Считает бэкенд (/dashboards/statuses), данные —
+// только то, что видит сам пользователь (RLS/сектор).
+function statusesBlockHeader(title, span){
+  return `<th colspan="${span}" class="block-end">${title}</th>`;
+}
+function statusesCategoryCells(cat, withCount){
+  return `${withCount ? `<td>${fmtLevelSum(cat.count)}</td>` : ""}
+    <td>${fmtLevelSum(cat.cards)}</td><td>${fmtLevelSum(cat.sum)}</td><td>${fmtLevelAvg(cat.check)}</td><td>${fmtLevelAvg(cat.conv)}</td>
+    <td class="block-end">${fmtLevelAvg(cat.pc)}</td>`;
+}
+function buildStatusesRow(entry, isTotal){
+  return `<tr ${isTotal ? 'style="font-weight:800;background:var(--panel-2);"' : ''}>
+    <td style="font-family:var(--sans);font-weight:600;">${escapeHtml(entry.status)}</td>
+    <td class="block-end">${entry.count}</td>
+    ${statusesCategoryCells(entry.c1, false)}
+    ${statusesCategoryCells(entry.radio, true)}
+    ${statusesCategoryCells(entry.inet, true)}
+    <td class="block-end">${fmtTime(entry.time.avg)}</td>
+    <td>${fmtLevelSum(entry.errors.count)}</td><td>${fmtLevelAvg(entry.errors.pct)}</td>
+  </tr>`;
+}
+async function renderDashStatuses(){
+  const c = $("dashStatusesContainer");
+  c.innerHTML = "";
+  $("wrap").classList.add("wide");
+  const data = await loadDashboardData();
+  if(!data){ c.innerHTML = `<div class="history-empty">Периодов ещё нет в базе.</div>`; return; }
+  const { latest } = data;
+  const d = await apiGet("/dashboards/statuses", { upload_id: latest.id });
+  const groupsText = d.included_groups.length ? d.included_groups.map(escapeHtml).join(", ") : "—";
+  const catSub = (withCount) => `${withCount ? "<th>чел.</th>" : ""}<th>карточек</th><th>сумма,₽</th><th>ср.чек,Ø</th><th>конв.,%Ø</th><th class="block-end">с конт.,Ø</th>`;
+  c.innerHTML = `
+    <div style="margin-bottom:6px;color:var(--muted);font-size:13px;">Период: <b style="color:var(--text);">${escapeHtml(latest.period_label)}</b></div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:14px;">Учтены только группы: ${groupsText}. Не оценённые (Н/О) не входят. Радио+ТВ и Интернет — по настройке канала группы; Ø — среднее по сотрудникам.</div>
+    <div class="subtable-wrap"><table class="dyn-table"><thead>
+      <tr class="cat">
+        <th rowspan="2">Статус</th><th rowspan="2" class="block-end">Кол-во чел.</th>
+        ${statusesBlockHeader("1 обращение", 5)}
+        ${statusesBlockHeader("Радио+ТВ", 6)}
+        ${statusesBlockHeader("Интернет", 6)}
+        ${statusesBlockHeader("Время/контакт", 1)}
+        <th colspan="2">Ошибки</th>
+      </tr>
+      <tr class="sub">
+        ${catSub(false)}${catSub(true)}${catSub(true)}
+        <th class="block-end">чч:мм:сс,Ø</th>
+        <th>кол-во</th><th>%,Ø</th>
+      </tr>
+    </thead><tbody>
+      ${d.levels.map(e => buildStatusesRow(e, false)).join("")}
+      ${buildStatusesRow(d.total, true)}
+    </tbody></table></div>`;
+}
+
 async function renderDashAnomalies(){
   const c = $("dashAnomaliesContainer");
   c.innerHTML = "";
@@ -4193,7 +4324,7 @@ $("downloadPayrollBtn").addEventListener("click", () => {
   XLSX.utils.book_append_sheet(wb, ws, "Ведомость ЗП");
   XLSX.writeFile(wb, `Ведомость_ЗП_${meta.periodsKey.replace(/,/g, "_")}.xlsx`);
 });
-const DASH_RENDERERS = { summary: renderDashSummary, funnel: renderDashFunnel, channels: renderDashChannels, anomalies: renderDashAnomalies, bystatus: renderDashByStatus };
+const DASH_RENDERERS = { summary: renderDashSummary, funnel: renderDashFunnel, channels: renderDashChannels, anomalies: renderDashAnomalies, bystatus: renderDashByStatus, statuses: renderDashStatuses };
 async function loadActiveDashboard(){
   const activeTab = $("dashboardsPanel").querySelector(".dash-tab-btn.active").dataset.dashtab;
   clearLog($("dashLog"));
@@ -4536,11 +4667,6 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
   });
 });
 
-$("editChannelsBtn").addEventListener("click", () => {
-  $("channelPanel").style.display = "block";
-  $("channelPanel").scrollIntoView({ behavior: "smooth", block: "start" });
-});
-
 // ---------- export to Excel (for Google Sheets: Файл → Импорт) ----------
 const EXPORT_HEADERS = [
   "ФИО","Статус","Группа",
@@ -4551,12 +4677,20 @@ const EXPORT_HEADERS = [
   "Ошибок_%","Ошибок_место",
   "Сумма_баллов","Место",
 ];
-function rowToArray(r){
+// dual — строки новой формулы (isDualRows): вместо одного блока канала два,
+// Радио+ТВ и Интернет, поэтому все колонки правее сдвигаются на 6 (см.
+// exportCols/categoryHeaderRows/placeCols).
+function rowToArray(r, dual){
   return [
     r.fio, r.status, displayGroupName(r.supervisor),
     r.c1_cards ?? "", r.c1_sum, r.c1_check, r.c1_conv, r.c1_pc, r.c1_place,
     r.lk_cards ?? "", r.lk_sum, r.lk_check, r.lk_conv, r.lk_pc, r.lk_place,
-    r.ch_cards ?? "", r.ch_sum, r.ch_check, r.ch_conv, r.ch_pc, r.ch_place,
+    ...(dual ? [
+      r.radio_cards ?? "", r.radio_sum, r.radio_check, r.radio_conv, r.radio_pc, r.radio_place,
+      r.inet_cards ?? "", r.inet_sum, r.inet_check, r.inet_conv, r.inet_pc, r.inet_place,
+    ] : [
+      r.ch_cards ?? "", r.ch_sum, r.ch_check, r.ch_conv, r.ch_pc, r.ch_place,
+    ]),
     fmtTime(r.time), r.time_place,
     r.errors_count ?? "", r.errors_pct, r.errors_place,
     r.total_score, r.is_na ? "Н/О" : r.final_place,
@@ -4587,15 +4721,27 @@ function applyPlaceGradients(ws, sortedRows, colsConfig, dataStartRow){
     });
   });
 }
-const PLACE_COLS = [
-  { idx: 8,  field: "c1_place" },
-  { idx: 14, field: "lk_place" },
-  { idx: 20, field: "ch_place" },
-  { idx: 22, field: "time_place" },
-  { idx: 25, field: "errors_place" },
-];
-const PLACE_COLS_MAIN = [...PLACE_COLS, { idx: 27, field: "final_place", filterFn: r => !r.is_na }];
-const PLACE_COLS_SUP  = [...PLACE_COLS, { idx: 27, field: "final_place" }];
+// Индексы колонок листа: блок канала 6 колонок (одинарный) или 12 (dual) —
+// всё правее него сдвигается на 6.
+function exportCols(dual, withTier){
+  const x = dual ? 6 : 0;
+  return { x, time: 21 + x, errors: 23 + x, total: 26 + x, final: 27 + x, tierStart: 28 + x, totalCols: (withTier ? 36 : 28) + x };
+}
+function placeCols(dual, finalFilterFn){
+  const c = exportCols(dual, false);
+  return [
+    { idx: 8, field: "c1_place" },
+    { idx: 14, field: "lk_place" },
+    ...(dual
+      ? [{ idx: 20, field: "radio_place" }, { idx: 26, field: "inet_place" }]
+      : [{ idx: 20, field: "ch_place" }]),
+    { idx: c.time + 1, field: "time_place" },
+    { idx: c.errors + 2, field: "errors_place" },
+    finalFilterFn ? { idx: c.final, field: "final_place", filterFn: finalFilterFn } : { idx: c.final, field: "final_place" },
+  ];
+}
+const placeColsMain = (dual) => placeCols(dual, r => !r.is_na);
+const placeColsSup = (dual) => placeCols(dual);
 
 
 function styleHeaderRow(ws, colCount, rowIdx, variant){
@@ -4622,59 +4768,70 @@ function styleTitleRow(ws, rowIdx, colCount){
 
 // Двухстрочная шапка: сверху названия блоков (объединённые ячейки), снизу подписи колонок —
 // как на экране (строки "cat" и "sub").
-function categoryHeaderRows(leadLabels, withTier){
-  const totalCols = withTier ? 36 : 28;
+function categoryHeaderRows(leadLabels, withTier, dual){
+  const c = exportCols(dual, withTier);
+  const totalCols = c.totalCols;
   const rowA = new Array(totalCols).fill("");
   const rowB = new Array(totalCols).fill("");
   rowA[0] = leadLabels[0]; rowA[1] = leadLabels[1]; rowA[2] = leadLabels[2];
   rowA[3] = "1 ОБРАЩЕНИЕ";
   rowA[9] = "ЛК";
-  rowA[15] = "РАДИО+ТВ / ИНТЕРНЕТ";
-  rowA[21] = "ВРЕМЯ/КОНТАКТ (БЕЗ ЗВОНКА)";
-  rowA[23] = "% ОШИБОК";
-  rowA[26] = "Сумма баллов";
-  rowA[27] = "Место";
+  if(dual){
+    rowA[15] = "РАДИО+ТВ";
+    rowA[21] = "ИНТЕРНЕТ";
+  } else {
+    rowA[15] = "РАДИО+ТВ / ИНТЕРНЕТ";
+  }
+  rowA[c.time] = "ВРЕМЯ/КОНТАКТ (БЕЗ ЗВОНКА)";
+  rowA[c.errors] = "% ОШИБОК";
+  rowA[c.total] = "Сумма баллов";
+  rowA[c.final] = "Место";
   if(withTier){
-    rowA[28] = "ЛГ"; rowA[29] = "Коэффициент"; rowA[30] = "Коэфф. пред. недели (в ЗП)";
-    rowA[31] = "Рабочее время, ч"; rowA[32] = "Кол-во смен";
-    rowA[33] = bonusColumnLabels.bonus075; rowA[34] = bonusColumnLabels.bonus2; rowA[35] = "ЗП";
+    const t = c.tierStart;
+    rowA[t] = "ЛГ"; rowA[t + 1] = "Коэффициент"; rowA[t + 2] = "Коэфф. пред. недели (в ЗП)";
+    rowA[t + 3] = "Рабочее время, ч"; rowA[t + 4] = "Кол-во смен";
+    rowA[t + 5] = bonusColumnLabels.bonus075; rowA[t + 6] = bonusColumnLabels.bonus2; rowA[t + 7] = "ЗП";
   }
 
   const subLabels = ["карточек","сумма","ср.чек","конв.,%","с контакта","место"];
-  [3, 9, 15].forEach(start => subLabels.forEach((s, i) => rowB[start + i] = s));
-  rowB[21] = "чч:мм:сс"; rowB[22] = "место";
-  rowB[23] = "кол-во"; rowB[24] = "%"; rowB[25] = "место";
+  (dual ? [3, 9, 15, 21] : [3, 9, 15]).forEach(start => subLabels.forEach((s, i) => rowB[start + i] = s));
+  rowB[c.time] = "чч:мм:сс"; rowB[c.time + 1] = "место";
+  rowB[c.errors] = "кол-во"; rowB[c.errors + 1] = "%"; rowB[c.errors + 2] = "место";
 
   return { rowA, rowB, totalCols };
 }
-function categoryHeaderMerges(baseRow, totalCols){
-  const vertCols = [0, 1, 2, 26, 27, ...(totalCols > 28 ? [28, 29, 30, 31, 32, 33, 34, 35] : [])];
-  const merges = vertCols.map(c => ({ s: { r: baseRow, c }, e: { r: baseRow + 1, c } }));
+function categoryHeaderMerges(baseRow, totalCols, dual){
+  const c = exportCols(dual, false);
+  const withTier = totalCols > c.totalCols;
+  const vertCols = [0, 1, 2, c.total, c.final, ...(withTier ? [0, 1, 2, 3, 4, 5, 6, 7].map(i => c.tierStart + i) : [])];
+  const merges = vertCols.map(col => ({ s: { r: baseRow, c: col }, e: { r: baseRow + 1, c: col } }));
   merges.push({ s: { r: baseRow, c: 3 },  e: { r: baseRow, c: 8 } });
   merges.push({ s: { r: baseRow, c: 9 },  e: { r: baseRow, c: 14 } });
   merges.push({ s: { r: baseRow, c: 15 }, e: { r: baseRow, c: 20 } });
-  merges.push({ s: { r: baseRow, c: 21 }, e: { r: baseRow, c: 22 } });
-  merges.push({ s: { r: baseRow, c: 23 }, e: { r: baseRow, c: 25 } });
+  if(dual) merges.push({ s: { r: baseRow, c: 21 }, e: { r: baseRow, c: 26 } });
+  merges.push({ s: { r: baseRow, c: c.time }, e: { r: baseRow, c: c.time + 1 } });
+  merges.push({ s: { r: baseRow, c: c.errors }, e: { r: baseRow, c: c.errors + 2 } });
   return merges;
 }
 
 function buildExportSheet(rows, withConvStatus){
   const sorted = sortByPlace(rows);
-  const { rowA, rowB, totalCols } = categoryHeaderRows(["ФИО","Статус","Группа"], false);
+  const dual = isDualRows(rows);
+  const { rowA, rowB, totalCols } = categoryHeaderRows(["ФИО","Статус","Группа"], false, dual);
   const finalCols = withConvStatus ? totalCols + 1 : totalCols;
   if(withConvStatus){
     rowA.push("Статус по сумме с контакта");
     rowB.push("");
   }
   const dataRows = sorted.map(r => {
-    const arr = rowToArray(r);
+    const arr = rowToArray(r, dual);
     if(withConvStatus) arr.push(convBand(r.c1_pc).label);
     return arr;
   });
   const ws = XLSX.utils.aoa_to_sheet([rowA, rowB, ...dataRows]);
-  ws["!merges"] = categoryHeaderMerges(0, totalCols);
+  ws["!merges"] = categoryHeaderMerges(0, totalCols, dual);
   if(withConvStatus) ws["!merges"].push({ s: { r: 0, c: finalCols - 1 }, e: { r: 1, c: finalCols - 1 } });
-  applyPlaceGradients(ws, sorted, PLACE_COLS_MAIN, 2);
+  applyPlaceGradients(ws, sorted, placeColsMain(dual), 2);
   styleHeaderRow(ws, finalCols, 0, "cat");
   styleHeaderRow(ws, finalCols, 1, "sub");
   if(withConvStatus){
@@ -4701,10 +4858,11 @@ function buildGroupedMainSheet(){
   const salaryCoeffUsedCell = r => r.salaryCoeffUsed == null
     ? ""
     : `${r.salaryCoeffUsed}${r.salaryCoeffFromPrev ? "" : " (по умолч.)"}`;
+  const dual = isDualRows(currentRows);
   const rowFn = r => withTier
-    ? [...rowToArray(r), r.tier ?? "", r.coefficient ?? "", salaryCoeffUsedCell(r), r.work_hours ?? "", r.shift_count ?? "", r.bonus075 ?? "", r.bonus2 ?? "", r.salary ?? ""]
-    : rowToArray(r);
-  const { rowA, rowB, totalCols } = categoryHeaderRows(["ФИО","Статус","Группа"], withTier);
+    ? [...rowToArray(r, dual), r.tier ?? "", r.coefficient ?? "", salaryCoeffUsedCell(r), r.work_hours ?? "", r.shift_count ?? "", r.bonus075 ?? "", r.bonus2 ?? "", r.salary ?? ""]
+    : rowToArray(r, dual);
+  const { rowA, rowB, totalCols } = categoryHeaderRows(["ФИО","Статус","Группа"], withTier, dual);
 
   const groupNames = [...new Set(currentRows.map(r => r.supervisor))].sort(compareGroupNames);
   const aoa = [];
@@ -4723,7 +4881,7 @@ function buildGroupedMainSheet(){
     const dataStart = aoa.length;
     rows.forEach(r => aoa.push(rowFn(r)));
     blocks.push({ titleRow, headerRowA, dataStart, rows });
-    allMerges = allMerges.concat(categoryHeaderMerges(headerRowA, totalCols));
+    allMerges = allMerges.concat(categoryHeaderMerges(headerRowA, totalCols, dual));
     aoa.push([]); // blank separator
   }
   const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -4732,7 +4890,7 @@ function buildGroupedMainSheet(){
     styleTitleRow(ws, titleRow, totalCols);
     styleHeaderRow(ws, totalCols, headerRowA, "cat");
     styleHeaderRow(ws, totalCols, headerRowA + 1, "sub");
-    applyPlaceGradients(ws, rows, PLACE_COLS_MAIN, dataStart);
+    applyPlaceGradients(ws, rows, placeColsMain(dual), dataStart);
   });
   ws["!cols"] = [{ wch: 24 }, { wch: 18 }];
   return ws;
@@ -4780,7 +4938,7 @@ function buildSupervisorExportSheet(rows){
   const ws = XLSX.utils.aoa_to_sheet([rowA, rowB, ...arr, totalRow]);
   ws["!merges"] = categoryHeaderMerges(0, totalCols);
   ws["!merges"].push({ s: { r: 0, c: finalCols - 1 }, e: { r: 1, c: finalCols - 1 } });
-  applyPlaceGradients(ws, sorted, PLACE_COLS_SUP, 2);
+  applyPlaceGradients(ws, sorted, placeColsSup(false), 2);
   styleHeaderRow(ws, finalCols, 0, "cat");
   styleHeaderRow(ws, finalCols, 1, "sub");
   const totalRowIdx = 2 + arr.length;
@@ -4898,20 +5056,22 @@ const BACKEND_COMPARE_FIELDS = [
   ["salary", "ЗП"],
   ["c1_place", "Место: 1 обращение"],
   ["lk_place", "Место: ЛК"],
-  ["ch_place", "Место: канал"],
+  ["radio_place", "Место: Радио+ТВ"],
+  ["inet_place", "Место: Интернет"],
   ["time_place", "Место: время"],
   ["errors_place", "Место: % ошибок"],
 ];
-// "channel" сюда намеренно НЕ входит: старый JS берёт канал из ручного
-// выбора в channelPanel этой же сессии, новый backend — из supervisor_channels
-// в Supabase (плюс эвристика-заглушка) — это два разных источника данных,
-// сравнивать их как "разошёлся расчёт" было бы вводящим в заблуждение.
+// "channel" сюда намеренно НЕ входит: канал группы (supervisor_channels) в
+// старом JS и в новом backend берётся из разных мест (backend — плюс
+// эвристика-заглушка) — сравнивать как "разошёлся расчёт" было бы
+// вводящим в заблуждение. Он влияет только на надбавку к ЗП, не на места.
 
 function normalizeJsRowForCompare(r){
   return {
     final_place: r.final_place ?? null, total_score: r.total_score ?? null,
     tier: r.tier ?? null, coefficient: r.coefficient ?? null, salary: r.salary ?? null,
-    c1_place: r.c1_place ?? null, lk_place: r.lk_place ?? null, ch_place: r.ch_place ?? null,
+    c1_place: r.c1_place ?? null, lk_place: r.lk_place ?? null,
+    radio_place: r.radio_place ?? null, inet_place: r.inet_place ?? null,
     time_place: r.time_place ?? null, errors_place: r.errors_place ?? null,
   };
 }
@@ -4920,7 +5080,8 @@ function normalizeApiRowForCompare(r){
   return {
     final_place: r.final_place ?? null, total_score: r.total_score ?? null,
     tier: r.tier ?? null, coefficient: r.coefficient ?? null, salary: r.salary ?? null,
-    c1_place: p.c1 ?? null, lk_place: p.lk ?? null, ch_place: p.channel ?? null,
+    c1_place: p.c1 ?? null, lk_place: p.lk ?? null,
+    radio_place: p.radio ?? null, inet_place: p.inet ?? null,
     time_place: p.time ?? null, errors_place: p.errors ?? null,
   };
 }

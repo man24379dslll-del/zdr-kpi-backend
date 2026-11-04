@@ -7,6 +7,7 @@ from app.services.dashboards import (
     build_channels_dashboard,
     build_levels_dashboard,
     build_newcomer_funnel,
+    build_statuses_dashboard,
     build_summary_dashboard,
     conv_band,
 )
@@ -24,8 +25,10 @@ def _row(
     ch_cards=None, ch_check=None, ch_place=None,
     time_place=None, errors_place=None, errors_count=None,
     work_hours=None, shift_count=None, bonus075=None, bonus2=None,
+    **extra,  # radio_*/inet_* (строки новой формулы) и любые другие колонки kpi_ratings
 ):
     return {
+        **extra,
         "fio": fio, "supervisor": supervisor, "status": status, "is_novice": is_novice,
         "is_na": is_na, "total_score": total_score, "tier": tier, "coefficient": coefficient,
         "salary": salary, "c1_per_contact": c1_per_contact, "lk_per_contact": lk_per_contact,
@@ -386,3 +389,119 @@ def test_levels_without_previous_ratings_omits_deltas():
     profi = next(e for e in result["levels"] if e["status"] == "Профи")
     assert "deltas" not in profi
     assert "deltas" not in result["total"]
+
+
+# ---------- "По статусам" (без денег, канал раздельно) ----------
+
+def test_statuses_splits_radio_and_inet_per_status():
+    ratings = [
+        _row("А", "Супервайзер - А", status="Профи", channel="radio", ch_per_contact=100, ch_sum=1000, ch_cards=10, c1_per_contact=50),
+        _row("Б", "Супервайзер - Б", status="Профи", channel="inet", ch_per_contact=300, ch_sum=3000, ch_cards=30, c1_per_contact=150),
+    ]
+    result = build_statuses_dashboard(ratings)
+    profi = next(e for e in result["levels"] if e["status"] == "Профи")
+    assert profi["count"] == 2
+    assert profi["c1"]["pc"] == 100                      # среднее 50 и 150
+    assert profi["radio"]["count"] == 1 and profi["radio"]["pc"] == 100 and profi["radio"]["sum"] == 1000
+    assert profi["inet"]["count"] == 1 and profi["inet"]["pc"] == 300 and profi["inet"]["cards"] == 30
+
+
+def test_statuses_has_no_money_or_ladder_fields():
+    ratings = [_row("А", "Супервайзер - А", salary=5000, tier=2, coefficient=1.3, bonus075=10, bonus2=20, work_hours=40)]
+    result = build_statuses_dashboard(ratings)
+    text = str(result)
+    for forbidden in ("salary", "bonus", "tier", "coefficient", "work_hours", "5000"):
+        assert forbidden not in text
+
+
+def test_statuses_does_not_double_count_novice_main_and_duplicate_rows():
+    # Сектора 2/3: новичок не Н/О и в основной строке, и в дубле.
+    ratings = [
+        _row("Н", "Супервайзер - А", status="Новичок, 1-й уровень", is_novice=False, c1_per_contact=400),
+        _row("Н", "Супервайзер - А", status="Новичок, 1-й уровень", is_novice=True, c1_per_contact=100),
+    ]
+    novice = next(e for e in build_statuses_dashboard(ratings)["levels"] if e["status"] == "Новичок, 1-й уровень")
+    assert novice["count"] == 1
+    assert novice["c1"]["pc"] == 400                     # основная строка, не среднее с дублем
+
+
+def test_statuses_uses_duplicate_row_when_main_is_na():
+    ratings = [
+        _row("Н", "Супервайзер - А", status="Новичок, 1-й уровень", is_novice=False, is_na=True, c1_per_contact=0),
+        _row("Н", "Супервайзер - А", status="Новичок, 1-й уровень", is_novice=True, c1_per_contact=500),
+    ]
+    novice = next(e for e in build_statuses_dashboard(ratings)["levels"] if e["status"] == "Новичок, 1-й уровень")
+    assert novice["count"] == 1 and novice["c1"]["pc"] == 500
+
+
+def test_statuses_excludes_na_region_uk_peaks_and_vasko_like_levels():
+    ratings = [
+        _row("Иванов", "Супервайзер - А", c1_per_contact=100),
+        _row("Тренер", "Супервайзер - А", status="Тренер", is_na=True, c1_per_contact=99999),
+        _row("Рег", "операторы без супервизора", c1_per_contact=99999),
+        _row("Пик", "операторы без супервизора [Пики-ПП]", c1_per_contact=99999),
+        _row("Васько", "Супервайзер - Васько Юлия Владимировна", c1_per_contact=99999),
+    ]
+    result = build_statuses_dashboard(ratings)
+    assert result["total"]["count"] == 1 and result["total"]["c1"]["pc"] == 100
+
+
+def test_statuses_total_row_and_status_order():
+    ratings = [
+        _row("А", "Супервайзер - А", status="Профи"),
+        _row("Б", "Супервайзер - А", status="Новичок, 1-й уровень", is_novice=True),
+    ]
+    result = build_statuses_dashboard(ratings)
+    assert [e["status"] for e in result["levels"]][0] == "Новичок, 1-й уровень"   # порядок прогрессии, не алфавит
+    assert result["total"]["count"] == 2 and result["total"]["status"].startswith("ИТОГО")
+
+
+def test_statuses_row_without_channel_counts_as_radio():
+    ratings = [_row("А", "Супервайзер - А", channel=None, ch_per_contact=70)]
+    profi = build_statuses_dashboard(ratings)["levels"][0]
+    assert profi["radio"]["count"] == 1 and profi["inet"]["count"] == 0
+
+
+def test_statuses_new_formula_rows_take_both_channels_from_each_employee():
+    # Новая формула: у КАЖДОГО сотрудника есть и Радио+ТВ, и Интернет —
+    # блоки не зависят от канала группы (channel здесь — только метка).
+    ratings = [
+        _row("А", "Супервайзер - А", status="Профи", channel="radio", radio_place=1, inet_place=2,
+             radio_sum=1000, radio_cards=10, radio_per_contact=100, radio_check=10, radio_conv=20,
+             inet_sum=500, inet_cards=5, inet_per_contact=50, inet_check=8, inet_conv=10,
+             ch_sum=1000, ch_cards=10, ch_per_contact=100),
+        _row("Б", "Супервайзер - Б", status="Профи", channel="inet", radio_place=2, inet_place=1,
+             radio_sum=3000, radio_cards=30, radio_per_contact=300, radio_check=30, radio_conv=40,
+             inet_sum=2000, inet_cards=20, inet_per_contact=200, inet_check=18, inet_conv=30,
+             ch_sum=2000, ch_cards=20, ch_per_contact=200),
+    ]
+    profi = next(e for e in build_statuses_dashboard(ratings)["levels"] if e["status"] == "Профи")
+    assert profi["radio"]["count"] == 2 and profi["radio"]["sum"] == 4000 and profi["radio"]["cards"] == 40
+    assert profi["radio"]["pc"] == 200       # среднее 100 и 300
+    assert profi["inet"]["count"] == 2 and profi["inet"]["sum"] == 2500 and profi["inet"]["cards"] == 25
+    assert profi["inet"]["pc"] == 125        # среднее 50 и 200
+
+
+def test_statuses_new_formula_averages_only_over_employees_who_worked_the_channel():
+    # Оператор, не работавший по Интернету (нули), не должен занижать
+    # среднее "с контакта" и раздувать число людей в блоке Интернет.
+    ratings = [
+        _row("Радио", "Супервайзер - А", status="Профи", radio_place=1, inet_place=2,
+             radio_sum=1000, radio_cards=10, radio_per_contact=100, inet_sum=0, inet_cards=0, inet_per_contact=0),
+        _row("Оба", "Супервайзер - А", status="Профи", radio_place=2, inet_place=1,
+             radio_sum=500, radio_cards=5, radio_per_contact=50, inet_sum=800, inet_cards=8, inet_per_contact=400),
+    ]
+    profi = next(e for e in build_statuses_dashboard(ratings)["levels"] if e["status"] == "Профи")
+    assert profi["count"] == 2
+    assert profi["radio"]["count"] == 2
+    assert profi["inet"]["count"] == 1 and profi["inet"]["pc"] == 400
+
+
+def test_statuses_new_formula_does_not_fall_back_to_group_channel():
+    # Строка новой формулы в группе с каналом inet: Радио+ТВ всё равно
+    # берётся из radio_*, а не пропадает из блока Радио+ТВ из-за channel.
+    ratings = [_row("А", "Супервайзер - А", status="Профи", channel="inet", radio_place=1, inet_place=1,
+                    radio_sum=700, radio_cards=7, radio_per_contact=70, inet_sum=300, inet_cards=3, inet_per_contact=30)]
+    profi = build_statuses_dashboard(ratings)["levels"][0]
+    assert profi["radio"]["count"] == 1 and profi["radio"]["sum"] == 700
+    assert profi["inet"]["count"] == 1 and profi["inet"]["sum"] == 300

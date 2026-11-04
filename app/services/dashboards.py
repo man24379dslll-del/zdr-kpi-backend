@@ -347,6 +347,105 @@ def _aggregate_level_group(rows: list[dict], prev_by_fio: dict) -> dict:
     }
 
 
+def _statuses_category(rows: list[dict], cards_f, sum_f, check_f, conv_f, pc_f) -> dict:
+    return {
+        "count": len(rows),
+        "cards": _sum(rows, cards_f),
+        "sum": _sum(rows, sum_f),
+        "check": _avg([r.get(check_f) for r in rows]),
+        "conv": _avg([r.get(conv_f) for r in rows]),
+        "pc": _avg([r.get(pc_f) for r in rows]),
+    }
+
+
+def _is_dual_channel_row(r: dict) -> bool:
+    """Строка новой формулы: Радио+ТВ и Интернет хранятся отдельно
+    (radio_*/inet_*). У периодов, загруженных раньше, этих значений нет."""
+    return r.get("radio_place") is not None or r.get("inet_place") is not None
+
+
+def _worked_channel(r: dict, prefix: str) -> bool:
+    """Сотрудник реально работал по каналу (оборот или карточки > 0). Без
+    этого нули тех, кто канал не обслуживает, занижали бы средние (среднее
+    "с контакта" по Интернету считалось бы и по операторам только радио)."""
+    return (r.get(f"{prefix}_sum") or 0) > 0 or (r.get(f"{prefix}_cards") or 0) > 0
+
+
+def _statuses_channel_category(rows: list[dict], prefix: str) -> dict:
+    """Блок одного канала ("radio" или "inet").
+
+    Строки новой формулы — по radio_*/inet_* самого сотрудника (оба канала
+    есть у всех; берём тех, кто по каналу работал). Строки старых периодов —
+    как раньше: в kpi_ratings ch_* хранит ТОЛЬКО канал группы
+    (supervisor_channels), поле channel — какой именно; без channel считаем
+    Радио+ТВ (как везде по умолчанию, groupChannels[...] || "radio" во
+    фронте)."""
+    normalized = []
+    for r in rows:
+        if _is_dual_channel_row(r):
+            if _worked_channel(r, prefix):
+                normalized.append({
+                    "cards": r.get(f"{prefix}_cards"), "sum": r.get(f"{prefix}_sum"),
+                    "check": r.get(f"{prefix}_check"), "conv": r.get(f"{prefix}_conv"),
+                    "pc": r.get(f"{prefix}_per_contact"),
+                })
+        elif (r.get("channel") == "inet") == (prefix == "inet"):
+            normalized.append({
+                "cards": r.get("ch_cards"), "sum": r.get("ch_sum"), "check": r.get("ch_check"),
+                "conv": r.get("ch_conv"), "pc": r.get("ch_per_contact"),
+            })
+    return _statuses_category(normalized, "cards", "sum", "check", "conv", "pc")
+
+
+def _statuses_entry(rows: list[dict]) -> dict:
+    return {
+        "count": len(rows),
+        "c1": _statuses_category(rows, "c1_cards", "c1_sum", "c1_check", "c1_conv", "c1_per_contact"),
+        "radio": _statuses_channel_category(rows, "radio"),
+        "inet": _statuses_channel_category(rows, "inet"),
+        "time": {"avg": _avg([r.get("time_per_contact") for r in rows])},
+        "errors": {"count": _sum(rows, "errors_count"), "pct": _avg([r.get("errors_pct") for r in rows])},
+    }
+
+
+def build_statuses_dashboard(ratings: list[dict]) -> dict:
+    """Срез "По статусам" для ВСЕХ ролей, БЕЗ денег и ЛГ/коэффициентов:
+    1 обращение, Радио+ТВ и Интернет ОТДЕЛЬНЫМИ блоками, время на контакт,
+    ошибки — по каждому статусу (Профи, Новичок, ...) и итого. Работает и
+    для недельных, и для дневных периодов (в отличие от "По уровням").
+
+    Отбор строк — как у build_levels_dashboard (не Н/О, без Региона УК/
+    Пиков/Васько), но с одним отличием: у новичка в kpi_ratings две строки
+    (основная и дубль для общего списка новичков) — в Секторах 2/3 обе не
+    Н/О, и без дедупликации по ФИО он попал бы в среднее дважды. Берём
+    основную строку, если есть, иначе дубль."""
+    included = [
+        r for r in ratings
+        if not r.get("is_na") and not _is_excluded_from_levels(r.get("supervisor"))
+    ]
+    by_fio: dict[str, dict] = {}
+    for r in included:
+        fio = r.get("fio")
+        existing = by_fio.get(fio)
+        if existing is None or (existing.get("is_novice") and not r.get("is_novice")):
+            by_fio[fio] = r
+    rows = list(by_fio.values())
+
+    statuses = sorted({r.get("status") for r in rows if r.get("status")}, key=_level_sort_key)
+    levels = []
+    for status_value in statuses:
+        entry = _statuses_entry([r for r in rows if r.get("status") == status_value])
+        entry["status"] = status_value
+        levels.append(entry)
+    total = _statuses_entry(rows)
+    total["status"] = "ИТОГО — ВСЕ СТАТУСЫ"
+    return {
+        "included_groups": sorted({display_group_name(r.get("supervisor")) for r in rows if r.get("supervisor")}),
+        "levels": levels,
+        "total": total,
+    }
+
+
 def _compute_level_deltas(entry: dict, prev_entry: dict | None) -> dict:
     """Дельты только по метрикам, явно запрошенным для сравнения: кол-во
     чел., сумма баллов, ЗП, средний % ошибок, средняя "с контакта" по

@@ -18,6 +18,7 @@ from app.services.dashboards import (
     build_channels_dashboard,
     build_levels_dashboard,
     build_newcomer_funnel,
+    build_statuses_dashboard,
     build_summary_dashboard,
 )
 from app.services.group_naming import restrict_to_sector_pair
@@ -93,6 +94,16 @@ async def get_levels_dashboard(
     ratings = await _load_ratings(client, upload_id, user)
     previous_ratings = await _load_ratings(client, previous_upload_id, user) if previous_upload_id else None
     return build_levels_dashboard(ratings, previous_ratings)
+
+
+@router.get("/statuses")
+async def get_statuses_dashboard(upload_id: str, user: CurrentUser = Depends(get_current_user)):
+    """Срез "По статусам" для всех ролей — 1 обращение, Радио+ТВ, Интернет,
+    время на контакт, ошибки (без денег/ЛГ), см. services/dashboards.py::
+    build_statuses_dashboard. Данные — только те, что видит сам пользователь
+    (RLS/сектор), как и у остальных дашбордов."""
+    client = _client_for(user)
+    return build_statuses_dashboard(await _load_ratings(client, upload_id, user))
 
 
 @router.get("/anomalies")

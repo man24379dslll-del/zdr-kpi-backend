@@ -179,6 +179,32 @@ alter table kpi_ratings add column if not exists work_hours numeric;
 alter table kpi_ratings add column if not exists shift_count numeric;
 
 -- ============================================================
+-- Радио+ТВ и Интернет — две отдельные категории рейтинга
+-- ============================================================
+-- Выбора канала у группы больше нет: у каждого сотрудника считаются оба
+-- канала, каждый со своим местом и баллом (вес каждого — вес прежней
+-- категории "канал", 2.5). total_score = 1 обращение + ЛК + Радио+ТВ +
+-- Интернет + время + ошибки. Старые колонки ch_* остаются: в новых
+-- строках там данные/место/балл ТОГО канала, что настроен группе
+-- (supervisor_channels) — их читают просмотр и дашборды; в старых
+-- периодах новые колонки radio_*/inet_* пустые (null).
+alter table kpi_ratings
+  add column if not exists radio_sum numeric,
+  add column if not exists radio_check numeric,
+  add column if not exists radio_conv numeric,
+  add column if not exists radio_per_contact numeric,
+  add column if not exists radio_cards numeric,
+  add column if not exists radio_place integer,
+  add column if not exists radio_score numeric,
+  add column if not exists inet_sum numeric,
+  add column if not exists inet_check numeric,
+  add column if not exists inet_conv numeric,
+  add column if not exists inet_per_contact numeric,
+  add column if not exists inet_cards numeric,
+  add column if not exists inet_place integer,
+  add column if not exists inet_score numeric;
+
+-- ============================================================
 -- Несколько групп у одного супервайзера (user_profiles.supervisor_names)
 -- ============================================================
 -- Причина: у одного человека (например, супервайзер Курбанова Зарина)
