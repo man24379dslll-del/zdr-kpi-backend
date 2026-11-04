@@ -908,6 +908,27 @@ function renderGroupBlocks(container, rows, groupNames, opts){
   }
 }
 
+// Файл "Скачать Excel" в "Моей группе":
+//  - руководитель сектора (headSector 2 или 3) — ТОЛЬКО группы своего сектора
+//    (на экране он видит оба сектора, в файле — только свой): лист
+//    "Операторы" (все сотрудники его групп, блоками по группам) и лист
+//    "Супервайзеры" (сравнение групп сектора между собой);
+//  - обычный супервайзер (headSector null) — лист "Операторы" только с его
+//    группой(ами) и БЕЗ бонусов/ЗП: на экране они ему тоже скрыты.
+function buildViewerWorkbook(headSector, rows, periodLabel){
+  const sectorSet = headSector === 2 ? SECTOR_2_SUPERVISORS : headSector === 3 ? SECTOR_3_SUPERVISORS : null;
+  const own = sectorSet ? rows.filter(r => sectorSet.has(r.supervisor)) : rows;
+  const wb = XLSX.utils.book_new();
+  if(!own.length) return { wb, filename: "", rowsCount: 0 };
+  XLSX.utils.book_append_sheet(wb, buildGroupedMainSheet(own, { hideFinalPay: !sectorSet }), "Операторы");
+  if(sectorSet){
+    const supervisors = computeSupervisorRatingFromRows(own, sectorSet);
+    XLSX.utils.book_append_sheet(wb, buildSupervisorExportSheet(supervisors), "Супервайзеры");
+  }
+  const filename = sectorSet ? `Рейтинг_Сектор${headSector}_${periodLabel}.xlsx` : `Рейтинг_${periodLabel}.xlsx`;
+  return { wb, filename, rowsCount: own.length };
+}
+
 async function buildSupervisorViewer(){
   // Идемпотентность на случай прямого повторного вызова (защита от
   // накопления дублей в дополнение к очистке в onLoggedIn выше) — панель
@@ -1103,10 +1124,15 @@ async function buildSupervisorViewer(){
   // сравнение, супервайзер его и на экране не видит.
   panel.querySelector("#viewerExportBtn").addEventListener("click", () => {
     if(!currentRows || !currentRows.length) return;
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, buildGroupedMainSheet(), "Рейтинг");
-    XLSX.utils.book_append_sheet(wb, buildExportSheet(currentNoviceRows, true), "Новички");
-    XLSX.writeFile(wb, `Рейтинг_${currentViewerPeriodLabel}.xlsx`);
+    const headSector = profile.isSector2Head ? 2 : profile.isSector3Head ? 3 : null;
+    // обычному супервайзеру — только его группы (RLS это и так гарантирует,
+    // фильтр — страховка); руководителю сектора — сектор режет сама функция
+    const mine = !headSector && profile.supervisor_names && profile.supervisor_names.length
+      ? currentRows.filter(r => profile.supervisor_names.includes(r.supervisor))
+      : currentRows;
+    const out = buildViewerWorkbook(headSector, mine, currentViewerPeriodLabel);
+    if(!out.rowsCount) return;
+    XLSX.writeFile(out.wb, out.filename);
   });
 
   panel.querySelector("#viewerTypeToggle").querySelectorAll("button").forEach(btn => {
@@ -4723,9 +4749,12 @@ function applyPlaceGradients(ws, sortedRows, colsConfig, dataStartRow){
 }
 // Индексы колонок листа: блок канала 6 колонок (одинарный) или 12 (dual) —
 // всё правее него сдвигается на 6.
-function exportCols(dual, withTier){
+// hideFinalPay — без бонусов и ЗП (последние 3 колонки блока ЛГ): файл
+// обычного супервайзера не должен показывать то, что скрыто у него на экране.
+function exportCols(dual, withTier, hideFinalPay){
   const x = dual ? 6 : 0;
-  return { x, time: 21 + x, errors: 23 + x, total: 26 + x, final: 27 + x, tierStart: 28 + x, totalCols: (withTier ? 36 : 28) + x };
+  const tierCols = hideFinalPay ? 5 : 8;
+  return { x, time: 21 + x, errors: 23 + x, total: 26 + x, final: 27 + x, tierStart: 28 + x, totalCols: (withTier ? 28 + tierCols : 28) + x };
 }
 function placeCols(dual, finalFilterFn){
   const c = exportCols(dual, false);
@@ -4768,8 +4797,8 @@ function styleTitleRow(ws, rowIdx, colCount){
 
 // Двухстрочная шапка: сверху названия блоков (объединённые ячейки), снизу подписи колонок —
 // как на экране (строки "cat" и "sub").
-function categoryHeaderRows(leadLabels, withTier, dual){
-  const c = exportCols(dual, withTier);
+function categoryHeaderRows(leadLabels, withTier, dual, hideFinalPay){
+  const c = exportCols(dual, withTier, hideFinalPay);
   const totalCols = c.totalCols;
   const rowA = new Array(totalCols).fill("");
   const rowB = new Array(totalCols).fill("");
@@ -4790,7 +4819,9 @@ function categoryHeaderRows(leadLabels, withTier, dual){
     const t = c.tierStart;
     rowA[t] = "ЛГ"; rowA[t + 1] = "Коэффициент"; rowA[t + 2] = "Коэфф. пред. недели (в ЗП)";
     rowA[t + 3] = "Рабочее время, ч"; rowA[t + 4] = "Кол-во смен";
-    rowA[t + 5] = bonusColumnLabels.bonus075; rowA[t + 6] = bonusColumnLabels.bonus2; rowA[t + 7] = "ЗП";
+    if(!hideFinalPay){
+      rowA[t + 5] = bonusColumnLabels.bonus075; rowA[t + 6] = bonusColumnLabels.bonus2; rowA[t + 7] = "ЗП";
+    }
   }
 
   const subLabels = ["карточек","сумма","ср.чек","конв.,%","с контакта","место"];
@@ -4802,8 +4833,9 @@ function categoryHeaderRows(leadLabels, withTier, dual){
 }
 function categoryHeaderMerges(baseRow, totalCols, dual){
   const c = exportCols(dual, false);
-  const withTier = totalCols > c.totalCols;
-  const vertCols = [0, 1, 2, c.total, c.final, ...(withTier ? [0, 1, 2, 3, 4, 5, 6, 7].map(i => c.tierStart + i) : [])];
+  // колонки блока ЛГ — всё, что правее "Места" (их число зависит от hideFinalPay)
+  const tierCount = Math.max(0, totalCols - c.totalCols);
+  const vertCols = [0, 1, 2, c.total, c.final, ...Array.from({ length: tierCount }, (_, i) => c.tierStart + i)];
   const merges = vertCols.map(col => ({ s: { r: baseRow, c: col }, e: { r: baseRow + 1, c: col } }));
   merges.push({ s: { r: baseRow, c: 3 },  e: { r: baseRow, c: 8 } });
   merges.push({ s: { r: baseRow, c: 9 },  e: { r: baseRow, c: 14 } });
@@ -4850,7 +4882,11 @@ function buildExportSheet(rows, withConvStatus){
   return ws;
 }
 
-function buildGroupedMainSheet(){
+// sourceRows — какие строки выгружать (по умолчанию все текущие);
+// opts.hideFinalPay — без бонусов и ЗП (файл обычного супервайзера).
+function buildGroupedMainSheet(sourceRows, opts){
+  sourceRows = sourceRows || currentRows;
+  const hideFinalPay = !!(opts && opts.hideFinalPay);
   const withTier = periodType === "week";
   // Тот же текст/логика, что и на экране (buildDetailTable): пусто, если
   // salaryCoeffUsed нет, иначе значение + пометка "(по умолч.)", если
@@ -4858,21 +4894,24 @@ function buildGroupedMainSheet(){
   const salaryCoeffUsedCell = r => r.salaryCoeffUsed == null
     ? ""
     : `${r.salaryCoeffUsed}${r.salaryCoeffFromPrev ? "" : " (по умолч.)"}`;
-  const dual = isDualRows(currentRows);
+  const dual = isDualRows(sourceRows);
   const rowFn = r => withTier
-    ? [...rowToArray(r, dual), r.tier ?? "", r.coefficient ?? "", salaryCoeffUsedCell(r), r.work_hours ?? "", r.shift_count ?? "", r.bonus075 ?? "", r.bonus2 ?? "", r.salary ?? ""]
+    ? [...rowToArray(r, dual), r.tier ?? "", r.coefficient ?? "", salaryCoeffUsedCell(r), r.work_hours ?? "", r.shift_count ?? "",
+       ...(hideFinalPay ? [] : [r.bonus075 ?? "", r.bonus2 ?? "", r.salary ?? ""])]
     : rowToArray(r, dual);
-  const { rowA, rowB, totalCols } = categoryHeaderRows(["ФИО","Статус","Группа"], withTier, dual);
+  const { rowA, rowB, totalCols } = categoryHeaderRows(["ФИО","Статус","Группа"], withTier, dual, hideFinalPay);
 
-  const groupNames = [...new Set(currentRows.map(r => r.supervisor))].sort(compareGroupNames);
+  const groupNames = [...new Set(sourceRows.map(r => r.supervisor))].sort(compareGroupNames);
   const aoa = [];
   const blocks = []; // {titleRow, headerRowA, dataStart, rows}
   let allMerges = [];
   for(const gname of groupNames){
-    const rows = sortByPlace(currentRows.filter(r => r.supervisor === gname));
+    const rows = sortByPlace(sourceRows.filter(r => r.supervisor === gname));
     if(!rows.length) continue;
     const isRegionUK = rows[0] && rows[0].isRegionUK;
-    const channel = groupChannels[gname] === "inet" ? "ИНТЕРНЕТ" : "РАДИО+ТВ";
+    // у строк из Supabase канал группы лежит в самой строке (groupChannels
+    // заполняется только при расчёте файла в этой сессии)
+    const channel = (groupChannels[gname] || rows[0].channel) === "inet" ? "ИНТЕРНЕТ" : "РАДИО+ТВ";
     const titleRow = aoa.length;
     aoa.push([`${displayGroupName(gname)}   ${isRegionUK ? "[только 1 обращение + ЛК + время]" : `[${channel}]`}   ${rows.length} чел.`]);
     const headerRowA = aoa.length;
