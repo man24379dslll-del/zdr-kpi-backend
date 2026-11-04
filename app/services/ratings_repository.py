@@ -111,13 +111,15 @@ async def save_weekly_rating(
     period_label: str,
     source_filename: str,
     results: list[EmployeeScore],
+    weights_snapshot: dict | None = None,
 ) -> str:
-    """Создаёт запись в kpi_uploads, затем пишет по одной строке kpi_ratings
-    на каждого сотрудника. Возвращает id созданной загрузки."""
-    uploads = await client.post(
-        "kpi_uploads",
-        {"period_label": period_label, "source_filename": source_filename},
-    )
+    """Создаёт запись в kpi_uploads (с весами секторов, по которым посчитан
+    период — services/sector_weights.snapshot_of), затем пишет по одной строке
+    kpi_ratings на каждого сотрудника. Возвращает id созданной загрузки."""
+    upload = {"period_label": period_label, "source_filename": source_filename}
+    if weights_snapshot is not None:
+        upload["weights_snapshot"] = weights_snapshot
+    uploads = await client.post("kpi_uploads", upload)
     upload_id = uploads[0]["id"]
 
     rows = [build_kpi_rating_row(upload_id, r) for r in results]

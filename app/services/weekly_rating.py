@@ -70,6 +70,8 @@ tests/test_weekly_rating.py::test_category_places_are_scoped_to_supervisor_group
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 from app.services.group_naming import (
     PEAKS_GROUP_RE,
     PEAKS_SCORE_KEYS,
@@ -78,6 +80,7 @@ from app.services.group_naming import (
     sector2_zeroes_lk_weight,
 )
 from app.services.ladder_groups import assign_novice_coefficients, assign_tier_coefficients
+from app.services.sector_weights import sector_of_supervisor
 from app.services.rating_engine import (
     EmployeeScore,
     RatingCategory,
@@ -131,6 +134,7 @@ def compute_weekly_rating(
     na_predicate=None,
     tie_break_field: str | None = None,
     tier_coefficients: list[float] | None = None,
+    sector_weights: dict[int, dict[str, float]] | None = None,
 ) -> list[EmployeeScore]:
     """
     employees: сырые строки за неделю (см. routers/ratings.py:parse_weekly_rating_excel),
@@ -143,6 +147,11 @@ def compute_weekly_rating(
     tier_coefficients: см. ladder_groups.assign_tier_coefficients — 10 чисел
                 по тирам 1..10, обычно результат GET /ladder-tiers. Не
                 передан — ladder_groups сам подставит запасной вариант.
+    sector_weights: {сектор (1/2/3): {c1, lk, radio, inet, time, errors}} —
+                веса категорий по секторам (services/sector_weights.py).
+                Группа считается с весами СВОЕГО сектора. Не передан — веса
+                берутся из categories, как раньше (канальная категория даёт
+                один и тот же вес обоим каналам).
     """
     active = [c for c in categories if c.enabled]
     lk_category = next((c for c in active if c.key == "lk"), None)
@@ -175,6 +184,17 @@ def compute_weekly_rating(
         groups.setdefault(r.raw.get(supervisor_field), []).append(r)
 
     for group_results in groups.values():
+        # Веса этой группы: по её сектору, если заданы; иначе — из categories.
+        group_weights = None
+        if sector_weights:
+            group_weights = sector_weights.get(sector_of_supervisor(group_results[0].raw.get(supervisor_field)))
+
+        def weight_of(key: str, default: float) -> float:
+            return group_weights[key] if group_weights and key in group_weights else default
+
+        group_categories = [replace(c, weight=weight_of(c.key, c.weight)) for c in other_categories]
+        lk_weight = weight_of("lk", lk_category.weight) if lk_category is not None else 0.0
+
         # 1. Тир канала — считается ПЕРВЫМ и полностью самостоятельно, для
         # КАЖДОГО из двух каналов отдельно: не зависит от мест других
         # категорий вообще, только от собственных <канал>_cards/_conv/
@@ -191,7 +211,7 @@ def compute_weekly_rating(
                 ]
                 for r, place in zip(group_results, compute_tiered_channel_places(channel_items)):
                     r.places[key] = place
-                    r.scores[key] = place * channel_category.weight
+                    r.scores[key] = place * weight_of(key, channel_category.weight)
 
         # 2. Обычные категории конструктора (1 обращение, время, % ошибок,
         # любые кастомные) — независимы, обычный спортивный ранг. Сотрудники
@@ -199,7 +219,7 @@ def compute_weekly_rating(
         # время/контакт и % ошибок ранжировался бы как ЛУЧШИЙ результат, см.
         # docstring apply_category_ranks.
         apply_category_ranks(
-            group_results, other_categories,
+            group_results, group_categories,
             lambda raw: _has_no_activity(raw, supervisor_field),
         )
 
@@ -216,7 +236,7 @@ def compute_weekly_rating(
                 lk_items.append(item)
             for r, place in zip(group_results, compute_tiered_lk_places(lk_items)):
                 r.places["lk"] = place
-                r.scores["lk"] = place * lk_category.weight
+                r.scores["lk"] = place * lk_weight
 
             # Сектор №2 — ЛК ВСЕГДА 1-е место, для ВСЕХ сотрудников этих 4
             # групп (включая 3 исключения ниже) — по прямому запросу
@@ -226,7 +246,7 @@ def compute_weekly_rating(
             for r in group_results:
                 if (r.raw.get(supervisor_field) or "") in SECTOR_2_SUPERVISORS:
                     r.places["lk"] = 1
-                    r.scores["lk"] = 1 * lk_category.weight
+                    r.scores["lk"] = 1 * lk_weight
 
         # Единый "канал группы" (для просмотра/дашбордов и ch_* в kpi_ratings):
         # место того из двух каналов, что настроен группе. Только место —

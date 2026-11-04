@@ -5,7 +5,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from app.config import settings
-from app.routers import categories, dashboards, external, ladder_tiers, payroll, ratings, shifts, supervisor_channels
+from app.routers import (
+    categories, dashboards, external, ladder_tiers, payroll, ratings, sector_weights, shifts, supervisor_channels,
+)
 
 STATIC_DIR = Path(__file__).parent.parent / "static"
 
@@ -36,6 +38,7 @@ app.include_router(external.router)
 app.include_router(ladder_tiers.router)
 app.include_router(payroll.router)
 app.include_router(ratings.router)
+app.include_router(sector_weights.router)
 app.include_router(shifts.router)
 app.include_router(supervisor_channels.router)
 

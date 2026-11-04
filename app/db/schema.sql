@@ -366,3 +366,45 @@ create policy "api_keys_admin" on api_keys
   ) with check (
     exists (select 1 from user_profiles p where p.id = auth.uid() and p.role = 'admin')
   );
+
+-- ============================================================
+-- Веса категорий рейтинга по секторам (конструктор сектора)
+-- ============================================================
+-- Веса шести категорий (c1, lk, radio, inet, time, errors) у каждого
+-- сектора (1 — остальные группы, 2, 3). Одна строка = одна запись журнала:
+-- руководитель сектора подаёт заявку (status 'pending'), админ/менеджер
+-- подтверждает ('approved') или отклоняет ('rejected'); админ/менеджер может
+-- поменять сразу ('approved' без заявки). Заменённая заявка — 'cancelled'.
+-- Действующие веса сектора = weights последней approved-записи (по
+-- decided_at), если таких нет — стандартные 3 / 1.5 / 2.5 / 2.5 / 1 / 1
+-- (см. app/services/sector_weights.py). Применяются только к будущим
+-- загрузкам; веса, по которым посчитан период, лежат в
+-- kpi_uploads.weights_snapshot.
+-- Читать могут все залогиненные; писать — только бэкенд (service_role
+-- обходит RLS), политик записи для клиентов нет.
+create table if not exists sector_weight_changes (
+  id uuid primary key default gen_random_uuid(),
+  sector smallint not null check (sector in (1, 2, 3)),
+  weights jsonb not null,
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected', 'cancelled')),
+  comment text,
+  requested_by uuid,
+  requested_by_name text,
+  requested_at timestamptz not null default now(),
+  decided_by uuid,
+  decided_by_name text,
+  decided_at timestamptz
+);
+
+create index if not exists sector_weight_changes_sector_idx
+  on sector_weight_changes (sector, status, decided_at desc);
+
+alter table sector_weight_changes enable row level security;
+
+drop policy if exists "sector_weights_select" on sector_weight_changes;
+create policy "sector_weights_select" on sector_weight_changes
+  for select using (auth.role() = 'authenticated');
+
+-- Какие веса секторов использованы при расчёте периода (для разбора спорных
+-- случаев и для пересчёта "Рейтинга супервайзеров" при просмотре периода).
+alter table kpi_uploads add column if not exists weights_snapshot jsonb;

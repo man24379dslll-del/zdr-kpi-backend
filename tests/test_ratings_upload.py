@@ -10,6 +10,7 @@ from app.auth import CurrentUser, get_current_user
 from app.main import app
 from app.routers import ratings
 from app.services.group_naming import SECTOR_2_SUPERVISORS, SECTOR_3_SUPERVISORS
+from app.services.sector_weights import DEFAULT_WEIGHTS, effective_weights, snapshot_of
 from app.services.ratings_upload import (
     ALLOWED_FIELDS,
     UploadValidationError,
@@ -83,8 +84,14 @@ def test_find_previous_upload_prefers_latest_period_then_freshest_upload():
 
 # ---------- эндпоинты ----------
 
+def _snapshot(changes=None):
+    """Снимок весов секторов, какой присылает браузер (по умолчанию — стандартные)."""
+    return snapshot_of(effective_weights(changes or []))
+
+
 class FakeClient:
-    def __init__(self, uploads=None, ratings_by_upload=None, fail_ratings=False):
+    def __init__(self, uploads=None, ratings_by_upload=None, fail_ratings=False, weight_changes=None):
+        self.weight_changes = list(weight_changes or [])
         self.uploads = list(uploads or [])
         self.ratings = dict(ratings_by_upload or {})
         self.fail_ratings = fail_ratings
@@ -102,6 +109,8 @@ class FakeClient:
         if table == "kpi_ratings":
             upload_id = params["upload_id"].removeprefix("eq.")
             return self.ratings.get(upload_id, [])
+        if table == "sector_weight_changes":
+            return self.weight_changes
         raise AssertionError(table)
 
     async def post(self, table, payload, prefer="return=representation"):
@@ -147,17 +156,20 @@ SECTOR3_HEAD = lambda: _user("supervisor", sorted(SECTOR_3_SUPERVISORS))
 def test_save_computed_writes_upload_and_rows(api):
     fake = FakeClient()
     client = api(SECTOR2_HEAD(), fake)
-    body = {"period_label": "10-3", "source_filename": "f.xlsx", "rows": [_row(), _row(fio="ЗДР Петров П. П.", is_novice=True)]}
+    body = {"period_label": "10-3", "source_filename": "f.xlsx", "weights_snapshot": _snapshot(),
+            "rows": [_row(), _row(fio="ЗДР Петров П. П.", is_novice=True)]}
     r = client.post("/ratings/save-computed", json=body)
     assert r.status_code == 200 and r.json() == {"upload_id": "new-upload", "rows": 2}
     assert [x["upload_id"] for x in fake.posted_rows] == ["new-upload", "new-upload"]
     assert fake.uploads[0]["period_label"] == "10-3" and fake.uploads[0]["source_filename"] == "f.xlsx"
+    # веса секторов, по которым посчитан период, сохраняются вместе с загрузкой
+    assert fake.uploads[0]["weights_snapshot"]["2"]["weights"] == DEFAULT_WEIGHTS
 
 
 def test_save_computed_blocks_duplicate_period_with_409(api):
     fake = FakeClient(uploads=[{"id": "u1", "period_label": "10-3", "uploaded_at": "x"}])
     client = api(SECTOR3_HEAD(), fake)
-    r = client.post("/ratings/save-computed", json={"period_label": "10-3", "rows": [_row()]})
+    r = client.post("/ratings/save-computed", json={"period_label": "10-3", "rows": [_row()], "weights_snapshot": _snapshot()})
     assert r.status_code == 409
     assert fake.posted_rows == [] and len(fake.uploads) == 1
 
@@ -181,7 +193,7 @@ def test_save_computed_rejects_bad_label_and_rows(api):
 def test_save_computed_rolls_back_upload_on_write_error(api):
     fake = FakeClient(fail_ratings=True)
     client = api(SECTOR2_HEAD(), fake)
-    r = client.post("/ratings/save-computed", json={"period_label": "10-3", "rows": [_row()]})
+    r = client.post("/ratings/save-computed", json={"period_label": "10-3", "rows": [_row()], "weights_snapshot": _snapshot()})
     assert r.status_code == 502
     assert fake.deleted == ["kpi_uploads?id=eq.new-upload"] and fake.uploads == []
 
@@ -204,3 +216,43 @@ def test_upload_context_returns_company_wide_prev_rows_and_existing(api):
     assert r2["existing"] is None and r2["prev_upload"]["id"] == "c"
     r3 = client.get("/ratings/upload-context", params={"period_label": "9-1"}).json()
     assert r3["prev_upload"] is None and r3["prev_rows"] == []
+
+
+# ---------- веса секторов при записи ----------
+
+def _approved(sector, **over):
+    weights = {**DEFAULT_WEIGHTS, **over}
+    return {"id": f"c{sector}", "sector": sector, "weights": weights, "status": "approved",
+            "decided_at": "2026-10-10T00:00:00+00:00"}
+
+
+def test_save_computed_requires_weights_snapshot(api):
+    fake = FakeClient()
+    client = api(SECTOR2_HEAD(), fake)
+    r = client.post("/ratings/save-computed", json={"period_label": "10-3", "rows": [_row()]})
+    assert r.status_code == 422 and "снимк" in r.json()["detail"].lower()
+    broken = _snapshot()
+    broken["2"]["weights"]["c1"] = -1
+    assert client.post("/ratings/save-computed", json={"period_label": "10-3", "rows": [_row()], "weights_snapshot": broken}).status_code == 422
+    assert fake.uploads == [] and fake.posted_rows == []
+
+
+def test_save_computed_rejects_stale_weights_with_409_and_writes_nothing(api):
+    # С момента расчёта в браузере у Сектора 2 подтверждены новые веса —
+    # расчёт по старым весам записывать нельзя.
+    fake = FakeClient(weight_changes=[_approved(2, c1=5)])
+    client = api(SECTOR2_HEAD(), fake)
+    r = client.post("/ratings/save-computed", json={"period_label": "10-3", "rows": [_row()], "weights_snapshot": _snapshot()})
+    assert r.status_code == 409 and "Веса секторов изменились" in r.json()["detail"]
+    assert fake.uploads == [] and fake.posted_rows == []
+
+
+def test_save_computed_accepts_snapshot_with_current_approved_weights(api):
+    changes = [_approved(2, c1=5)]
+    fake = FakeClient(weight_changes=changes)
+    client = api(SECTOR2_HEAD(), fake)
+    r = client.post("/ratings/save-computed", json={"period_label": "10-3", "rows": [_row()], "weights_snapshot": _snapshot(changes)})
+    assert r.status_code == 200
+    saved = fake.uploads[0]["weights_snapshot"]
+    assert saved["2"]["weights"]["c1"] == 5 and saved["2"]["change_id"] == "c2"
+    assert saved["1"]["weights"] == DEFAULT_WEIGHTS and saved["1"]["change_id"] is None

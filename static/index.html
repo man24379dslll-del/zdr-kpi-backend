@@ -467,23 +467,28 @@
       <h2 style="margin:0;">Конструктор рейтинга</h2>
       <button class="btn btn-ghost" id="closeConstructorBtn" style="padding:7px 14px;font-size:12.5px;">Закрыть ✕</button>
     </div>
-    <div class="sub" style="margin:10px 0 16px;">Изменения категорий и коэффициентов применяются только к БУДУЩИМ расчётам — уже отображённый на экране рейтинг задним числом не пересчитывается.</div>
+    <div class="sub" style="margin:10px 0 16px;">Изменения весов и коэффициентов применяются только к БУДУЩИМ загрузкам — уже загруженные периоды задним числом не пересчитываются. Веса меняют места, ЛГ и итоговую ЗП.</div>
 
-    <div class="sub-title" style="margin-top:6px;">Категории рейтинга</div>
+    <div class="sub-title" style="margin-top:6px;">Веса категорий по секторам</div>
+    <div class="sub" id="sectorWeightsHint" style="margin:6px 0 12px;"></div>
+    <div class="group-buttons" id="sectorWeightsTabs"></div>
     <div class="subtable-wrap" style="margin-top:10px;">
-      <table class="dyn-table" id="categoriesTable">
+      <table class="dyn-table" id="sectorWeightsTable">
         <thead>
-          <tr>
-            <th>Название</th><th>Колонка-источник</th><th>Вес</th><th>Направление</th><th>Вкл.</th><th>Порядок</th><th></th>
-          </tr>
+          <tr><th>Категория</th><th>Действует сейчас</th><th>Новый вес</th><th>Стандартный</th></tr>
         </thead>
-        <tbody id="categoriesTbody"></tbody>
+        <tbody id="sectorWeightsTbody"></tbody>
       </table>
     </div>
-    <div class="row" style="margin-top:14px;">
-      <button class="btn btn-ghost" id="addCategoryBtn" style="padding:7px 14px;font-size:12.5px;">+ Добавить категорию</button>
+    <div class="row" style="margin-top:14px;gap:10px;flex-wrap:wrap;align-items:center;">
+      <input type="text" id="sectorWeightsComment" placeholder="Комментарий (необязательно)" maxlength="500" style="min-width:260px;flex:1;">
+      <button class="btn btn-ghost" id="sectorWeightsResetBtn" style="padding:7px 14px;font-size:12.5px;">Стандартные значения</button>
+      <button class="btn btn-primary" id="sectorWeightsSaveBtn" style="padding:7px 14px;font-size:12.5px;">Применить</button>
     </div>
+    <div id="sectorWeightsPending" style="margin-top:22px;"></div>
+    <div id="sectorWeightsHistory" style="margin-top:22px;"></div>
 
+    <div id="ladderBlock">
     <div class="sub-title" style="margin-top:32px;">Коэффициенты ЛГ (лестничные группы)</div>
     <div class="sub" style="margin:6px 0 12px;">Тир 1 — лучшие места (обычно наибольший коэффициент), тир 10 — худшие.</div>
     <div class="subtable-wrap">
@@ -491,6 +496,7 @@
         <thead><tr><th>Тир</th><th>Коэффициент</th></tr></thead>
         <tbody id="ladderTiersTbody"></tbody>
       </table>
+    </div>
     </div>
 
     <div id="constructorLog" class="log"></div>
@@ -745,10 +751,14 @@ function onLoggedIn(){
     // routers/payroll.py::_restrict_to_sector/CurrentUser.is_sectorN_head)
     // и "Дашборды" (та кнопка уже видна всем ролям — RLS уже урезает
     // kpi_ratings до его групп, отдельного кода не потребовалось).
-    // Конструктор/Реквизиты — сознательно НЕ даём (глобальные для всей
-    // компании настройки/данные, см. обсуждение с заказчиком).
+    // Реквизиты — сознательно НЕ даём (данные всей компании). Конструктор —
+    // только свой сектор, см. ниже.
     if(isSector2Head || isSector3Head){
       $("openPayrollBtn").style.display = "";
+      // Конструктор СВОЕГО сектора: руководитель правит веса категорий (с
+      // подтверждением админа), ЛГ-коэффициенты и другие сектора не видит.
+      $("openConstructorBtn").style.display = "";
+      $("openConstructorBtn").textContent = "⚙️ Конструктор сектора";
       // Руководители секторов (Бочиус/Сорокин) могут сами загружать общий
       // файл отчёта: рассчитывается целиком, записывается через бэкенд
       // (POST /ratings/save-computed), а видят они после этого только свой
@@ -772,6 +782,8 @@ function onLoggedIn(){
   } else {
     $("adminOnlyPanel1").style.display = "block";
     $("openConstructorBtn").style.display = "";
+    $("openConstructorBtn").textContent = "⚙️ Конструктор рейтинга";
+    refreshConstructorBadge();
     // после входа руководителя сектора в этой же вкладке — вернуть поля
     // ставки администратору (см. блок руководителей секторов выше)
     if($("monthlyBaseRate").disabled){
@@ -915,14 +927,14 @@ function renderGroupBlocks(container, rows, groupNames, opts){
 //    "Супервайзеры" (сравнение групп сектора между собой);
 //  - обычный супервайзер (headSector null) — лист "Операторы" только с его
 //    группой(ами) и БЕЗ бонусов/ЗП: на экране они ему тоже скрыты.
-function buildViewerWorkbook(headSector, rows, periodLabel){
+function buildViewerWorkbook(headSector, rows, periodLabel, weightsInfo){
   const sectorSet = headSector === 2 ? SECTOR_2_SUPERVISORS : headSector === 3 ? SECTOR_3_SUPERVISORS : null;
   const own = sectorSet ? rows.filter(r => sectorSet.has(r.supervisor)) : rows;
   const wb = XLSX.utils.book_new();
   if(!own.length) return { wb, filename: "", rowsCount: 0 };
   XLSX.utils.book_append_sheet(wb, buildGroupedMainSheet(own, { hideFinalPay: !sectorSet }), "Операторы");
   if(sectorSet){
-    const supervisors = computeSupervisorRatingFromRows(own, sectorSet);
+    const supervisors = computeSupervisorRatingFromRows(own, sectorSet, weightsInfo);
     XLSX.utils.book_append_sheet(wb, buildSupervisorExportSheet(supervisors), "Супервайзеры");
   }
   const filename = sectorSet ? `Рейтинг_Сектор${headSector}_${periodLabel}.xlsx` : `Рейтинг_${periodLabel}.xlsx`;
@@ -1013,6 +1025,7 @@ async function buildSupervisorViewer(){
   // отличие от нативного календаря/date-picker, где такой гарантии нет).
   let viewerUploadsDesc = []; // от новых к старым
   let currentViewerPeriodLabel = null; // для имени файла при экспорте
+  let currentViewerWeightsInfo = null; // веса секторов выбранного периода (снимок), см. fetchUploadWeightsInfo
 
   async function populatePeriodSelect(vType){
     const uploads = await fetchAllUploads(vType); // по возрастанию
@@ -1065,6 +1078,7 @@ async function buildSupervisorViewer(){
       currentRows = rows.filter(r => !r.is_novice);
       currentNoviceRows = rows.filter(r => r.is_novice);
       currentViewerPeriodLabel = latest.period_label;
+      currentViewerWeightsInfo = await fetchUploadWeightsInfo(latest.id);
 
       clearLog(logEl2);
       log(`Период: ${latest.period_label} · сотрудников: ${currentRows.length}`, "ok", logEl2);
@@ -1105,9 +1119,9 @@ async function buildSupervisorViewer(){
       // ЛК считается обычно, новички тоже участвуют) — раздельно, не
       // единым сравнением (см. комментарий про tabsHtml выше).
       if(isSectorPairHead){
-        const sector2Rows = computeSupervisorRatingFromRows(currentRows, SECTOR_2_SUPERVISORS);
+        const sector2Rows = computeSupervisorRatingFromRows(currentRows, SECTOR_2_SUPERVISORS, currentViewerWeightsInfo);
         renderSupervisorTable(panel.querySelector("#viewerSupervisorContainer2"), sector2Rows);
-        const sector3Rows = computeSupervisorRatingFromRows(currentRows, SECTOR_3_SUPERVISORS);
+        const sector3Rows = computeSupervisorRatingFromRows(currentRows, SECTOR_3_SUPERVISORS, currentViewerWeightsInfo);
         renderSupervisorTable(panel.querySelector("#viewerSupervisorContainer3"), sector3Rows);
       }
     } catch(err){
@@ -1130,7 +1144,7 @@ async function buildSupervisorViewer(){
     const mine = !headSector && profile.supervisor_names && profile.supervisor_names.length
       ? currentRows.filter(r => profile.supervisor_names.includes(r.supervisor))
       : currentRows;
-    const out = buildViewerWorkbook(headSector, mine, currentViewerPeriodLabel);
+    const out = buildViewerWorkbook(headSector, mine, currentViewerPeriodLabel, currentViewerWeightsInfo);
     if(!out.rowsCount) return;
     XLSX.writeFile(out.wb, out.filename);
   });
@@ -1327,8 +1341,11 @@ async function loadSavedPeriod(upload){
 
     currentRows = main;
     currentNoviceRows = novices;
-    currentSupervisorRows = computeSupervisorRatingFromRows(main);
-    currentSector2SupervisorRows = computeSupervisorRatingFromRows(main, SECTOR_2_SUPERVISORS);
+    // сравнение групп пересчитывается из строк — по весам, с которыми период
+    // был посчитан (снимок в kpi_uploads; нет снимка — стандартные)
+    const savedWeights = await fetchUploadWeightsInfo(upload.id);
+    currentSupervisorRows = computeSupervisorRatingFromRows(main, undefined, savedWeights);
+    currentSector2SupervisorRows = computeSupervisorRatingFromRows(main, SECTOR_2_SUPERVISORS, savedWeights);
     currentFilename = upload.source_filename || "(сохранённый период)";
 
     $("channelPanel").style.display = "none";
@@ -1930,10 +1947,71 @@ function rankAscDenseSkippingNoActivity(items, valueFn, noActivityFn){
 const hasNoActivityMain = e => e.c1_sum === 0;
 const hasNoActivityPeaks = e => (e.radio_sum || 0) === 0 && (e.inet_sum || 0) === 0;
 
-// Вес КАЖДОЙ из двух категорий канала (Радио+ТВ и Интернет) — прежний вес
-// единой категории "канал". Выбора канала у группы больше нет: считаются
-// оба канала у всех, у каждого своё место и свой балл.
-const CHANNEL_WEIGHT = 2.5;
+// Веса категорий — ПО СЕКТОРАМ (конструктор сектора, см. /sector-weights и
+// app/services/sector_weights.py): у каждого сектора свои веса шести
+// категорий, у Радио+ТВ и Интернета — отдельно. Вес 0 выключает категорию в
+// итоговой сумме (место по ней всё равно считается и показывается). Сектор 1 —
+// все группы, кроме Секторов 2 и 3 (и виртуальные Регион УК/ПП/Увеличители:
+// набор категорий в сумме у них урезан отдельно, а веса — сектора 1).
+// DEFAULT_SECTOR_WEIGHTS — стандартные веса (они же у сектора, пока в
+// конструкторе ничего не подтверждено).
+const DEFAULT_SECTOR_WEIGHTS = { c1: 3, lk: 1.5, radio: 2.5, inet: 2.5, time: 1, errors: 1 };
+const WEIGHT_KEYS = ["c1", "lk", "radio", "inet", "time", "errors"];
+// Ответ GET /sector-weights, загруженный при расчёте файла (см. calcBtn).
+let sectorWeightsInfo = null;
+// Снимок весов, по которым посчитан текущий расчёт (пишется в
+// kpi_uploads.weights_snapshot вместе с загрузкой).
+let currentWeightsSnapshot = null;
+function sectorOfSupervisor(supervisor){
+  return SECTOR_2_SUPERVISORS.has(supervisor) ? 2 : SECTOR_3_SUPERVISORS.has(supervisor) ? 3 : 1;
+}
+// info: undefined — загруженные при расчёте веса; null — "снимка нет"
+// (старые периоды, посчитанные по стандартным весам); иначе {sectors: {...}}.
+function weightsOfSector(sector, info){
+  if(info === undefined) info = sectorWeightsInfo;
+  const item = info && info.sectors && info.sectors[String(sector)];
+  return item && item.weights ? item.weights : DEFAULT_SECTOR_WEIGHTS;
+}
+function weightsSnapshotOf(info){
+  const out = {};
+  for(const n of [1, 2, 3]){
+    const item = info && info.sectors && info.sectors[String(n)];
+    out[String(n)] = { weights: { ...(item && item.weights ? item.weights : DEFAULT_SECTOR_WEIGHTS) }, change_id: (item && item.change_id) || null };
+  }
+  return out;
+}
+function weightsSnapshotsEqual(a, b){
+  return [1, 2, 3].every(n => WEIGHT_KEYS.every(k => Math.abs(a[String(n)].weights[k] - b[String(n)].weights[k]) < 1e-9));
+}
+// Строки лога про веса, отличающиеся от стандартных (чтобы при расчёте было видно, по каким весам считаем).
+function describeNonDefaultWeights(info){
+  const names = { 1: "Сектор №1", 2: "Сектор №2", 3: "Сектор №3" };
+  const labels = { c1: "1 обращение", lk: "ЛК", radio: "Радио+ТВ", inet: "Интернет", time: "время", errors: "ошибки" };
+  const lines = [];
+  for(const n of [1, 2, 3]){
+    const w = weightsOfSector(n, info);
+    const diff = WEIGHT_KEYS.filter(k => Math.abs(w[k] - DEFAULT_SECTOR_WEIGHTS[k]) > 1e-9).map(k => `${labels[k]} ${DEFAULT_SECTOR_WEIGHTS[k]} → ${w[k]}`);
+    if(diff.length) lines.push(`Веса ${names[n]} отличаются от стандартных: ${diff.join(", ")}.`);
+  }
+  return lines;
+}
+// Веса периода, как они были при расчёте (kpi_uploads.weights_snapshot);
+// нет снимка (период до конструктора секторов) — стандартные, null.
+async function fetchUploadWeightsInfo(uploadId){
+  try{
+    const rows = await sbGet(`kpi_uploads?id=eq.${uploadId}&select=weights_snapshot`);
+    const snap = rows[0] && rows[0].weights_snapshot;
+    return snap ? { sectors: snap } : null;
+  } catch(err){
+    return null;
+  }
+}
+// Веса для сравнения групп между собой: у вкладки сектора — веса этого
+// сектора, у общего рейтинга супервайзеров — веса Сектора 1.
+function supervisorRatingWeights(sectorSupervisors, info){
+  const sector = sectorSupervisors === SECTOR_2_SUPERVISORS ? 2 : sectorSupervisors === SECTOR_3_SUPERVISORS ? 3 : 1;
+  return weightsOfSector(sector, info);
+}
 // Значение channelOf для scoreSlice: считать ОБА канала по полям radio_* и
 // inet_* самих строк. Функция channelOf вместо него — прежний режим с одним
 // каналом (используется только сравнением групп между собой, см.
@@ -1953,8 +2031,9 @@ function channelCategoryPlaces(items, fieldsOf, specialLK){
   return items.map(e => rankDesc(pcs, fieldsOf(e).pc));
 }
 
-function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategories, lkActiveFn, forceLk1, noActivityFn){
+function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategories, lkActiveFn, forceLk1, noActivityFn, weights){
   noActivityFn = noActivityFn || hasNoActivityMain;
+  const W = weights || DEFAULT_SECTOR_WEIGHTS;
   if(items.length === 0) return [];
   const dual = channelOf === BOTH_CHANNELS;
   const active = activeCategories || { c1:true, lk:true, ch:true, time:true, errors:true };
@@ -2007,8 +2086,8 @@ function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategorie
     // на total_score (lkActiveFn ниже, вес 0), у 3 исключений — даёт
     // максимальный балл по ЛК (1×вес) независимо от реальных продаж.
     const lk_place = forceLk1 ? 1 : lkPlaces[i];
-    const c1_score = e.c1_place*3, lk_score = lk_place*1.5;
-    const time_score = e.time_place*1, errors_score = e.errors_place*1;
+    const c1_score = e.c1_place*W.c1, lk_score = lk_place*W.lk;
+    const time_score = e.time_place*W.time, errors_score = e.errors_place*W.errors;
     // lkActiveFn — поэлементное переопределение поверх группового active.lk
     // (Сектор №2: у большинства сотрудников группы ЛК не в счёт, у 3
     // исключений — как обычно, см. sector2ZeroesLk/computeMainRating).
@@ -2017,12 +2096,13 @@ function scoreSlice(items, channelOf, naFn, tieField, specialLK, activeCategorie
     // total_score сравнивается на строгое равенство при ничьих, а
     // перестановка слагаемых могла бы изменить последний бит суммы.
     if(dual){
-      const radio_score = e.radio_place*CHANNEL_WEIGHT, inet_score = e.inet_place*CHANNEL_WEIGHT;
+      const radio_score = e.radio_place*W.radio, inet_score = e.inet_place*W.inet;
       const total_score = (active.c1?c1_score:0)+(lkActive?lk_score:0)+(active.ch?radio_score:0)+(active.ch?inet_score:0)+(active.time?time_score:0)+(active.errors?errors_score:0);
       return {...e, lk_place, c1_score, lk_score, radio_score, inet_score, time_score, errors_score, total_score};
     }
     const ch_place = e.ch_place;
-    const ch_score = ch_place*CHANNEL_WEIGHT;
+    // единый канал (только сравнение групп между собой): вес канала самой группы
+    const ch_score = ch_place*(e.channel === "inet" ? W.inet : W.radio);
     const total_score = (active.c1?c1_score:0)+(lkActive?lk_score:0)+(active.ch?ch_score:0)+(active.time?time_score:0)+(active.errors?errors_score:0);
     return {...e, lk_place, ch_place, c1_score, lk_score, ch_score, time_score, errors_score, total_score};
   });
@@ -2065,7 +2145,7 @@ function computeMainRating(groups, prevCoeffMap, tierCoefficients){
     // — как раньше, isNaMain.
     const naFn = g.isPeaks ? isNaPeaks : (forceLk1 || isSector3) ? (e => !isNarrowSectorEvaluated(e)) : isNaMain;
     const lkActiveFn = e => !sector2ZeroesLk(g.supervisor, e.fio);
-    const scored = scoreSlice(g.employees, BOTH_CHANNELS, naFn, "c1_sum", true, active, lkActiveFn, forceLk1, g.isPeaks ? hasNoActivityPeaks : hasNoActivityMain);
+    const scored = scoreSlice(g.employees, BOTH_CHANNELS, naFn, "c1_sum", true, active, lkActiveFn, forceLk1, g.isPeaks ? hasNoActivityPeaks : hasNoActivityMain, weightsOfSector(sectorOfSupervisor(g.supervisor)));
     out.push(...scored.map(e => ({...withGroupChannelFields(e, channel), supervisor: g.supervisor, isRegionUK: !!g.isRegionUK, isPeaks: !!g.isPeaks})));
   }
   if(periodType === "week"){
@@ -2318,7 +2398,7 @@ function assignSupervisorCoefficients(rows){
 // участвуют в расчёте для ЛЮБОГО сектора (isNarrowSectorEvaluated — общая
 // функция, не завязана на конкретный сектор), ЛК не в счёт — ТОЛЬКО для
 // Сектора 2 (см. active ниже, сравнение по ссылке с самой константой).
-function computeSupervisorRating(groups, sectorSupervisors){
+function computeSupervisorRating(groups, sectorSupervisors, weightsInfo){
   const groupFilter = sectorSupervisors
     ? g => sectorSupervisors.has(g.supervisor)
     : g => !isSpecialGroup(g.supervisor) && !SECTOR_2_SUPERVISORS.has(g.supervisor);
@@ -2355,14 +2435,14 @@ function computeSupervisorRating(groups, sectorSupervisors){
   // sector2ZeroesLk/forceLk1); Сектор 3 считается обычно (полный вес ЛК),
   // сравнение по ссылке с самой константой SECTOR_2_SUPERVISORS.
   const active = sectorSupervisors === SECTOR_2_SUPERVISORS ? { c1:true, lk:false, ch:true, time:true, errors:true } : undefined;
-  const rows = scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc, cards:e.ch_cards}), e => isSpecialSupervisor(e.supervisor), "c1_sum", false, active);
+  const rows = scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc, cards:e.ch_cards}), e => isSpecialSupervisor(e.supervisor), "c1_sum", false, active, undefined, undefined, undefined, supervisorRatingWeights(sectorSupervisors, weightsInfo));
   assignSupervisorCoefficients(rows);
   return rows;
 }
 
 // Пересборка "Рейтинга супервайзеров" из уже сохранённых в Supabase строк
 // (используется при просмотре ранее загруженного периода без повторного парсинга Excel)
-function computeSupervisorRatingFromRows(mainRows, sectorSupervisors){
+function computeSupervisorRatingFromRows(mainRows, sectorSupervisors, weightsInfo){
   const bySupervisor = {};
   for(const r of mainRows){
     const isSector2Row = SECTOR_2_SUPERVISORS.has(r.supervisor);
@@ -2387,7 +2467,7 @@ function computeSupervisorRatingFromRows(mainRows, sectorSupervisors){
   // Сектор №2 — ЛК не в счёт при сравнении групп между собой, см. тот же
   // комментарий в computeSupervisorRating выше.
   const active = sectorSupervisors === SECTOR_2_SUPERVISORS ? { c1:true, lk:false, ch:true, time:true, errors:true } : undefined;
-  const rows = scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc, cards:e.ch_cards}), e => isSpecialSupervisor(e.supervisor), "c1_sum", false, active);
+  const rows = scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc, cards:e.ch_cards}), e => isSpecialSupervisor(e.supervisor), "c1_sum", false, active, undefined, undefined, undefined, supervisorRatingWeights(sectorSupervisors, weightsInfo));
   assignSupervisorCoefficients(rows);
   return rows;
 }
@@ -2638,6 +2718,23 @@ $("calcBtn").addEventListener("click", async () => {
       throw new Error("Не загрузились коэффициенты ЛГ из настроек — расчёт остановлен, чтобы не записать неверные значения. Обновите страницу и повторите.");
     }
 
+    // 1в) веса категорий по секторам (конструктор сектора). Они меняют места,
+    // ЛГ и ЗП — руководителю сектора без них не считаем; админ может
+    // продолжить по стандартным весам (с предупреждением). Снимок весов
+    // пишется вместе с загрузкой и проверяется перед записью.
+    let weightsInfo = null;
+    try{
+      weightsInfo = await apiGet("/sector-weights");
+      const lines = describeNonDefaultWeights(weightsInfo);
+      if(lines.length) lines.forEach(line => log(line, "ok", uploadLogEl));
+      else log("Веса секторов: стандартные.", "ok", uploadLogEl);
+    } catch(err){
+      if(isSectorUploader()) throw new Error("Не загрузились веса секторов (" + err.message + ") — расчёт остановлен. Обновите страницу и повторите.");
+      log("Не удалось загрузить веса секторов (" + err.message + ") — считаю по стандартным весам.", "warn", uploadLogEl);
+    }
+    sectorWeightsInfo = weightsInfo;
+    currentWeightsSnapshot = weightsSnapshotOf(weightsInfo);
+
     const mainRated = computeMainRating(parsedGroups, prevCoeffMap, tierCoefficients);
     const noviceRated = computeGlobalNovices(parsedGroups);
     const supervisorRated = computeSupervisorRating(parsedGroups);
@@ -2679,6 +2776,7 @@ $("calcBtn").addEventListener("click", async () => {
         period_label: currentPeriodValue(),
         source_filename: currentFilename,
         rows: [...currentNoviceRows.map(e => toDbRow(e, true)), ...currentRows.map(e => toDbRow(e, false))],
+        weights_snapshot: currentWeightsSnapshot,
         employees: currentRows.length,
         groups: new Set(currentRows.map(r => r.supervisor)).size,
       };
@@ -4532,120 +4630,220 @@ $("closeConstructorBtn").addEventListener("click", () => { $("constructorPanel")
 
 async function loadConstructorPanel(){
   clearLog($("constructorLog"));
-  await Promise.all([loadCategoriesTable(), loadLadderTiersTable()]);
+  // ЛГ-коэффициенты общие для всех секторов — менять их может только
+  // админ/менеджер; руководителю сектора блок не показываем.
+  const canEditLadder = profile && (profile.role === "admin" || profile.role === "manager");
+  $("ladderBlock").style.display = canEditLadder ? "" : "none";
+  await Promise.all([loadSectorWeightsPanel(), canEditLadder ? loadLadderTiersTable() : Promise.resolve()]);
 }
 
-async function loadCategoriesTable(){
-  const tbody = $("categoriesTbody");
-  tbody.innerHTML = `<tr><td colspan="7" style="color:var(--muted);">Загрузка…</td></tr>`;
+// ---------- конструктор: веса категорий по секторам ----------
+// Админ/менеджер меняют веса любого сектора сразу; руководитель сектора —
+// подаёт заявку на СВОЙ сектор, которая вступает в силу после подтверждения
+// (бэкенд: app/routers/sector_weights.py). Действует на будущие загрузки.
+let swState = { info: null, sector: null };
+const SW_STATUS_LABELS = { pending: "ждёт подтверждения", approved: "действует", rejected: "отклонена", cancelled: "заменена" };
+function swLabel(key){ return (swState.info.labels || {})[key] || key; }
+function swSectorName(n){ return (swState.info.sector_names || {})[String(n)] || `Сектор ${n}`; }
+function swWeightsLine(weights){ return swState.info.keys.map(k => `${swLabel(k)} ${weights[k]}`).join(" · "); }
+function swDiff(from, to){
+  const parts = swState.info.keys.filter(k => Math.abs(from[k] - to[k]) > 1e-9).map(k => `${swLabel(k)} ${from[k]} → ${to[k]}`);
+  return parts.length ? parts.join(" · ") : "без изменений";
+}
+function swWhen(iso){
+  return iso ? new Date(iso).toLocaleString("ru", { dateStyle: "short", timeStyle: "short" }) : "";
+}
+function apiErrorDetail(err){
+  let msg = err.message;
+  try{ const d = JSON.parse(msg).detail; if(d) msg = typeof d === "string" ? d : JSON.stringify(d); }catch(e){ /* не JSON */ }
+  return msg;
+}
+
+// Число заявок руководителей секторов, ждущих подтверждения, — на кнопке
+// конструктора у админа/менеджера (без бейджа заявки лежали бы незамеченными).
+function setConstructorBadge(info){
+  if(!profile || (profile.role !== "admin" && profile.role !== "manager")) return;
+  const n = info.pending.length;
+  $("openConstructorBtn").textContent = n ? `⚙️ Конструктор рейтинга (заявок: ${n})` : "⚙️ Конструктор рейтинга";
+}
+async function refreshConstructorBadge(){
   try{
-    const categories = await apiGet("/categories");
-    tbody.innerHTML = "";
-    categories.forEach(cat => tbody.appendChild(buildCategoryRow(cat)));
+    setConstructorBadge(await apiGet("/sector-weights"));
   } catch(err){
-    tbody.innerHTML = "";
-    log("Не удалось загрузить категории: " + err.message, "err", $("constructorLog"));
+    // не критично: бейдж просто не показываем
   }
 }
 
-function buildCategoryRow(cat){
-  const tr = document.createElement("tr");
-  tr.innerHTML = `
-    <td><input type="text" class="cat-label" value="${escapeHtml(cat.label)}"></td>
-    <td><input type="text" class="cat-source" value="${escapeHtml(cat.source_column)}"></td>
-    <td><input type="number" step="0.1" class="cat-weight" value="${cat.weight}" style="width:80px;"></td>
-    <td>
-      <select class="cat-direction">
-        <option value="desc" ${cat.direction === "desc" ? "selected" : ""}>больше = лучше</option>
-        <option value="asc" ${cat.direction === "asc" ? "selected" : ""}>меньше = лучше</option>
-      </select>
-    </td>
-    <td style="text-align:center;"><input type="checkbox" class="cat-enabled" ${cat.enabled ? "checked" : ""}></td>
-    <td><input type="number" class="cat-sort" value="${cat.sort_order}" style="width:70px;"></td>
-    <td><button class="btn btn-ghost cat-delete" style="padding:5px 10px;font-size:12px;">Удалить</button></td>
-  `;
-
-  const save = () => saveCategoryRow(tr, cat);
-  // текстовые/числовые поля — по потере фокуса; чекбокс и селект — сразу по изменению
-  tr.querySelectorAll("input[type=text], input[type=number]").forEach(el => el.addEventListener("blur", save));
-  tr.querySelectorAll("input[type=checkbox], select").forEach(el => el.addEventListener("change", save));
-  tr.querySelector(".cat-delete").addEventListener("click", () => deleteCategoryRow(tr, cat));
-  return tr;
-}
-
-function readCategoryRowValues(tr){
-  return {
-    label: tr.querySelector(".cat-label").value.trim(),
-    source_column: tr.querySelector(".cat-source").value.trim(),
-    weight: parseFloat(tr.querySelector(".cat-weight").value) || 0,
-    direction: tr.querySelector(".cat-direction").value,
-    enabled: tr.querySelector(".cat-enabled").checked,
-    sort_order: parseInt(tr.querySelector(".cat-sort").value, 10) || 0,
-  };
-}
-
-async function saveCategoryRow(tr, cat){
-  // key не редактируется через интерфейс: на него завязана бизнес-логика
-  // (тир ЛК, Регион УК) по конкретным строкам 'c1'/'lk'/'channel'/'time'/'errors' —
-  // отправляем как было, меняем только показанные в таблице поля.
-  const payload = { key: cat.key, ...readCategoryRowValues(tr) };
+async function loadSectorWeightsPanel(){
   try{
-    const updated = await apiSend("PUT", `/categories/${cat.id}`, payload);
-    Object.assign(cat, updated);
-    log(`Сохранено: ${updated.label}`, "ok", $("constructorLog"));
+    swState.info = await apiGet("/sector-weights");
   } catch(err){
-    log(`Не удалось сохранить "${cat.label}": ${err.message}`, "err", $("constructorLog"));
+    log("Не удалось загрузить веса секторов: " + apiErrorDetail(err), "err", $("constructorLog"));
+    return;
   }
+  const tabs = swState.info.can_approve ? [1, 2, 3] : swState.info.editable_sectors;
+  if(!tabs.length){
+    $("sectorWeightsHint").textContent = "Для вашей роли конструктор недоступен.";
+    return;
+  }
+  if(swState.sector === null || !tabs.includes(swState.sector)) swState.sector = tabs[0];
+  renderSectorWeightsPanel();
+  setConstructorBadge(swState.info);
 }
 
-async function deleteCategoryRow(tr, cat){
-  if(!confirm(`Удалить категорию "${cat.label}"? Она используется в расчёте рейтинга — действие нельзя отменить.`)) return;
-  try{
-    await apiSend("DELETE", `/categories/${cat.id}`);
-    tr.remove();
-    log(`Удалено: ${cat.label}`, "ok", $("constructorLog"));
-  } catch(err){
-    log(`Не удалось удалить "${cat.label}": ${err.message}`, "err", $("constructorLog"));
+function renderSectorWeightsPanel(){
+  const info = swState.info;
+  const canApprove = info.can_approve;
+  const sector = swState.sector;
+  const editable = info.editable_sectors.includes(sector);
+
+  $("sectorWeightsHint").textContent = canApprove
+    ? "Выберите сектор и измените веса. Вес 0 выключает категорию в итоговой сумме (место по ней всё равно считается). Ваши изменения вступают в силу сразу; заявки руководителей секторов подтверждаются ниже."
+    : "Измените веса своего сектора и отправьте заявку — она вступит в силу после подтверждения администратором. Вес 0 выключает категорию в итоговой сумме.";
+
+  const tabs = $("sectorWeightsTabs");
+  tabs.innerHTML = "";
+  for(const n of (canApprove ? [1, 2, 3] : info.editable_sectors)){
+    const btn = document.createElement("button");
+    btn.className = "gbtn" + (n === sector ? " active" : "");
+    btn.textContent = swSectorName(n);
+    btn.onclick = () => { swState.sector = n; renderSectorWeightsPanel(); };
+    tabs.appendChild(btn);
   }
+
+  const current = info.sectors[String(sector)];
+  const tbody = $("sectorWeightsTbody");
+  tbody.innerHTML = "";
+  for(const key of info.keys){
+    const note = sector === 2 && key === "lk" ? ` <span class="chan-hint">(только 3 сотрудника-исключения)</span>` : "";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td style="font-family:var(--sans);">${escapeHtml(swLabel(key))}${note}</td>
+      <td>${current.weights[key]}</td>
+      <td><input type="number" step="0.1" min="0" max="${info.max_weight}" class="sw-input" data-key="${key}" value="${current.weights[key]}" style="width:90px;" ${editable ? "" : "disabled"}></td>
+      <td style="color:var(--muted);">${info.defaults[key]}</td>`;
+    tbody.appendChild(tr);
+  }
+  const source = current.source === "approved" ? `действуют с ${swWhen(current.decided_at)}` : "стандартные (ничего не подтверждено)";
+  $("sectorWeightsHint").textContent += ` ${swSectorName(sector)}: ${source}.`;
+
+  $("sectorWeightsSaveBtn").textContent = canApprove ? "Применить сразу" : "Отправить на подтверждение";
+  $("sectorWeightsSaveBtn").disabled = !editable;
+  $("sectorWeightsResetBtn").disabled = !editable;
+  $("sectorWeightsComment").disabled = !editable;
+
+  renderSectorWeightsLists();
 }
 
-$("addCategoryBtn").addEventListener("click", () => {
-  const tr = document.createElement("tr");
-  tr.innerHTML = `
-    <td><input type="text" class="cat-label" placeholder="Название"></td>
-    <td><input type="text" class="cat-source" placeholder="напр. my_metric_per_contact"></td>
-    <td><input type="number" step="0.1" class="cat-weight" value="1" style="width:80px;"></td>
-    <td>
-      <select class="cat-direction">
-        <option value="desc" selected>больше = лучше</option>
-        <option value="asc">меньше = лучше</option>
-      </select>
-    </td>
-    <td style="text-align:center;"><input type="checkbox" class="cat-enabled" checked></td>
-    <td><input type="number" class="cat-sort" value="0" style="width:70px;"></td>
-    <td>
-      <input type="text" class="cat-key" placeholder="ключ (key)" style="margin-bottom:6px;">
-      <button class="btn btn-primary cat-create" style="padding:5px 10px;font-size:12px;">Создать</button>
-    </td>
-  `;
-  $("categoriesTbody").appendChild(tr);
-  tr.querySelector(".cat-key").focus();
+function renderSectorWeightsLists(){
+  const info = swState.info;
+  const pendingBox = $("sectorWeightsPending"), historyBox = $("sectorWeightsHistory");
 
-  tr.querySelector(".cat-create").addEventListener("click", async () => {
-    const payload = { key: tr.querySelector(".cat-key").value.trim(), ...readCategoryRowValues(tr) };
-    if(!payload.key || !payload.label || !payload.source_column){
-      log("Заполните ключ, название и колонку-источник.", "err", $("constructorLog"));
-      return;
+  let html = "";
+  if(info.pending.length){
+    html += `<div class="sub-title">Заявки на изменение весов</div><div class="subtable-wrap" style="margin-top:10px;"><table class="dyn-table"><thead><tr><th>Сектор</th><th>Кто / когда</th><th>Что меняется</th><th>Комментарий</th><th></th></tr></thead><tbody>`;
+    for(const c of info.pending){
+      const current = info.sectors[String(c.sector)].weights;
+      html += `<tr>
+        <td style="font-family:var(--sans);">${escapeHtml(swSectorName(c.sector))}</td>
+        <td style="font-family:var(--sans);">${escapeHtml(c.requested_by_name || "")}<br><span class="chan-hint">${swWhen(c.requested_at)}</span></td>
+        <td style="font-family:var(--sans);">${escapeHtml(swDiff(current, c.weights))}</td>
+        <td style="font-family:var(--sans);">${escapeHtml(c.comment || "")}</td>
+        <td style="white-space:nowrap;">${info.can_approve
+          ? `<button class="btn btn-primary sw-approve" data-id="${c.id}" style="padding:5px 10px;font-size:12px;">Подтвердить</button> <button class="btn btn-ghost sw-reject" data-id="${c.id}" style="padding:5px 10px;font-size:12px;">Отклонить</button>`
+          : `<span class="chan-hint">ждёт подтверждения</span>`}</td></tr>`;
     }
-    try{
-      await apiSend("POST", "/categories", payload);
-      log(`Создано: ${payload.label}`, "ok", $("constructorLog"));
-      await loadCategoriesTable(); // проще перезагрузить таблицу, чем достраивать строку вручную
-    } catch(err){
-      log(`Не удалось создать категорию: ${err.message}`, "err", $("constructorLog"));
+    html += `</tbody></table></div>`;
+  }
+  pendingBox.innerHTML = html;
+
+  let hist = "";
+  if(info.history.length){
+    hist += `<div class="sub-title">Журнал изменений</div><div class="subtable-wrap" style="margin-top:10px;"><table class="dyn-table"><thead><tr><th>Сектор</th><th>Статус</th><th>Веса</th><th>Кто</th><th>Комментарий</th><th></th></tr></thead><tbody>`;
+    for(const c of info.history){
+      const who = c.status === "approved" && c.requested_by_name === c.decided_by_name
+        ? c.decided_by_name
+        : `${c.requested_by_name || ""}${c.decided_by_name && c.decided_by_name !== c.requested_by_name ? ` → ${c.decided_by_name}` : ""}`;
+      hist += `<tr>
+        <td style="font-family:var(--sans);">${escapeHtml(swSectorName(c.sector))}</td>
+        <td style="font-family:var(--sans);">${SW_STATUS_LABELS[c.status] || c.status}<br><span class="chan-hint">${swWhen(c.decided_at || c.requested_at)}</span></td>
+        <td style="font-family:var(--sans);">${escapeHtml(swWeightsLine(c.weights))}</td>
+        <td style="font-family:var(--sans);">${escapeHtml(who)}</td>
+        <td style="font-family:var(--sans);">${escapeHtml(c.comment || "")}</td>
+        <td>${info.editable_sectors.includes(c.sector) ? `<button class="btn btn-ghost sw-fill" data-id="${c.id}" style="padding:5px 10px;font-size:12px;">Подставить</button>` : ""}</td></tr>`;
     }
-  });
+    hist += `</tbody></table></div>`;
+  }
+  historyBox.innerHTML = hist;
+
+  pendingBox.querySelectorAll(".sw-approve").forEach(b => b.addEventListener("click", () => decideSectorChange(b.dataset.id, "approve")));
+  pendingBox.querySelectorAll(".sw-reject").forEach(b => b.addEventListener("click", () => decideSectorChange(b.dataset.id, "reject")));
+  historyBox.querySelectorAll(".sw-fill").forEach(b => b.addEventListener("click", () => {
+    const c = info.history.find(x => x.id === b.dataset.id);
+    if(!c) return;
+    swState.sector = c.sector;
+    renderSectorWeightsPanel();
+    document.querySelectorAll("#sectorWeightsTbody .sw-input").forEach(inp => { inp.value = c.weights[inp.dataset.key]; });
+  }));
+}
+
+function readSectorWeightsInputs(){
+  const weights = {};
+  for(const inp of document.querySelectorAll("#sectorWeightsTbody .sw-input")){
+    const v = parseFloat(inp.value);
+    if(!(v >= 0 && v <= swState.info.max_weight)) throw new Error(`Вес «${swLabel(inp.dataset.key)}» — число от 0 до ${swState.info.max_weight}.`);
+    weights[inp.dataset.key] = v;
+  }
+  return weights;
+}
+
+$("sectorWeightsResetBtn").addEventListener("click", () => {
+  document.querySelectorAll("#sectorWeightsTbody .sw-input").forEach(inp => { inp.value = swState.info.defaults[inp.dataset.key]; });
 });
+
+$("sectorWeightsSaveBtn").addEventListener("click", async () => {
+  const log_ = $("constructorLog");
+  let weights;
+  try{ weights = readSectorWeightsInputs(); } catch(err){ log(err.message, "err", log_); return; }
+  const sector = swState.sector;
+  const current = swState.info.sectors[String(sector)].weights;
+  const diff = swDiff(current, weights);
+  if(diff === "без изменений"){ log("Новые веса совпадают с действующими — менять нечего.", "warn", log_); return; }
+  const direct = swState.info.can_approve;
+  const question = direct
+    ? `Применить новые веса: ${swSectorName(sector)}?\n\n${diff}\n\nЭто изменит места, ЛГ и итоговую ЗП следующих загрузок сектора. Уже загруженные периоды не пересчитываются.`
+    : `Отправить заявку на изменение весов: ${swSectorName(sector)}?\n\n${diff}\n\nВеса вступят в силу после подтверждения администратором.`;
+  if(!confirm(question)) return;
+  $("sectorWeightsSaveBtn").disabled = true;
+  try{
+    const res = await apiSend("PUT", `/sector-weights/${sector}`, { weights, comment: $("sectorWeightsComment").value.trim() || null });
+    log(res.applied ? `Веса применены: ${swSectorName(sector)} (${diff}).` : `Заявка отправлена: ${swSectorName(sector)} (${diff}). Ждёт подтверждения администратора.`, "ok", log_);
+    $("sectorWeightsComment").value = "";
+  } catch(err){
+    log("Не удалось сохранить: " + apiErrorDetail(err), "err", log_);
+  }
+  await loadSectorWeightsPanel();
+});
+
+async function decideSectorChange(id, action){
+  const c = swState.info.pending.find(x => x.id === id);
+  if(!c) return;
+  const current = swState.info.sectors[String(c.sector)].weights;
+  let comment = null;
+  if(action === "approve"){
+    if(!confirm(`Подтвердить изменение весов: ${swSectorName(c.sector)}?\n\n${swDiff(current, c.weights)}\n\nЭто изменит места, ЛГ и итоговую ЗП следующих загрузок сектора.`)) return;
+  } else {
+    comment = prompt("Причина отклонения (необязательно):", "");
+    if(comment === null) return;
+  }
+  try{
+    await apiSend("POST", `/sector-weights/changes/${id}/${action}`, comment ? { comment } : {});
+    log(action === "approve" ? `Подтверждено: ${swSectorName(c.sector)}.` : `Отклонено: ${swSectorName(c.sector)}.`, "ok", $("constructorLog"));
+  } catch(err){
+    log("Не удалось: " + apiErrorDetail(err), "err", $("constructorLog"));
+  }
+  await loadSectorWeightsPanel();
+}
 
 async function loadLadderTiersTable(){
   const tbody = $("ladderTiersTbody");
@@ -5028,7 +5226,7 @@ async function uploadAsSectorHead(){
   log(`Записываю отчёт за ${p.period_label} (${p.rows.length} строк)…`, null, uploadLogEl);
   try{
     const res = await apiSend("POST", "/ratings/save-computed", {
-      period_label: p.period_label, source_filename: p.source_filename, rows: p.rows,
+      period_label: p.period_label, source_filename: p.source_filename, rows: p.rows, weights_snapshot: p.weights_snapshot,
     });
     log(`Готово: отчёт за ${p.period_label} записан (${res.rows} строк).`, "ok", uploadLogEl);
     pendingSectorUpload = null;
@@ -5049,12 +5247,20 @@ $("uploadBtn").addEventListener("click", async () => {
   $("uploadBtn").disabled = true;
   clearLog(uploadLogEl);
   const periodLabel = currentPeriodValue();
-  log("Создаю запись загрузки в kpi_uploads…", null, uploadLogEl);
   try{
+    // Рассчитано по весам секторов на момент расчёта: если их успели изменить
+    // (подтверждена заявка), записывать устаревший расчёт нельзя.
+    if(currentWeightsSnapshot){
+      const fresh = weightsSnapshotOf(await apiGet("/sector-weights"));
+      if(!weightsSnapshotsEqual(fresh, currentWeightsSnapshot)){
+        throw new Error("Веса секторов изменились с момента расчёта — посчитайте файл заново.");
+      }
+    }
+    log("Создаю запись загрузки в kpi_uploads…", null, uploadLogEl);
     const uploadRes = await fetch(`${SUPABASE_URL}/rest/v1/kpi_uploads`, {
       method: "POST",
       headers: sbHeaders({ "Content-Type": "application/json", "Prefer": "return=representation" }),
-      body: JSON.stringify([{ period_label: periodLabel, source_filename: currentFilename }]),
+      body: JSON.stringify([{ period_label: periodLabel, source_filename: currentFilename, weights_snapshot: currentWeightsSnapshot }]),
     });
     if(!uploadRes.ok) throw new Error(await uploadRes.text());
     const uploadData = await uploadRes.json();

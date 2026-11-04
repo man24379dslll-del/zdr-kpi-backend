@@ -25,6 +25,14 @@ from app.services.ratings_upload import (
     sanitize_rows,
 )
 from app.services.salary import DEFAULT_HOURS_NORM, DEFAULT_MONTHLY_BASE_RATE, assign_salary
+from app.services.sector_weights import (
+    WeightsValidationError,
+    load_effective,
+    parse_snapshot,
+    snapshot_of,
+    weights_by_sector,
+    weights_equal,
+)
 from app.services.weekly_rating import compute_weekly_rating
 from app.supabase_client import as_service, as_user
 
@@ -126,8 +134,21 @@ async def save_computed_ratings(
         rows = sanitize_rows(payload.get("rows"))
     except UploadValidationError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+    # Расчёт в браузере шёл с весами секторов — присылает их снимком. Если
+    # веса с тех пор изменились (подтверждена заявка), записать устаревший
+    # расчёт нельзя: итоговые места, ЛГ и ЗП были бы по старым весам.
+    try:
+        client_weights = parse_snapshot(payload.get("weights_snapshot"))
+    except WeightsValidationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Нет корректного снимка весов: {exc}")
 
     client = as_service()
+    effective = await load_effective(client)
+    if any(not weights_equal(client_weights[s], effective[s]["weights"]) for s in effective):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Веса секторов изменились с момента расчёта — обновите страницу и посчитайте файл заново",
+        )
     existing = await client.get(
         "kpi_uploads",
         params={"period_label": f"eq.{period_label}", "select": "id", "limit": "1"},
@@ -138,7 +159,10 @@ async def save_computed_ratings(
             f"За период {period_label} отчёт уже загружен — повторная загрузка заблокирована",
         )
 
-    created = await client.post("kpi_uploads", [{"period_label": period_label, "source_filename": source_filename}])
+    created = await client.post(
+        "kpi_uploads",
+        [{"period_label": period_label, "source_filename": source_filename, "weights_snapshot": snapshot_of(effective)}],
+    )
     upload_id = created[0]["id"]
     try:
         for i in range(0, len(rows), 200):
@@ -231,6 +255,7 @@ async def compute_weekly_rating_endpoint(
     categories = await _load_categories(user)
     supervisor_channels = await _load_supervisor_channels(user)
     tier_coefficients = await _load_tier_coefficients(user)
+    effective_weights = await load_effective(as_service())
     raw = await file.read()
     employees = parse_weekly_rating_excel(raw, supervisor_channels)
     if not employees:
@@ -238,7 +263,8 @@ async def compute_weekly_rating_endpoint(
 
     try:
         results = compute_weekly_rating(
-            employees, categories, na_predicate=is_na_row, tier_coefficients=tier_coefficients
+            employees, categories, na_predicate=is_na_row, tier_coefficients=tier_coefficients,
+            sector_weights=weights_by_sector(effective_weights),
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
@@ -254,7 +280,10 @@ async def compute_weekly_rating_endpoint(
 
     client = as_user(user.access_token)
     upload_id = await maybe_save_weekly_rating(
-        dry_run, lambda: save_weekly_rating(client, period_label, file.filename or "", results)
+        dry_run,
+        lambda: save_weekly_rating(
+            client, period_label, file.filename or "", results, snapshot_of(effective_weights)
+        ),
     )
 
     return {
