@@ -331,3 +331,35 @@ def test_lk_weight_of_the_sector_applies_to_sector2_exceptions_only():
     by_fio = {r.fio: r for r in compute_weekly_rating(employees, _categories(), sector_weights={1: _w(), 2: _w(lk=4), 3: _w()})}
     assert by_fio[exception].scores["lk"] == 1 * 4                    # место 1 × вес ЛК сектора
     assert "lk" not in by_fio["Обычный"].scores
+
+
+def test_lk_off_in_snapshot_needs_zero_weight_in_all_three_sectors():
+    from app.services.sector_weights import lk_off_in_snapshot
+
+    def snap(*lk):
+        return {str(s): {"weights": _w(lk=w), "change_id": None} for s, w in zip((1, 2, 3), lk)}
+
+    assert lk_off_in_snapshot(snap(0, 0, 0)) is True
+    assert lk_off_in_snapshot(snap(0, 0, 1.5)) is False
+    assert lk_off_in_snapshot(snap(1.5, 1.5, 1.5)) is False
+    assert lk_off_in_snapshot(None) is False and lk_off_in_snapshot({}) is False
+
+
+def test_lk_weight_zero_takes_lk_out_of_the_total_in_every_group_type():
+    from app.services.weekly_rating import compute_weekly_rating
+
+    sector_weights = {n: _w(lk=0) for n in (1, 2, 3)}
+    g1, g3 = "Супервайзер - Иванов Иван Иванович", next(iter(SECTOR_3_SUPERVISORS))
+    region = {**_employee("Регион", "операторы без супервизора", 150, lk_pc=80), "is_region_uk": True}
+    employees = [_employee(f"О{i}", g, 100 + 10 * i, lk_pc=50 + i) for g in (g1, g3) for i in range(3)] + [region]
+    with_lk = {r.fio: r for r in compute_weekly_rating(employees, _categories())}
+    no_lk = {r.fio: r for r in compute_weekly_rating(employees, _categories(), sector_weights=sector_weights)}
+
+    for fio in ("О0", "О2", "Регион"):
+        assert no_lk[fio].scores["lk"] == 0                                     # место по ЛК считается, балл нулевой
+        assert no_lk[fio].total_score == sum(v for k, v in no_lk[fio].scores.items() if k != "lk")
+        assert no_lk[fio].places["lk"] == with_lk[fio].places["lk"]
+    assert with_lk["О0"].total_score > no_lk["О0"].total_score                    # с ЛК балл был больше
+    # Регион УК: в сумме остались только 1 обращение и время
+    assert set(no_lk["Регион"].scores) == {"c1", "lk", "time"}
+    assert no_lk["Регион"].total_score == no_lk["Регион"].scores["c1"] + no_lk["Регион"].scores["time"]

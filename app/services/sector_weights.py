@@ -126,6 +126,17 @@ def parse_snapshot(snapshot) -> dict[int, dict[str, float]]:
     return parsed
 
 
+def lk_off_in_snapshot(snapshot) -> bool:
+    """ЛК выключена (вес 0) у ВСЕХ секторов периода — по снимку весов
+    kpi_uploads.weights_snapshot. Нет снимка (период до конструктора
+    секторов) или он некорректен — ЛК считалась, False."""
+    try:
+        parsed = parse_snapshot(snapshot)
+    except WeightsValidationError:
+        return False
+    return all(parsed[sector]["lk"] == 0 for sector in SECTOR_NUMBERS)
+
+
 def weights_by_sector(effective: dict[int, dict]) -> dict[int, dict[str, float]]:
     return {sector: eff["weights"] for sector, eff in effective.items()}
 

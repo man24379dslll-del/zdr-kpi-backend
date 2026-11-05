@@ -23,6 +23,7 @@ from app.services.dashboards import (
 )
 from app.services.group_naming import restrict_to_sector_pair
 from app.services.sector_compare import build_sector_comparison
+from app.services.sector_weights import lk_off_in_snapshot
 from app.supabase_client import as_service, as_user
 
 router = APIRouter(prefix="/dashboards", tags=["dashboards"])
@@ -136,7 +137,13 @@ async def get_sector_comparison(upload_id: str, user: CurrentUser = Depends(get_
     client = as_service()
     ratings = await _load_all_ratings(client, upload_id)
     result = build_sector_comparison(ratings)
-    result["period_label"] = await _load_period_label(client, upload_id)
+    uploads = await client.get(
+        "kpi_uploads", params={"id": f"eq.{upload_id}", "select": "period_label,weights_snapshot"}
+    )
+    upload = uploads[0] if uploads else {}
+    result["period_label"] = upload.get("period_label")
+    # ЛК выключена у всех секторов периода (вес 0) — колонку ЛК не показываем
+    result["lk_hidden"] = lk_off_in_snapshot(upload.get("weights_snapshot"))
     return result
 
 

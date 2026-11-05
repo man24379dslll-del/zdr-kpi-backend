@@ -233,16 +233,17 @@ def test_empty_period():
 # ---------- эндпоинт ----------
 
 class FakeClient:
-    def __init__(self, ratings, period_label="10-5"):
+    def __init__(self, ratings, period_label="10-5", weights_snapshot=None):
         self.ratings = ratings
         self.period_label = period_label
+        self.weights_snapshot = weights_snapshot
         self.calls = []
 
     async def get(self, table, params=None):
         params = params or {}
         self.calls.append((table, dict(params)))
         if table == "kpi_uploads":
-            return [{"period_label": self.period_label}]
+            return [{"period_label": self.period_label, "weights_snapshot": self.weights_snapshot}]
         offset, limit = int(params["offset"]), int(params["limit"])
         return self.ratings[offset:offset + limit]
 
@@ -283,3 +284,18 @@ def test_endpoint_reads_all_pages_and_returns_all_sectors_to_a_sector_head(api):
     assert {s["sector"] for s in body["sectors"]} == {1, 2}
     pages = [c[1]["offset"] for c in fake.calls if c[0] == "kpi_ratings"]
     assert pages == ["0", "1000", "2000"] and all(c[1]["order"] == "id.asc" for c in fake.calls if c[0] == "kpi_ratings")
+
+
+def _snapshot(lk=(1.5, 1.5, 1.5)):
+    from app.services.sector_weights import DEFAULT_WEIGHTS
+    return {str(s): {"weights": {**DEFAULT_WEIGHTS, "lk": w}, "change_id": None} for s, w in zip((1, 2, 3), lk)}
+
+
+def test_endpoint_hides_lk_only_when_it_is_off_in_every_sector_of_the_period(api):
+    rows = [_row("А", G1, 100, radio=100, inet=50)]
+    get = lambda snap: api(_user("admin"), FakeClient(rows, weights_snapshot=snap)).get("/dashboards/sectors", params={"upload_id": "u1"}).json()
+    assert get(_snapshot((0, 0, 0)))["lk_hidden"] is True
+    assert get(_snapshot((0, 0, 1.5)))["lk_hidden"] is False           # хотя бы у одного сектора ЛК считалась
+    assert get(_snapshot())["lk_hidden"] is False
+    assert get(None)["lk_hidden"] is False                             # период до конструктора секторов — без снимка
+    assert get({"1": "мусор"})["lk_hidden"] is False

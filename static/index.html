@@ -1123,6 +1123,8 @@ async function buildSupervisorViewer(){
       currentNoviceRows = rows.filter(r => r.is_novice);
       currentViewerPeriodLabel = latest.period_label;
       currentViewerWeightsInfo = await fetchUploadWeightsInfo(latest.id);
+      markLkOff(currentRows, currentViewerWeightsInfo);
+      markLkOff(currentNoviceRows, currentViewerWeightsInfo, true);
 
       clearLog(logEl2);
       log(`Период: ${latest.period_label} · сотрудников: ${currentRows.length}`, "ok", logEl2);
@@ -1391,6 +1393,8 @@ async function loadSavedPeriod(upload){
     // сравнение групп пересчитывается из строк — по весам, с которыми период
     // был посчитан (снимок в kpi_uploads; нет снимка — стандартные)
     const savedWeights = await fetchUploadWeightsInfo(upload.id);
+    markLkOff(main, savedWeights);
+    markLkOff(novices, savedWeights, true);
     currentSupervisorRows = computeSupervisorRatingFromRows(main, undefined, savedWeights);
     currentSector2SupervisorRows = computeSupervisorRatingFromRows(main, SECTOR_2_SUPERVISORS, savedWeights);
     currentFilename = upload.source_filename || "(сохранённый период)";
@@ -2053,6 +2057,26 @@ async function fetchUploadWeightsInfo(uploadId){
     return null;
   }
 }
+// ЛК выключена (вес 0) у сектора периода — её колонки в таблицах и Excel
+// скрываются. Признак lkOff лежит на строках: при расчёте файла выставляется
+// сразу (computeMainRating/computeGlobalNovices/rankSupervisorStats), у строк
+// из Supabase — по снимку весов периода (markLkOff). У периодов до выключения
+// вес был ненулевой — они показываются с ЛК как раньше.
+function isLkOffRows(rows){
+  return !!rows && rows.length > 0 && rows.every(r => r.lkOff);
+}
+// pool=true — общий список новичков (строки разных секторов считались по
+// стандартным весам): ЛК выключена, только если выключена во всех секторах.
+function markLkOff(rows, info, pool){
+  const allOff = [1, 2, 3].every(n => weightsOfSector(n, info).lk === 0);
+  rows.forEach(r => { r.lkOff = pool ? allOff : weightsOfSector(sectorOfSupervisor(r.supervisor), info).lk === 0; });
+}
+// Веса общего списка новичков: стандартные, ЛК — 0, если она выключена везде.
+function noviceWeights(info){
+  const w = { ...DEFAULT_SECTOR_WEIGHTS };
+  if([1, 2, 3].every(n => weightsOfSector(n, info).lk === 0)) w.lk = 0;
+  return w;
+}
 // Веса для сравнения групп между собой: у вкладки сектора — веса этого
 // сектора, у общего рейтинга супервайзеров — веса Сектора 1.
 function supervisorRatingWeights(sectorSupervisors, info){
@@ -2192,8 +2216,9 @@ function computeMainRating(groups, prevCoeffMap, tierCoefficients){
     // — как раньше, isNaMain.
     const naFn = g.isPeaks ? isNaPeaks : (forceLk1 || isSector3) ? (e => !isNarrowSectorEvaluated(e)) : isNaMain;
     const lkActiveFn = e => !sector2ZeroesLk(g.supervisor, e.fio);
-    const scored = scoreSlice(g.employees, BOTH_CHANNELS, naFn, "c1_sum", true, active, lkActiveFn, forceLk1, g.isPeaks ? hasNoActivityPeaks : hasNoActivityMain, weightsOfSector(sectorOfSupervisor(g.supervisor)));
-    out.push(...scored.map(e => ({...withGroupChannelFields(e, channel), supervisor: g.supervisor, isRegionUK: !!g.isRegionUK, isPeaks: !!g.isPeaks})));
+    const groupWeights = weightsOfSector(sectorOfSupervisor(g.supervisor));
+    const scored = scoreSlice(g.employees, BOTH_CHANNELS, naFn, "c1_sum", true, active, lkActiveFn, forceLk1, g.isPeaks ? hasNoActivityPeaks : hasNoActivityMain, groupWeights);
+    out.push(...scored.map(e => ({...withGroupChannelFields(e, channel), supervisor: g.supervisor, isRegionUK: !!g.isRegionUK, isPeaks: !!g.isPeaks, lkOff: groupWeights.lk === 0})));
   }
   if(periodType === "week"){
     assignTierCoefficients(out, tierCoefficients);
@@ -2394,7 +2419,9 @@ function computeGlobalNovices(groups){
       if(NOVICE_STATUSES.includes(e.status)) all.push({...e, supervisor: g.supervisor, channel});
     }
   }
-  return scoreSlice(all, BOTH_CHANNELS, isNaNovice, "c1_sum", true).map(e => withGroupChannelFields(e, e.channel));
+  const weights = noviceWeights();
+  return scoreSlice(all, BOTH_CHANNELS, isNaNovice, "c1_sum", true, undefined, undefined, undefined, undefined, weights)
+    .map(e => ({ ...withGroupChannelFields(e, e.channel), lkOff: weights.lk === 0 }));
 }
 
 // ---------- "Коэффициент" в "Рейтинг супервайзеров" (ПОКА ТОЛЬКО ОТОБРАЖЕНИЕ,
@@ -2477,14 +2504,9 @@ function computeSupervisorRating(groups, sectorSupervisors, weightsInfo){
     };
   }).filter(s => s.n_evaluated > 0);
 
-  // ЛК не в счёт в сумме баллов при сравнении групп между собой — ТОЛЬКО
-  // для Сектора 2 (тот же принцип, что и на уровне сотрудника, см.
-  // sector2ZeroesLk/forceLk1); Сектор 3 считается обычно (полный вес ЛК),
-  // сравнение по ссылке с самой константой SECTOR_2_SUPERVISORS.
-  const active = sectorSupervisors === SECTOR_2_SUPERVISORS ? { c1:true, lk:false, ch:true, time:true, errors:true } : undefined;
-  const rows = scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc, cards:e.ch_cards}), e => isSpecialSupervisor(e.supervisor), "c1_sum", false, active, undefined, undefined, undefined, supervisorRatingWeights(sectorSupervisors, weightsInfo));
-  assignSupervisorCoefficients(rows);
-  return rows;
+  // Места, баллы и коэффициент — общей функцией (там же правило "ЛК не в счёт
+  // в Секторе 2" и признак lkOff): её же использует расчёт из строк периода.
+  return rankSupervisorStats(groupStats, sectorSupervisors, weightsInfo);
 }
 
 // Пересборка "Рейтинга супервайзеров" из уже сохранённых в Supabase строк
@@ -2526,8 +2548,10 @@ function rankSupervisorStats(groupStats, sectorSupervisors, weightsInfo){
   // Сектор №2 — ЛК не в счёт при сравнении групп между собой, см. тот же
   // комментарий в computeSupervisorRating выше.
   const active = sectorSupervisors === SECTOR_2_SUPERVISORS ? { c1:true, lk:false, ch:true, time:true, errors:true } : undefined;
-  const rows = scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc, cards:e.ch_cards}), e => isSpecialSupervisor(e.supervisor), "c1_sum", false, active, undefined, undefined, undefined, supervisorRatingWeights(sectorSupervisors, weightsInfo));
+  const weights = supervisorRatingWeights(sectorSupervisors, weightsInfo);
+  const rows = scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc, cards:e.ch_cards}), e => isSpecialSupervisor(e.supervisor), "c1_sum", false, active, undefined, undefined, undefined, weights);
   assignSupervisorCoefficients(rows);
+  rows.forEach(r => { r.lkOff = weights.lk === 0; });
   return rows;
 }
 
@@ -3021,6 +3045,7 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
 // исключений — их выводят ОТДЕЛЬНЫМ мини-блоком карточек (см.
 // renderSector2LkCards), не этой таблицей.
 function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk){
+  hideLk = hideLk || isLkOffRows(rows); // ЛК выключена (вес 0) — колонок ЛК нет
   const sorted = sortByPlace(rows);
   const dual = isDualRows(rows);
   const wrap = document.createElement("div");
@@ -3191,6 +3216,7 @@ function renderSector2Supervisors(){
 // opts.highlight — Set названий групп, которые подсветить (своя группа).
 function renderSupervisorTable(container, sourceRows, opts){
   container.innerHTML = "";
+  const lkOff = isLkOffRows(sourceRows); // ЛК выключена (вес 0) — колонок ЛК нет
   const sorted = sortByPlace(sourceRows);
   const wrap = document.createElement("div");
   wrap.className = "subtable-wrap";
@@ -3203,7 +3229,7 @@ function renderSupervisorTable(container, sourceRows, opts){
         <th rowspan="2">Канал</th>
         <th rowspan="2" class="block-end">Оценено</th>
         <th colspan="6" class="block-end">1 обращение</th>
-        <th colspan="6" class="block-end">ЛК</th>
+        ${lkOff ? "" : `<th colspan="6" class="block-end">ЛК</th>`}
         <th colspan="6" class="block-end">Радио+ТВ / Интернет</th>
         <th colspan="2" class="block-end">Время/контакт (без звонка)</th>
         <th colspan="2" class="block-end">% ошибок</th>
@@ -3213,7 +3239,7 @@ function renderSupervisorTable(container, sourceRows, opts){
       </tr>
       <tr class="sub">
         <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
-        <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
+        ${lkOff ? "" : `<th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>`}
         <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
         <th>чч:мм:сс</th><th class="block-end">место</th>
         <th>%</th><th class="block-end">место</th>
@@ -3237,7 +3263,7 @@ function renderSupervisorTable(container, sourceRows, opts){
       <td>${r.channel === "inet" ? "Интернет" : "Радио+ТВ"}</td>
       <td class="block-end">${r.n_evaluated}/${r.n_total}</td>
       <td>${fmtCards(r.c1_cards)}</td><td>${fmt(r.c1_sum)}</td><td>${fmt(r.c1_check)}</td><td>${fmtPct(r.c1_conv)}</td><td>${fmt(r.c1_pc)}</td><td class="block-end">${rankBadge(r.c1_place, c1Map(r.c1_place))}</td>
-      <td>${fmtCards(r.lk_cards)}</td><td>${fmt(r.lk_sum)}</td><td>${fmt(r.lk_check)}</td><td>${fmtPct(r.lk_conv)}</td><td>${fmt(r.lk_pc)}</td><td class="block-end">${rankBadge(fmtPlace(r.lk_place), lkMap(r.lk_place))}</td>
+      ${lkOff ? "" : `<td>${fmtCards(r.lk_cards)}</td><td>${fmt(r.lk_sum)}</td><td>${fmt(r.lk_check)}</td><td>${fmtPct(r.lk_conv)}</td><td>${fmt(r.lk_pc)}</td><td class="block-end">${rankBadge(fmtPlace(r.lk_place), lkMap(r.lk_place))}</td>`}
       <td>${fmtCards(r.ch_cards)}</td><td>${fmt(r.ch_sum)}</td><td>${fmt(r.ch_check)}</td><td>${fmtPct(r.ch_conv)}</td><td>${fmt(r.ch_pc)}</td><td class="block-end">${rankBadge(r.ch_place, chMap(r.ch_place))}</td>
       <td>${fmtTime(r.time)}</td><td class="block-end">${rankBadge(r.time_place, timeMap(r.time_place))}</td>
       <td>${fmtPct(r.errors_pct)}</td><td class="block-end">${rankBadge(r.errors_place, errMap(r.errors_place))}</td>
@@ -3261,7 +3287,7 @@ function renderSupervisorTable(container, sourceRows, opts){
     <td></td>
     <td class="block-end">${totalSum("n_evaluated")}/${totalSum("n_total")}</td>
     <td>${totalSum("c1_cards")}</td><td>${fmt(totalSum("c1_sum"))}</td><td></td><td></td><td></td><td class="block-end"></td>
-    <td>${totalSum("lk_cards")}</td><td>${fmt(totalSum("lk_sum"))}</td><td></td><td></td><td></td><td class="block-end"></td>
+    ${lkOff ? "" : `<td>${totalSum("lk_cards")}</td><td>${fmt(totalSum("lk_sum"))}</td><td></td><td></td><td></td><td class="block-end"></td>`}
     <td>${totalSum("ch_cards")}</td><td>${fmt(totalSum("ch_sum"))}</td><td></td><td></td><td></td><td class="block-end"></td>
     <td></td><td class="block-end"></td>
     <td></td><td class="block-end"></td>
@@ -4122,10 +4148,10 @@ function scMetricHead(d){
   return {
     top: `<th colspan="4" class="block-end">1 обращение</th>`
       + chans.map(([, label]) => `<th colspan="4" class="block-end">${label}</th>`).join("")
-      + `<th class="block-end">ЛК</th><th colspan="2" class="block-end">Время/контакт</th><th colspan="2" class="block-end">% ошибок</th>`
+      + (d.lk_hidden ? "" : `<th class="block-end">ЛК</th>`) + `<th colspan="2" class="block-end">Время/контакт</th><th colspan="2" class="block-end">% ошибок</th>`
       + `<th rowspan="2">Балл</th><th rowspan="2">Место</th>`,
     sub: four + chans.map(() => four).join("")
-      + `<th class="block-end">с контакта</th><th>чч:мм:сс</th><th class="block-end">место</th><th>%</th><th class="block-end">место</th>`,
+      + (d.lk_hidden ? "" : `<th class="block-end">с контакта</th>`) + `<th>чч:мм:сс</th><th class="block-end">место</th><th>%</th><th class="block-end">место</th>`,
   };
 }
 
@@ -4137,7 +4163,7 @@ function scMetricCells(e, gm, d){
   for(const k of chanKeys){
     html += `<td>${fmtLevelSum(Math.round(m[k + "_sum"]))}</td><td>${scNum(m[k + "_pc"], 0)}</td><td>${scNum(m[k + "_conv"], 1)}</td><td class="block-end">${badge(k)}</td>`;
   }
-  html += `<td class="block-end">${scNum(m.lk_pc, 0)}</td>`
+  html += (d.lk_hidden ? "" : `<td class="block-end">${scNum(m.lk_pc, 0)}</td>`)
     + `<td>${m.time === null || m.time === undefined ? "—" : fmtTime(m.time)}</td><td class="block-end">${badge("time")}</td>`
     + `<td>${scNum(m.errors_pct, 2)}</td><td class="block-end">${badge("errors")}</td>`;
   return html;
@@ -5121,11 +5147,11 @@ const EXPORT_HEADERS = [
 // dual — строки новой формулы (isDualRows): вместо одного блока канала два,
 // Радио+ТВ и Интернет, поэтому все колонки правее сдвигаются на 6 (см.
 // exportCols/categoryHeaderRows/placeCols).
-function rowToArray(r, dual){
+function rowToArray(r, dual, lkOff){
   return [
     r.fio, r.status, displayGroupName(r.supervisor),
     r.c1_cards ?? "", r.c1_sum, r.c1_check, r.c1_conv, r.c1_pc, r.c1_place,
-    r.lk_cards ?? "", r.lk_sum, r.lk_check, r.lk_conv, r.lk_pc, r.lk_place,
+    ...(lkOff ? [] : [r.lk_cards ?? "", r.lk_sum, r.lk_check, r.lk_conv, r.lk_pc, r.lk_place]),
     ...(dual ? [
       r.radio_cards ?? "", r.radio_sum, r.radio_check, r.radio_conv, r.radio_pc, r.radio_place,
       r.inet_cards ?? "", r.inet_sum, r.inet_check, r.inet_conv, r.inet_pc, r.inet_place,
@@ -5166,26 +5192,28 @@ function applyPlaceGradients(ws, sortedRows, colsConfig, dataStartRow){
 // всё правее него сдвигается на 6.
 // hideFinalPay — без бонусов и ЗП (последние 3 колонки блока ЛГ): файл
 // обычного супервайзера не должен показывать то, что скрыто у него на экране.
-function exportCols(dual, withTier, hideFinalPay){
-  const x = dual ? 6 : 0;
+// lkOff — ЛК выключена (вес 0): блока ЛК (6 колонок) в файле нет, всё правее
+// него сдвигается на 6 влево.
+function exportCols(dual, withTier, hideFinalPay, lkOff){
+  const x = dual ? 6 : 0, y = lkOff ? -6 : 0;
   const tierCols = hideFinalPay ? 5 : 8;
-  return { x, time: 21 + x, errors: 23 + x, total: 26 + x, final: 27 + x, tierStart: 28 + x, totalCols: (withTier ? 28 + tierCols : 28) + x };
+  return { x, y, ch: 15 + y, inet: 21 + y, time: 21 + x + y, errors: 23 + x + y, total: 26 + x + y, final: 27 + x + y, tierStart: 28 + x + y, totalCols: (withTier ? 28 + tierCols : 28) + x + y };
 }
-function placeCols(dual, finalFilterFn){
-  const c = exportCols(dual, false);
+function placeCols(dual, finalFilterFn, lkOff){
+  const c = exportCols(dual, false, undefined, lkOff);
   return [
     { idx: 8, field: "c1_place" },
-    { idx: 14, field: "lk_place" },
+    ...(lkOff ? [] : [{ idx: 14, field: "lk_place" }]),
     ...(dual
-      ? [{ idx: 20, field: "radio_place" }, { idx: 26, field: "inet_place" }]
-      : [{ idx: 20, field: "ch_place" }]),
+      ? [{ idx: c.ch + 5, field: "radio_place" }, { idx: c.inet + 5, field: "inet_place" }]
+      : [{ idx: c.ch + 5, field: "ch_place" }]),
     { idx: c.time + 1, field: "time_place" },
     { idx: c.errors + 2, field: "errors_place" },
     finalFilterFn ? { idx: c.final, field: "final_place", filterFn: finalFilterFn } : { idx: c.final, field: "final_place" },
   ];
 }
-const placeColsMain = (dual) => placeCols(dual, r => !r.is_na);
-const placeColsSup = (dual) => placeCols(dual);
+const placeColsMain = (dual, lkOff) => placeCols(dual, r => !r.is_na, lkOff);
+const placeColsSup = (dual, lkOff) => placeCols(dual, undefined, lkOff);
 
 
 function styleHeaderRow(ws, colCount, rowIdx, variant){
@@ -5212,19 +5240,19 @@ function styleTitleRow(ws, rowIdx, colCount){
 
 // Двухстрочная шапка: сверху названия блоков (объединённые ячейки), снизу подписи колонок —
 // как на экране (строки "cat" и "sub").
-function categoryHeaderRows(leadLabels, withTier, dual, hideFinalPay){
-  const c = exportCols(dual, withTier, hideFinalPay);
+function categoryHeaderRows(leadLabels, withTier, dual, hideFinalPay, lkOff){
+  const c = exportCols(dual, withTier, hideFinalPay, lkOff);
   const totalCols = c.totalCols;
   const rowA = new Array(totalCols).fill("");
   const rowB = new Array(totalCols).fill("");
   rowA[0] = leadLabels[0]; rowA[1] = leadLabels[1]; rowA[2] = leadLabels[2];
   rowA[3] = "1 ОБРАЩЕНИЕ";
-  rowA[9] = "ЛК";
+  if(!lkOff) rowA[9] = "ЛК";
   if(dual){
-    rowA[15] = "РАДИО+ТВ";
-    rowA[21] = "ИНТЕРНЕТ";
+    rowA[c.ch] = "РАДИО+ТВ";
+    rowA[c.inet] = "ИНТЕРНЕТ";
   } else {
-    rowA[15] = "РАДИО+ТВ / ИНТЕРНЕТ";
+    rowA[c.ch] = "РАДИО+ТВ / ИНТЕРНЕТ";
   }
   rowA[c.time] = "ВРЕМЯ/КОНТАКТ (БЕЗ ЗВОНКА)";
   rowA[c.errors] = "% ОШИБОК";
@@ -5240,22 +5268,22 @@ function categoryHeaderRows(leadLabels, withTier, dual, hideFinalPay){
   }
 
   const subLabels = ["карточек","сумма","ср.чек","конв.,%","с контакта","место"];
-  (dual ? [3, 9, 15, 21] : [3, 9, 15]).forEach(start => subLabels.forEach((s, i) => rowB[start + i] = s));
+  [3, ...(lkOff ? [] : [9]), c.ch, ...(dual ? [c.inet] : [])].forEach(start => subLabels.forEach((s, i) => rowB[start + i] = s));
   rowB[c.time] = "чч:мм:сс"; rowB[c.time + 1] = "место";
   rowB[c.errors] = "кол-во"; rowB[c.errors + 1] = "%"; rowB[c.errors + 2] = "место";
 
   return { rowA, rowB, totalCols };
 }
-function categoryHeaderMerges(baseRow, totalCols, dual){
-  const c = exportCols(dual, false);
+function categoryHeaderMerges(baseRow, totalCols, dual, lkOff){
+  const c = exportCols(dual, false, undefined, lkOff);
   // колонки блока ЛГ — всё, что правее "Места" (их число зависит от hideFinalPay)
   const tierCount = Math.max(0, totalCols - c.totalCols);
   const vertCols = [0, 1, 2, c.total, c.final, ...Array.from({ length: tierCount }, (_, i) => c.tierStart + i)];
   const merges = vertCols.map(col => ({ s: { r: baseRow, c: col }, e: { r: baseRow + 1, c: col } }));
   merges.push({ s: { r: baseRow, c: 3 },  e: { r: baseRow, c: 8 } });
-  merges.push({ s: { r: baseRow, c: 9 },  e: { r: baseRow, c: 14 } });
-  merges.push({ s: { r: baseRow, c: 15 }, e: { r: baseRow, c: 20 } });
-  if(dual) merges.push({ s: { r: baseRow, c: 21 }, e: { r: baseRow, c: 26 } });
+  if(!lkOff) merges.push({ s: { r: baseRow, c: 9 },  e: { r: baseRow, c: 14 } });
+  merges.push({ s: { r: baseRow, c: c.ch }, e: { r: baseRow, c: c.ch + 5 } });
+  if(dual) merges.push({ s: { r: baseRow, c: c.inet }, e: { r: baseRow, c: c.inet + 5 } });
   merges.push({ s: { r: baseRow, c: c.time }, e: { r: baseRow, c: c.time + 1 } });
   merges.push({ s: { r: baseRow, c: c.errors }, e: { r: baseRow, c: c.errors + 2 } });
   return merges;
@@ -5264,21 +5292,22 @@ function categoryHeaderMerges(baseRow, totalCols, dual){
 function buildExportSheet(rows, withConvStatus){
   const sorted = sortByPlace(rows);
   const dual = isDualRows(rows);
-  const { rowA, rowB, totalCols } = categoryHeaderRows(["ФИО","Статус","Группа"], false, dual);
+  const lkOff = isLkOffRows(rows);
+  const { rowA, rowB, totalCols } = categoryHeaderRows(["ФИО","Статус","Группа"], false, dual, undefined, lkOff);
   const finalCols = withConvStatus ? totalCols + 1 : totalCols;
   if(withConvStatus){
     rowA.push("Статус по сумме с контакта");
     rowB.push("");
   }
   const dataRows = sorted.map(r => {
-    const arr = rowToArray(r, dual);
+    const arr = rowToArray(r, dual, lkOff);
     if(withConvStatus) arr.push(convBand(r.c1_pc).label);
     return arr;
   });
   const ws = XLSX.utils.aoa_to_sheet([rowA, rowB, ...dataRows]);
-  ws["!merges"] = categoryHeaderMerges(0, totalCols, dual);
+  ws["!merges"] = categoryHeaderMerges(0, totalCols, dual, lkOff);
   if(withConvStatus) ws["!merges"].push({ s: { r: 0, c: finalCols - 1 }, e: { r: 1, c: finalCols - 1 } });
-  applyPlaceGradients(ws, sorted, placeColsMain(dual), 2);
+  applyPlaceGradients(ws, sorted, placeColsMain(dual, lkOff), 2);
   styleHeaderRow(ws, finalCols, 0, "cat");
   styleHeaderRow(ws, finalCols, 1, "sub");
   if(withConvStatus){
@@ -5310,11 +5339,12 @@ function buildGroupedMainSheet(sourceRows, opts){
     ? ""
     : `${r.salaryCoeffUsed}${r.salaryCoeffFromPrev ? "" : " (по умолч.)"}`;
   const dual = isDualRows(sourceRows);
+  const lkOff = isLkOffRows(sourceRows);
   const rowFn = r => withTier
-    ? [...rowToArray(r, dual), r.tier ?? "", r.coefficient ?? "", salaryCoeffUsedCell(r), r.work_hours ?? "", r.shift_count ?? "",
+    ? [...rowToArray(r, dual, lkOff), r.tier ?? "", r.coefficient ?? "", salaryCoeffUsedCell(r), r.work_hours ?? "", r.shift_count ?? "",
        ...(hideFinalPay ? [] : [r.bonus075 ?? "", r.bonus2 ?? "", r.salary ?? ""])]
-    : rowToArray(r, dual);
-  const { rowA, rowB, totalCols } = categoryHeaderRows(["ФИО","Статус","Группа"], withTier, dual, hideFinalPay);
+    : rowToArray(r, dual, lkOff);
+  const { rowA, rowB, totalCols } = categoryHeaderRows(["ФИО","Статус","Группа"], withTier, dual, hideFinalPay, lkOff);
 
   const groupNames = [...new Set(sourceRows.map(r => r.supervisor))].sort(compareGroupNames);
   const aoa = [];
@@ -5335,7 +5365,7 @@ function buildGroupedMainSheet(sourceRows, opts){
     const dataStart = aoa.length;
     rows.forEach(r => aoa.push(rowFn(r)));
     blocks.push({ titleRow, headerRowA, dataStart, rows });
-    allMerges = allMerges.concat(categoryHeaderMerges(headerRowA, totalCols, dual));
+    allMerges = allMerges.concat(categoryHeaderMerges(headerRowA, totalCols, dual, lkOff));
     aoa.push([]); // blank separator
   }
   const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -5344,14 +5374,15 @@ function buildGroupedMainSheet(sourceRows, opts){
     styleTitleRow(ws, titleRow, totalCols);
     styleHeaderRow(ws, totalCols, headerRowA, "cat");
     styleHeaderRow(ws, totalCols, headerRowA + 1, "sub");
-    applyPlaceGradients(ws, rows, placeColsMain(dual), dataStart);
+    applyPlaceGradients(ws, rows, placeColsMain(dual, lkOff), dataStart);
   });
   ws["!cols"] = [{ wch: 24 }, { wch: 18 }];
   return ws;
 }
 
 function buildSupervisorExportSheet(rows){
-  const { rowA, rowB, totalCols } = categoryHeaderRows(["Супервайзер","Канал","Оценено/Всего"], false);
+  const lkOff = isLkOffRows(rows);
+  const { rowA, rowB, totalCols } = categoryHeaderRows(["Супервайзер","Канал","Оценено/Всего"], false, false, undefined, lkOff);
   // "Коэффициент" — локальная, единственная для этого листа колонка (пока
   // только отображение, см. computeSupervisorRating/assignSupervisorCoefficients),
   // добавлена ТУТ, а не в общий categoryHeaderRows, чтобы не задеть листы
@@ -5363,7 +5394,7 @@ function buildSupervisorExportSheet(rows){
   const arr = sorted.map(r => [
     cleanSupervisorName(r.supervisor), r.channel === "inet" ? "Интернет" : "Радио+ТВ", `${r.n_evaluated}/${r.n_total}`,
     r.c1_cards ?? "", r.c1_sum, r.c1_check, r.c1_conv, r.c1_pc, r.c1_place,
-    r.lk_cards ?? "", r.lk_sum, r.lk_check, r.lk_conv, r.lk_pc, r.lk_place,
+    ...(lkOff ? [] : [r.lk_cards ?? "", r.lk_sum, r.lk_check, r.lk_conv, r.lk_pc, r.lk_place]),
     r.ch_cards ?? "", r.ch_sum, r.ch_check, r.ch_conv, r.ch_pc, r.ch_place,
     fmtTime(r.time), r.time_place,
     "", r.errors_pct, r.errors_place,
@@ -5381,7 +5412,7 @@ function buildSupervisorExportSheet(rows){
   const totalRow = [
     "ИТОГ ОТДЕЛА", "", `${sum("n_evaluated")}/${sum("n_total")}`,
     sum("c1_cards"), sum("c1_sum"), "", "", "", "",
-    sum("lk_cards"), sum("lk_sum"), "", "", "", "",
+    ...(lkOff ? [] : [sum("lk_cards"), sum("lk_sum"), "", "", "", ""]),
     sum("ch_cards"), sum("ch_sum"), "", "", "", "",
     "", "",
     "", "", "",
@@ -5390,9 +5421,9 @@ function buildSupervisorExportSheet(rows){
   ];
 
   const ws = XLSX.utils.aoa_to_sheet([rowA, rowB, ...arr, totalRow]);
-  ws["!merges"] = categoryHeaderMerges(0, totalCols);
+  ws["!merges"] = categoryHeaderMerges(0, totalCols, false, lkOff);
   ws["!merges"].push({ s: { r: 0, c: finalCols - 1 }, e: { r: 1, c: finalCols - 1 } });
-  applyPlaceGradients(ws, sorted, placeColsSup(false), 2);
+  applyPlaceGradients(ws, sorted, placeColsSup(false, lkOff), 2);
   styleHeaderRow(ws, finalCols, 0, "cat");
   styleHeaderRow(ws, finalCols, 1, "sub");
   const totalRowIdx = 2 + arr.length;
