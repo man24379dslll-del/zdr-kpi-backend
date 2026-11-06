@@ -1189,13 +1189,27 @@ async function buildSupervisorViewer(){
     if(!currentRows || !currentRows.length) return;
     const headSector = profile.isSector2Head ? 2 : profile.isSector3Head ? 3 : null;
     // обычному супервайзеру — только его группы (RLS это и так гарантирует,
-    // фильтр — страховка); руководителю сектора — сектор режет сама функция
-    const mine = !headSector && profile.supervisor_names && profile.supervisor_names.length
-      ? currentRows.filter(r => profile.supervisor_names.includes(r.supervisor))
+    // фильтр — страховка); руководителю сектора — сектор режет сама функция.
+    // supervisor_names = ["*"] (доступ ко всем группам, см. политику
+    // ratings_select) — это не название группы, фильтровать по нему нельзя:
+    // он выгружает всё, что ему отдала база.
+    const names = profile.supervisor_names || [];
+    const mine = !headSector && names.length && !names.includes("*")
+      ? currentRows.filter(r => names.includes(r.supervisor))
       : currentRows;
-    const out = buildViewerWorkbook(headSector, mine, currentViewerPeriodLabel, currentViewerWeightsInfo);
-    if(!out.rowsCount) return;
-    XLSX.writeFile(out.wb, out.filename);
+    // Раньше при пустом результате или ошибке кнопка молча ничего не делала —
+    // теперь причина видна в окне.
+    const viewerLog = panel.querySelector("#viewerLog");
+    try{
+      const out = buildViewerWorkbook(headSector, mine, currentViewerPeriodLabel, currentViewerWeightsInfo);
+      if(!out.rowsCount){
+        log("Нет данных для выгрузки: в этом периоде у вашей группы нет строк.", "warn", viewerLog);
+        return;
+      }
+      XLSX.writeFile(out.wb, out.filename);
+    } catch(err){
+      log("Не удалось сформировать файл: " + err.message, "err", viewerLog);
+    }
   });
 
   panel.querySelector("#viewerTypeToggle").querySelectorAll("button").forEach(btn => {
