@@ -1110,11 +1110,21 @@ async function buildSupervisorViewer(){
         : await sbGet(`kpi_ratings?upload_id=eq.${latest.id}&select=*`);
       const rows = rowsRaw.map(dbRowToDisplayRow);
 
-      const prevUpload = await fetchLatestUpload(vType, latest.period_label);
+      // Прошлый период — ПО ЛЮДЯМ: у перешедших из другой группы коэффициент и
+      // место прошлой недели должны остаться (в ЗП коэффициент уже следует за
+      // человеком), а RLS отдал бы супервайзеру только строки его нынешней
+      // группы и показал бы им "1 (по умолч.)". Бэкенд отдаёт прошлые строки
+      // тех людей, что есть в этой таблице. Не ответил — прежний путь (RLS).
       let prevMap = null;
-      if(prevUpload){
-        const prevRaw = await sbGet(`kpi_ratings?upload_id=eq.${prevUpload.id}&select=fio,final_place,total_score,is_na,coefficient,is_novice`);
-        prevMap = buildPrevMap(prevRaw);
+      try{
+        const ctx = await apiGet("/ratings/previous-for-viewer", { upload_id: latest.id });
+        if(ctx.prev_upload) prevMap = buildPrevMap(ctx.rows);
+      } catch(err){
+        const prevUpload = await fetchLatestUpload(vType, latest.period_label);
+        if(prevUpload){
+          const prevRaw = await sbGet(`kpi_ratings?upload_id=eq.${prevUpload.id}&select=fio,final_place,total_score,is_na,coefficient,is_novice`);
+          prevMap = buildPrevMap(prevRaw);
+        }
       }
       assignDeltas(rows, prevMap);
       assignDisplaySalaryCoeff(rows, prevMap);

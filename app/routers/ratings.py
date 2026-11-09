@@ -9,11 +9,13 @@ HTTP-обвязка (приём файла, авторизация, чтение
 """
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile, status
 
 from app.auth import CurrentUser, get_current_user
 from app.services.excel_parsing import is_na_row, parse_weekly_rating_excel
-from app.services.group_naming import restrict_to_sector_pair
+from app.services.group_naming import SECTOR_2_AND_3_SUPERVISORS, restrict_to_sector_pair
 from app.services.payroll import is_weekly_period_label
 from app.services.periods import find_previous_period
 from app.services.rating_engine import RatingCategory
@@ -111,6 +113,59 @@ async def get_upload_context(period_label: str, user: CurrentUser = Depends(get_
         "existing": existing,
         "prev_upload": {"id": prev["id"], "period_label": prev["period_label"]} if prev else None,
         "prev_rows": prev_rows,
+    }
+
+
+def _supervisor_sees(user: CurrentUser, supervisor: str | None) -> bool:
+    """Видит ли пользователь строки этой группы в kpi_ratings — как политика
+    ratings_select (RLS): '*' в supervisor_names — все группы; руководитель
+    сектора — обе группы секторов 2/3 (restrict_to_sector_pair); остальные —
+    только свои группы."""
+    names = user.supervisor_names or []
+    if "*" in names:
+        return True
+    if user.is_sector2_head or user.is_sector3_head:
+        return supervisor in SECTOR_2_AND_3_SUPERVISORS
+    return supervisor in names
+
+
+@router.get("/previous-for-viewer")
+async def get_previous_for_viewer(upload_id: str, user: CurrentUser = Depends(get_current_user)):
+    """Прошлый период для окна супервайзера: коэффициент ЛГ/место/баллы
+    прошлой недели ПО ЛЮДЯМ, а не по группам. RLS оставляет супервайзеру в
+    прошлом периоде только строки его нынешней группы, поэтому у перешедших из
+    другой группы колонка "Коэфф. пред. недели (в ЗП)" показывала бы 1.0 "по
+    умолчанию" и пропадала бы стрелка "Δ к пред. периоду" (в самой ЗП
+    коэффициент уже следует за человеком — её считает админ, видящий всё).
+    Отдаём прошлые строки ТОЛЬКО тех людей (по ФИО), что есть у пользователя в
+    текущей таблице, — чужие группы и люди, которых он не видит, не
+    раскрываются. Прошлый период — тот же выбор, что у фронтенда
+    (fetchLatestUpload): ближайший строго более ранний того же типа."""
+    if user.role != "supervisor" or not user.supervisor_names:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Только для супервайзеров")
+    try:
+        upload_id = str(uuid.UUID(upload_id))
+    except ValueError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Загрузка не найдена")
+    client = as_service()
+    uploads = await _all_rows(client, "kpi_uploads", {"select": "id,period_label,uploaded_at", "order": "uploaded_at.desc"})
+    current = next((u for u in uploads if u["id"] == upload_id), None)
+    if current is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Загрузка не найдена")
+    period_type = period_type_of(current["period_label"])
+    prev = find_previous_upload(uploads, current["period_label"], period_type) if period_type else None
+    if prev is None:
+        return {"prev_upload": None, "rows": []}
+    current_rows = await _all_rows(client, "kpi_ratings", {
+        "upload_id": f"eq.{upload_id}", "select": "fio,supervisor", "order": "id.asc",
+    })
+    fios = {r["fio"] for r in current_rows if _supervisor_sees(user, r.get("supervisor"))}
+    prev_rows = await _all_rows(client, "kpi_ratings", {
+        "upload_id": f"eq.{prev['id']}", "select": "fio,final_place,total_score,is_na,coefficient,is_novice", "order": "id.asc",
+    })
+    return {
+        "prev_upload": {"id": prev["id"], "period_label": prev["period_label"]},
+        "rows": [r for r in prev_rows if r["fio"] in fios],
     }
 
 
