@@ -911,7 +911,8 @@ function renderGroupBlocks(container, rows, groupNames, opts){
     const channel = groupRows[0].channel;
     const isSector2 = SECTOR_2_SUPERVISORS.has(gname);
     const mainRows = isSector2 ? groupRows.filter(r => !SECTOR_2_LK_WEIGHT_EXCEPTIONS_FIO.has(r.fio)) : groupRows;
-    const commonArgs = [false, opts.showTier, channel === "inet" ? "Интернет" : "ТВ+Радио", false, opts.showDelta, opts.hideFinalPay];
+    const hideFinalPay = opts.hideFinalPay && !supervisorSeesPay(gname);
+    const commonArgs = [false, opts.showTier, channel === "inet" ? "Интернет" : "ТВ+Радио", false, opts.showDelta, hideFinalPay];
     const block = document.createElement("div");
     block.className = "group-block";
     block.innerHTML = `<div class="group-title">${displayGroupName(gname)}<span class="count">${groupRows.length} чел.</span><span class="chan-tag">${channel==='inet'?'ИНТЕРНЕТ':'РАДИО+ТВ'}</span></div>`;
@@ -930,13 +931,14 @@ function renderGroupBlocks(container, rows, groupNames, opts){
 //    "Операторы" (все сотрудники его групп, блоками по группам) и лист
 //    "Супервайзеры" (сравнение групп сектора между собой);
 //  - обычный супервайзер (headSector null) — лист "Операторы" только с его
-//    группой(ами) и БЕЗ бонусов/ЗП: на экране они ему тоже скрыты.
+//    группой(ами) и БЕЗ бонусов/ЗП: на экране они ему тоже скрыты. Исключение —
+//    супервайзеры Сектора 2 (supervisorSeesPay): им ЗП своих операторов открыта.
 function buildViewerWorkbook(headSector, rows, periodLabel, weightsInfo){
   const sectorSet = headSector === 2 ? SECTOR_2_SUPERVISORS : headSector === 3 ? SECTOR_3_SUPERVISORS : null;
   const own = sectorSet ? rows.filter(r => sectorSet.has(r.supervisor)) : rows;
   const wb = XLSX.utils.book_new();
   if(!own.length) return { wb, filename: "", rowsCount: 0 };
-  XLSX.utils.book_append_sheet(wb, buildGroupedMainSheet(own, { hideFinalPay: !sectorSet }), "Операторы");
+  XLSX.utils.book_append_sheet(wb, buildGroupedMainSheet(own, { hideFinalPay: !sectorSet && !(own.length && own.every(r => supervisorSeesPay(r.supervisor))) }), "Операторы");
   if(sectorSet){
     const supervisors = computeSupervisorRatingFromRows(own, sectorSet, weightsInfo);
     XLSX.utils.book_append_sheet(wb, buildSupervisorExportSheet(supervisors), "Супервайзеры");
@@ -1163,7 +1165,7 @@ async function buildSupervisorViewer(){
         const soloSupervisor = profile.supervisor_names && profile.supervisor_names[0];
         const isSector2 = SECTOR_2_SUPERVISORS.has(soloSupervisor);
         const mainRows = isSector2 ? currentRows.filter(r => !SECTOR_2_LK_WEIGHT_EXCEPTIONS_FIO.has(r.fio)) : currentRows;
-        const commonArgs = [false, vType === "week", null, false, true, true];
+        const commonArgs = [false, vType === "week", null, false, true, !supervisorSeesPay(soloSupervisor)];
         containerEl.appendChild(buildDetailTable(mainRows, ...commonArgs, isSector2));
         if(isSector2) appendSector2LkExceptions(containerEl, currentRows, commonArgs);
       }
@@ -1851,6 +1853,13 @@ const SECTOR_2_LK_WEIGHT_EXCEPTIONS_FIO = new Set([
 ]);
 function sector2ZeroesLk(supervisor, fio){
   return SECTOR_2_SUPERVISORS.has(supervisor) && !SECTOR_2_LK_WEIGHT_EXCEPTIONS_FIO.has(fio);
+}
+// Обычному супервайзеру бонусы и ЗП его операторов в таблице и Excel скрыты;
+// исключение — группы Сектора 2: их супервайзеры видят ЗП своих операторов
+// (по запросу заказчика). Решается по ГРУППЕ: у супервайзера с группами в
+// разных секторах ЗП открыта только у блока Сектора 2.
+function supervisorSeesPay(groupName){
+  return SECTOR_2_SUPERVISORS.has(groupName);
 }
 
 // Сектор №3 (5 обычных групп, отдельный руководитель — Сорокин Никита).
