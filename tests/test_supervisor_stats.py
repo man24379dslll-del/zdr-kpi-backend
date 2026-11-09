@@ -184,3 +184,47 @@ def test_endpoint_reads_all_pages(api):
     r = api(_user("supervisor", [G1A]), fake).get("/ratings/sector-supervisor-stats", params={"upload_id": "u1"})
     assert r.json()["sectors"][0]["stats"][0]["n_total"] == 2300
     assert [c["offset"] for c in fake.calls] == ["0", "1000", "2000"]
+
+
+# ---------- Радио+ТВ и Интернет отдельными категориями ----------
+
+def _dual(fio, supervisor, radio=0, inet=0, **over):
+    """Строка нового периода: radio/inet — «с контакта»; карточки/оборот появляются, если значение > 0."""
+    row = _row(fio, supervisor, **over)
+    row.update({
+        "radio_place": 1, "inet_place": 1,
+        "radio_sum": 1000 if radio else 0, "radio_cards": 5 if radio else 0, "radio_per_contact": radio, "radio_check": 100 if radio else 0, "radio_conv": 10 if radio else 0,
+        "inet_sum": 800 if inet else 0, "inet_cards": 4 if inet else 0, "inet_per_contact": inet, "inet_check": 80 if inet else 0, "inet_conv": 20 if inet else 0,
+    })
+    return row
+
+
+def test_new_periods_return_both_channels_with_averages_over_those_who_worked():
+    rows = [_dual("Радио", G1A, radio=100, inet=0), _dual("Оба", G1A, radio=300, inet=400), _dual("Никто", G1A, radio=0, inet=0)]
+    g = _by_sup(sector_group_stats(rows, 1))[G1A]
+    assert g["n_evaluated"] == 3
+    # Радио+ТВ работали двое: среднее 200, а не (100+300+0)/3
+    assert (g["radio_pc"], g["radio_workers"], g["radio_sum"], g["radio_cards"]) == (200, 2, 2000, 10)
+    assert g["radio_check"] == 100 and g["radio_conv"] == 10
+    # Интернет — один человек
+    assert (g["inet_pc"], g["inet_workers"], g["inet_sum"], g["inet_cards"]) == (400, 1, 800, 4)
+    assert g["inet_check"] == 80 and g["inet_conv"] == 20
+    assert "ch_pc" not in g and "ch_sum" not in g            # единого канала группы в новых периодах нет
+
+
+def test_group_where_nobody_worked_the_channel_gets_zero_so_it_ranks_last():
+    g = _by_sup(sector_group_stats([_dual("А", G1A, radio=100, inet=0)], 1))[G1A]
+    assert (g["inet_pc"], g["inet_workers"], g["inet_sum"]) == (0, 0, 0)
+
+
+def test_old_periods_without_channel_split_keep_the_single_group_channel():
+    g = _by_sup(sector_group_stats([_row("А", G1A, c1=100)], 1))[G1A]
+    assert g["ch_pc"] == 200 and "radio_pc" not in g and "inet_pc" not in g
+
+
+def test_channel_columns_are_requested_and_no_names_or_money_leak_in_dual_stats():
+    for column in ("radio_per_contact", "radio_place", "inet_per_contact", "inet_cards"):
+        assert column in STATS_COLUMNS.split(",")
+    text = str(sector_group_stats([_dual("Секретное Имя", G1A, radio=100, inet=50, salary=9999)], 1))
+    for forbidden in ("Секретное", "salary", "9999"):
+        assert forbidden not in text

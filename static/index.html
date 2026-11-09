@@ -2496,6 +2496,24 @@ function assignSupervisorCoefficients(rows){
 // участвуют в расчёте для ЛЮБОГО сектора (isNarrowSectorEvaluated — общая
 // функция, не завязана на конкретный сектор), ЛК не в счёт — ТОЛЬКО для
 // Сектора 2 (см. active ниже, сравнение по ссылке с самой константой).
+// Показатели ОДНОГО канала у группы (key — "radio" или "inet"): сумма и
+// карточки — по всем оценённым, а ср.чек/конверсия/"с контакта" — только по
+// тем, кто по этому каналу работал (оборот или карточки > 0): нули тех, кто
+// канал не обслуживает, не должны занижать среднее. Нет работавших — 0 (место
+// по каналу у такой группы последнее). Зеркало
+// app/services/supervisor_stats.py::_channel_stats.
+function groupChannelStats(evaluated, key, fieldsOf){
+  const all = evaluated.map(fieldsOf);
+  const workers = all.filter(c => (c.sum || 0) > 0 || (c.cards || 0) > 0);
+  const mean = (f) => workers.length ? workers.reduce((s, c) => s + (c[f] || 0), 0) / workers.length : 0;
+  return {
+    [key + "_sum"]: all.reduce((s, c) => s + (c.sum || 0), 0),
+    [key + "_cards"]: all.reduce((s, c) => s + (c.cards || 0), 0),
+    [key + "_check"]: mean("check"), [key + "_conv"]: mean("conv"), [key + "_pc"]: mean("pc"),
+    [key + "_workers"]: workers.length,
+  };
+}
+
 function computeSupervisorRating(groups, sectorSupervisors, weightsInfo){
   const groupFilter = sectorSupervisors
     ? g => sectorSupervisors.has(g.supervisor)
@@ -2507,13 +2525,8 @@ function computeSupervisorRating(groups, sectorSupervisors, weightsInfo){
     const evaluated = sectorSupervisors ? g.employees.filter(isNarrowSectorEvaluated) : g.employees.filter(e => !isNaMain(e));
     const n = evaluated.length;
     const avg = (field) => n ? evaluated.reduce((s,e)=>s+e[field],0)/n : 0;
-    const avgCh = (getter) => n ? evaluated.reduce((s,e)=>s+getter(channelFields(e,channel)),0)/n : 0;
     const sumSafe = (field) => {
       const vals = evaluated.map(e => e[field]).filter(v => v !== null && v !== undefined);
-      return vals.length ? vals.reduce((s,v)=>s+v,0) : null;
-    };
-    const sumChSafe = (getter) => {
-      const vals = evaluated.map(e => getter(channelFields(e,channel))).filter(v => v !== null && v !== undefined);
       return vals.length ? vals.reduce((s,v)=>s+v,0) : null;
     };
     return {
@@ -2522,8 +2535,10 @@ function computeSupervisorRating(groups, sectorSupervisors, weightsInfo){
       c1_cards: sumSafe("c1_cards"),
       lk_sum: sumSafe("lk_sum"), lk_check: avg("lk_check"), lk_conv: avg("lk_conv"), lk_pc: avg("lk_pc"),
       lk_cards: sumSafe("lk_cards"),
-      ch_sum: sumChSafe(c=>c.sum), ch_check: avgCh(c=>c.check), ch_conv: avgCh(c=>c.conv), ch_pc: avgCh(c=>c.pc),
-      ch_cards: sumChSafe(c=>c.cards),
+      // Радио+ТВ и Интернет — две отдельные категории, как у сотрудников; канал
+      // группы (channel) остаётся только подписью.
+      ...groupChannelStats(evaluated, "radio", e => channelFields(e, "radio")),
+      ...groupChannelStats(evaluated, "inet", e => channelFields(e, "inet")),
       time: avg("time"), errors_pct: avg("errors_pct"),
     };
   }).filter(s => s.n_evaluated > 0);
@@ -2542,6 +2557,9 @@ function computeSupervisorRatingFromRows(mainRows, sectorSupervisors, weightsInf
     if(sectorSupervisors ? !sectorSupervisors.has(r.supervisor) : (isSpecialGroup(r.supervisor) || isSector2Row)) continue;
     (bySupervisor[r.supervisor] ||= []).push(r);
   }
+  // Период посчитан по новой формуле — два канала отдельно; старый (радио и
+  // интернет раздельно не хранились) — один канал группы, как раньше.
+  const dual = isDualRows(mainRows);
   const groupStats = Object.keys(bySupervisor).map(sup => {
     const rows = bySupervisor[sup];
     const evaluated = sectorSupervisors ? rows.filter(isNarrowSectorEvaluated) : rows.filter(r => !r.is_na);
@@ -2553,7 +2571,9 @@ function computeSupervisorRatingFromRows(mainRows, sectorSupervisors, weightsInf
       supervisor: sup, channel: evaluated[0].channel || "radio", n_evaluated: n, n_total: rows.length,
       c1_sum: sum("c1_sum"), c1_check: avg("c1_check"), c1_conv: avg("c1_conv"), c1_pc: avg("c1_pc"), c1_cards: sum("c1_cards"),
       lk_sum: sum("lk_sum"), lk_check: avg("lk_check"), lk_conv: avg("lk_conv"), lk_pc: avg("lk_pc"), lk_cards: sum("lk_cards"),
-      ch_sum: sum("ch_sum"), ch_check: avg("ch_check"), ch_conv: avg("ch_conv"), ch_pc: avg("ch_pc"), ch_cards: sum("ch_cards"),
+      ...(dual
+        ? { ...groupChannelStats(evaluated, "radio", r => channelFields(r, "radio")), ...groupChannelStats(evaluated, "inet", r => channelFields(r, "inet")) }
+        : { ch_sum: sum("ch_sum"), ch_check: avg("ch_check"), ch_conv: avg("ch_conv"), ch_pc: avg("ch_pc"), ch_cards: sum("ch_cards") }),
       time: avg("time"), errors_pct: avg("errors_pct"),
     };
   }).filter(Boolean);
@@ -2573,7 +2593,11 @@ function rankSupervisorStats(groupStats, sectorSupervisors, weightsInfo){
   // комментарий в computeSupervisorRating выше.
   const active = sectorSupervisors === SECTOR_2_SUPERVISORS ? { c1:true, lk:false, ch:true, time:true, errors:true } : undefined;
   const weights = supervisorRatingWeights(sectorSupervisors, weightsInfo);
-  const rows = scoreSlice(groupStats, e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc, cards:e.ch_cards}), e => isSpecialSupervisor(e.supervisor), "c1_sum", false, active, undefined, undefined, undefined, weights);
+  // Показатели по каналам отдельно (radio_*/inet_*) — две категории канала, у
+  // каждой своё место и вес; иначе (старый период) — один канал группы.
+  const dual = groupStats.some(g => g.radio_pc !== undefined);
+  const channelOf = dual ? BOTH_CHANNELS : (e => ({sum:e.ch_sum, check:e.ch_check, conv:e.ch_conv, pc:e.ch_pc, cards:e.ch_cards}));
+  const rows = scoreSlice(groupStats, channelOf, e => isSpecialSupervisor(e.supervisor), "c1_sum", false, active, undefined, undefined, undefined, weights);
   assignSupervisorCoefficients(rows);
   rows.forEach(r => { r.lkOff = weights.lk === 0; });
   return rows;
@@ -3241,6 +3265,7 @@ function renderSector2Supervisors(){
 function renderSupervisorTable(container, sourceRows, opts){
   container.innerHTML = "";
   const lkOff = isLkOffRows(sourceRows); // ЛК выключена (вес 0) — колонок ЛК нет
+  const dual = isDualRows(sourceRows);   // Радио+ТВ и Интернет — отдельными блоками
   const sorted = sortByPlace(sourceRows);
   const wrap = document.createElement("div");
   wrap.className = "subtable-wrap";
@@ -3254,7 +3279,7 @@ function renderSupervisorTable(container, sourceRows, opts){
         <th rowspan="2" class="block-end">Оценено</th>
         <th colspan="6" class="block-end">1 обращение</th>
         ${lkOff ? "" : `<th colspan="6" class="block-end">ЛК</th>`}
-        <th colspan="6" class="block-end">Радио+ТВ / Интернет</th>
+        ${dual ? `<th colspan="6" class="block-end">Радио+ТВ</th><th colspan="6" class="block-end">Интернет</th>` : `<th colspan="6" class="block-end">Радио+ТВ / Интернет</th>`}
         <th colspan="2" class="block-end">Время/контакт (без звонка)</th>
         <th colspan="2" class="block-end">% ошибок</th>
         <th rowspan="2">Сумма баллов</th>
@@ -3265,6 +3290,7 @@ function renderSupervisorTable(container, sourceRows, opts){
         <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
         ${lkOff ? "" : `<th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>`}
         <th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>
+        ${dual ? `<th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>` : ""}
         <th>чч:мм:сс</th><th class="block-end">место</th>
         <th>%</th><th class="block-end">место</th>
       </tr>
@@ -3275,6 +3301,8 @@ function renderSupervisorTable(container, sourceRows, opts){
   const c1Map = gradientMap(sourceRows, "c1_place");
   const lkMap = gradientMap(sourceRows, "lk_place");
   const chMap = gradientMap(sourceRows, "ch_place");
+  const radioMap = gradientMap(sourceRows, "radio_place");
+  const inetMap = gradientMap(sourceRows, "inet_place");
   const timeMap = gradientMap(sourceRows, "time_place");
   const errMap = gradientMap(sourceRows, "errors_place");
   const finalMap = gradientMap(sourceRows, "final_place");
@@ -3288,7 +3316,7 @@ function renderSupervisorTable(container, sourceRows, opts){
       <td class="block-end">${r.n_evaluated}/${r.n_total}</td>
       <td>${fmtCards(r.c1_cards)}</td><td>${fmt(r.c1_sum)}</td><td>${fmt(r.c1_check)}</td><td>${fmtPct(r.c1_conv)}</td><td>${fmt(r.c1_pc)}</td><td class="block-end">${rankBadge(r.c1_place, c1Map(r.c1_place))}</td>
       ${lkOff ? "" : `<td>${fmtCards(r.lk_cards)}</td><td>${fmt(r.lk_sum)}</td><td>${fmt(r.lk_check)}</td><td>${fmtPct(r.lk_conv)}</td><td>${fmt(r.lk_pc)}</td><td class="block-end">${rankBadge(fmtPlace(r.lk_place), lkMap(r.lk_place))}</td>`}
-      <td>${fmtCards(r.ch_cards)}</td><td>${fmt(r.ch_sum)}</td><td>${fmt(r.ch_check)}</td><td>${fmtPct(r.ch_conv)}</td><td>${fmt(r.ch_pc)}</td><td class="block-end">${rankBadge(r.ch_place, chMap(r.ch_place))}</td>
+      ${dual ? `<td>${fmtCards(r.radio_cards)}</td><td>${fmt(r.radio_sum)}</td><td>${fmt(r.radio_check)}</td><td>${fmtPct(r.radio_conv)}</td><td>${fmt(r.radio_pc)}</td><td class="block-end">${rankBadge(r.radio_place, radioMap(r.radio_place))}</td><td>${fmtCards(r.inet_cards)}</td><td>${fmt(r.inet_sum)}</td><td>${fmt(r.inet_check)}</td><td>${fmtPct(r.inet_conv)}</td><td>${fmt(r.inet_pc)}</td><td class="block-end">${rankBadge(r.inet_place, inetMap(r.inet_place))}</td>` : `<td>${fmtCards(r.ch_cards)}</td><td>${fmt(r.ch_sum)}</td><td>${fmt(r.ch_check)}</td><td>${fmtPct(r.ch_conv)}</td><td>${fmt(r.ch_pc)}</td><td class="block-end">${rankBadge(r.ch_place, chMap(r.ch_place))}</td>`}
       <td>${fmtTime(r.time)}</td><td class="block-end">${rankBadge(r.time_place, timeMap(r.time_place))}</td>
       <td>${fmtPct(r.errors_pct)}</td><td class="block-end">${rankBadge(r.errors_place, errMap(r.errors_place))}</td>
       <td>${fmt(r.total_score)}</td>
@@ -3312,7 +3340,7 @@ function renderSupervisorTable(container, sourceRows, opts){
     <td class="block-end">${totalSum("n_evaluated")}/${totalSum("n_total")}</td>
     <td>${totalSum("c1_cards")}</td><td>${fmt(totalSum("c1_sum"))}</td><td></td><td></td><td></td><td class="block-end"></td>
     ${lkOff ? "" : `<td>${totalSum("lk_cards")}</td><td>${fmt(totalSum("lk_sum"))}</td><td></td><td></td><td></td><td class="block-end"></td>`}
-    <td>${totalSum("ch_cards")}</td><td>${fmt(totalSum("ch_sum"))}</td><td></td><td></td><td></td><td class="block-end"></td>
+    ${dual ? `<td>${totalSum("radio_cards")}</td><td>${fmt(totalSum("radio_sum"))}</td><td></td><td></td><td></td><td class="block-end"></td><td>${totalSum("inet_cards")}</td><td>${fmt(totalSum("inet_sum"))}</td><td></td><td></td><td></td><td class="block-end"></td>` : `<td>${totalSum("ch_cards")}</td><td>${fmt(totalSum("ch_sum"))}</td><td></td><td></td><td></td><td class="block-end"></td>`}
     <td></td><td class="block-end"></td>
     <td></td><td class="block-end"></td>
     <td></td>
@@ -3323,6 +3351,13 @@ function renderSupervisorTable(container, sourceRows, opts){
 
   wrap.appendChild(table);
   container.appendChild(wrap);
+  if(dual){
+    const hint = document.createElement("div");
+    hint.className = "chan-hint";
+    hint.style.marginTop = "8px";
+    hint.textContent = "Радио+ТВ и Интернет — отдельные категории (у каждой своё место и вес). Средние по каналу — только по сотрудникам, работавшим по нему; если по каналу в группе никто не работал, место по нему последнее.";
+    container.appendChild(hint);
+  }
 }
 
 // ---------- вкладка "Динамика" ----------
@@ -5406,7 +5441,8 @@ function buildGroupedMainSheet(sourceRows, opts){
 
 function buildSupervisorExportSheet(rows){
   const lkOff = isLkOffRows(rows);
-  const { rowA, rowB, totalCols } = categoryHeaderRows(["Супервайзер","Канал","Оценено/Всего"], false, false, undefined, lkOff);
+  const dual = isDualRows(rows); // Радио+ТВ и Интернет — отдельными блоками
+  const { rowA, rowB, totalCols } = categoryHeaderRows(["Супервайзер","Канал","Оценено/Всего"], false, dual, undefined, lkOff);
   // "Коэффициент" — локальная, единственная для этого листа колонка (пока
   // только отображение, см. computeSupervisorRating/assignSupervisorCoefficients),
   // добавлена ТУТ, а не в общий categoryHeaderRows, чтобы не задеть листы
@@ -5419,7 +5455,10 @@ function buildSupervisorExportSheet(rows){
     cleanSupervisorName(r.supervisor), r.channel === "inet" ? "Интернет" : "Радио+ТВ", `${r.n_evaluated}/${r.n_total}`,
     r.c1_cards ?? "", r.c1_sum, r.c1_check, r.c1_conv, r.c1_pc, r.c1_place,
     ...(lkOff ? [] : [r.lk_cards ?? "", r.lk_sum, r.lk_check, r.lk_conv, r.lk_pc, r.lk_place]),
-    r.ch_cards ?? "", r.ch_sum, r.ch_check, r.ch_conv, r.ch_pc, r.ch_place,
+    ...(dual
+      ? [r.radio_cards ?? "", r.radio_sum, r.radio_check, r.radio_conv, r.radio_pc, r.radio_place,
+         r.inet_cards ?? "", r.inet_sum, r.inet_check, r.inet_conv, r.inet_pc, r.inet_place]
+      : [r.ch_cards ?? "", r.ch_sum, r.ch_check, r.ch_conv, r.ch_pc, r.ch_place]),
     fmtTime(r.time), r.time_place,
     "", r.errors_pct, r.errors_place,
     r.total_score, r.statusLabel ?? r.final_place,
@@ -5437,7 +5476,9 @@ function buildSupervisorExportSheet(rows){
     "ИТОГ ОТДЕЛА", "", `${sum("n_evaluated")}/${sum("n_total")}`,
     sum("c1_cards"), sum("c1_sum"), "", "", "", "",
     ...(lkOff ? [] : [sum("lk_cards"), sum("lk_sum"), "", "", "", ""]),
-    sum("ch_cards"), sum("ch_sum"), "", "", "", "",
+    ...(dual
+      ? [sum("radio_cards"), sum("radio_sum"), "", "", "", "", sum("inet_cards"), sum("inet_sum"), "", "", "", ""]
+      : [sum("ch_cards"), sum("ch_sum"), "", "", "", ""]),
     "", "",
     "", "", "",
     "", "",
@@ -5445,9 +5486,9 @@ function buildSupervisorExportSheet(rows){
   ];
 
   const ws = XLSX.utils.aoa_to_sheet([rowA, rowB, ...arr, totalRow]);
-  ws["!merges"] = categoryHeaderMerges(0, totalCols, false, lkOff);
+  ws["!merges"] = categoryHeaderMerges(0, totalCols, dual, lkOff);
   ws["!merges"].push({ s: { r: 0, c: finalCols - 1 }, e: { r: 1, c: finalCols - 1 } });
-  applyPlaceGradients(ws, sorted, placeColsSup(false, lkOff), 2);
+  applyPlaceGradients(ws, sorted, placeColsSup(dual, lkOff), 2);
   styleHeaderRow(ws, finalCols, 0, "cat");
   styleHeaderRow(ws, finalCols, 1, "sub");
   const totalRowIdx = 2 + arr.length;

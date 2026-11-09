@@ -17,7 +17,12 @@
   * нет оценённых — группы в списке нет;
   * суммы (c1_sum/_cards, lk_*, ch_*) и средние (check/conv/pc, время,
     % ошибок) — по оценённым, None считается нулём;
-  * n_total — все основные строки группы (без дублей новичков).
+  * n_total — все основные строки группы (без дублей новичков);
+  * Радио+ТВ и Интернет — две отдельные категории (radio_*/inet_*), если
+    период посчитан по новой формуле: сумма и карточки — по всем оценённым,
+    средние ср.чек/конверсия/"с контакта" — только по тем, кто по каналу
+    работал (оборот или карточки > 0), нет работавших — 0. Старые периоды
+    (раздельных данных нет) — один канал группы ch_*, как раньше.
 В сектор 1 входят все обычные группы, не вошедшие в 2 и 3; Регион УК/ПП/
 Увеличители/Васько в сравнение групп не входят.
 """
@@ -37,6 +42,8 @@ STATS_COLUMNS = (
     "c1_sum,c1_check,c1_conv,c1_per_contact,c1_cards,"
     "lk_sum,lk_check,lk_conv,lk_per_contact,lk_cards,"
     "ch_sum,ch_check,ch_conv,ch_per_contact,ch_cards,"
+    "radio_sum,radio_check,radio_conv,radio_per_contact,radio_cards,radio_place,"
+    "inet_sum,inet_check,inet_conv,inet_per_contact,inet_cards,inet_place,"
     "time_per_contact,errors_pct"
 )
 
@@ -47,9 +54,27 @@ def _is_evaluated(row: dict, sector: int) -> bool:
     return not row.get("is_na")
 
 
+def _channel_stats(evaluated: list[dict], prefix: str) -> dict:
+    """Показатели одного канала ('radio' или 'inet') у группы. Зеркало
+    static/index.html::groupChannelStats."""
+    sums = [(r.get(f"{prefix}_sum") or 0) for r in evaluated]
+    cards = [(r.get(f"{prefix}_cards") or 0) for r in evaluated]
+    workers = [r for r, total, count in zip(evaluated, sums, cards) if total > 0 or count > 0]
+
+    def mean(field: str) -> float:
+        return sum((r.get(field) or 0) for r in workers) / len(workers) if workers else 0
+
+    return {
+        f"{prefix}_sum": sum(sums), f"{prefix}_cards": sum(cards),
+        f"{prefix}_check": mean(f"{prefix}_check"), f"{prefix}_conv": mean(f"{prefix}_conv"),
+        f"{prefix}_pc": mean(f"{prefix}_per_contact"), f"{prefix}_workers": len(workers),
+    }
+
+
 def sector_group_stats(rows: list[dict], sector: int) -> list[dict]:
     """rows — строки kpi_ratings одного периода (любые колонки из STATS_COLUMNS).
     Возвращает агрегаты по группам сектора в тех полях, что ждёт фронтенд."""
+    dual = any(r.get("radio_place") is not None or r.get("inet_place") is not None for r in rows)
     by_group: dict[str, list[dict]] = {}
     for r in rows:
         supervisor = r.get("supervisor")
@@ -81,8 +106,12 @@ def sector_group_stats(rows: list[dict], sector: int) -> list[dict]:
             "c1_pc": mean("c1_per_contact"), "c1_cards": total("c1_cards"),
             "lk_sum": total("lk_sum"), "lk_check": mean("lk_check"), "lk_conv": mean("lk_conv"),
             "lk_pc": mean("lk_per_contact"), "lk_cards": total("lk_cards"),
-            "ch_sum": total("ch_sum"), "ch_check": mean("ch_check"), "ch_conv": mean("ch_conv"),
-            "ch_pc": mean("ch_per_contact"), "ch_cards": total("ch_cards"),
+            **(
+                {**_channel_stats(evaluated, "radio"), **_channel_stats(evaluated, "inet")}
+                if dual else
+                {"ch_sum": total("ch_sum"), "ch_check": mean("ch_check"), "ch_conv": mean("ch_conv"),
+                 "ch_pc": mean("ch_per_contact"), "ch_cards": total("ch_cards")}
+            ),
             "time": mean("time_per_contact"), "errors_pct": mean("errors_pct"),
         })
     return stats
