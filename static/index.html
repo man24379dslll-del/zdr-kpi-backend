@@ -579,6 +579,7 @@
       <button class="tab-btn" data-tab="novices">Новички (общий рейтинг)</button>
       <button class="tab-btn" data-tab="supervisors">Рейтинг супервайзеров</button>
       <button class="tab-btn" data-tab="sector2Supervisors">Рейтинг супервайзеров (Сектор №2)</button>
+      <button class="tab-btn" data-tab="sector3Supervisors">Рейтинг супервайзеров (Сектор №3)</button>
       <button class="tab-btn" data-tab="dynamics">Динамика</button>
     </div>
 
@@ -600,12 +601,18 @@
     </div>
 
     <div class="tab-panel" id="tab-supervisors">
+      <div class="sub" style="margin-bottom:16px;">Сравнение групп Сектора №1 — всех обычных групп, кроме Секторов №2 и №3 (у них свои вкладки). Регион УК, ПП, Увеличители и Васько в сравнение не входят.</div>
       <div id="supervisorContainer"></div>
     </div>
 
     <div class="tab-panel" id="tab-sector2Supervisors">
       <div class="sub" style="margin-bottom:16px;">Сравнение только 8 групп Сектора №2 (Болотов, Владыкин, Гулуа, Потапова, Оганесян, Никитина, Буряк, Нестеренко) между собой — отдельно от общего рейтинга супервайзеров, т.к. у них другая формула баллов (ЛК не в счёт).</div>
       <div id="sector2SupervisorContainer"></div>
+    </div>
+
+    <div class="tab-panel" id="tab-sector3Supervisors">
+      <div class="sub" style="margin-bottom:16px;">Сравнение 5 групп Сектора №3 между собой (Курилова, Бровкова, Басараб, Конакова, Ерохина) — ЛК считается как обычно, новички участвуют в расчёте, веса — Сектора №3.</div>
+      <div id="sector3SupervisorContainer"></div>
     </div>
 
     <div class="tab-panel" id="tab-dynamics">
@@ -1423,6 +1430,7 @@ async function loadSavedPeriod(upload){
     markLkOff(novices, savedWeights, true);
     currentSupervisorRows = computeSupervisorRatingFromRows(main, undefined, savedWeights);
     currentSector2SupervisorRows = computeSupervisorRatingFromRows(main, SECTOR_2_SUPERVISORS, savedWeights);
+    currentSector3SupervisorRows = computeSupervisorRatingFromRows(main, SECTOR_3_SUPERVISORS, savedWeights);
     currentFilename = upload.source_filename || "(сохранённый период)";
 
     $("channelPanel").style.display = "none";
@@ -1452,6 +1460,7 @@ let currentRows = null;
 let currentNoviceRows = null;
 let currentSupervisorRows = null;
 let currentSector2SupervisorRows = null;
+let currentSector3SupervisorRows = null;
 let currentFilename = "";
 
 // Заголовки колонок бонусов берутся из САМОГО файла (процент в названии
@@ -2499,9 +2508,10 @@ function assignSupervisorCoefficients(rows){
 // sectorSupervisors — считать рейтинг ТОЛЬКО среди групп ОДНОГО сектора
 // (SECTOR_2_SUPERVISORS или SECTOR_3_SUPERVISORS — для отдельной вкладки
 // "Рейтинг супервайзеров (Сектор №N)" в собственном просмотре руководителя
-// сектора), вместо обычного поведения (все группы, КРОМЕ Сектора 2 и
-// special-групп — Сектор 3 из общего сравнения НЕ исключается, его формула
-// total_score обычная, сравнивать с другими группами корректно). Новички
+// сектора), вместо обычного поведения: общий рейтинг — это Сектор №1, то есть
+// все обычные группы КРОМЕ Секторов 2 и 3 (у них свои вкладки и свои правила)
+// и special-групп (Регион УК/ПП/Увеличители/Васько). Раньше Сектор 3 в
+// общем рейтинге оставался вместе с Сектором 1 — теперь он только в своём. Новички
 // участвуют в расчёте для ЛЮБОГО сектора (isNarrowSectorEvaluated — общая
 // функция, не завязана на конкретный сектор), ЛК не в счёт — ТОЛЬКО для
 // Сектора 2 (см. active ниже, сравнение по ссылке с самой константой).
@@ -2526,7 +2536,7 @@ function groupChannelStats(evaluated, key, fieldsOf){
 function computeSupervisorRating(groups, sectorSupervisors, weightsInfo){
   const groupFilter = sectorSupervisors
     ? g => sectorSupervisors.has(g.supervisor)
-    : g => !isSpecialGroup(g.supervisor) && !SECTOR_2_SUPERVISORS.has(g.supervisor);
+    : g => !isSpecialGroup(g.supervisor) && !SECTOR_2_SUPERVISORS.has(g.supervisor) && !SECTOR_3_SUPERVISORS.has(g.supervisor);
   const groupStats = groups
     .filter(groupFilter)
     .map(g => {
@@ -2562,8 +2572,8 @@ function computeSupervisorRating(groups, sectorSupervisors, weightsInfo){
 function computeSupervisorRatingFromRows(mainRows, sectorSupervisors, weightsInfo){
   const bySupervisor = {};
   for(const r of mainRows){
-    const isSector2Row = SECTOR_2_SUPERVISORS.has(r.supervisor);
-    if(sectorSupervisors ? !sectorSupervisors.has(r.supervisor) : (isSpecialGroup(r.supervisor) || isSector2Row)) continue;
+    const inSector23 = SECTOR_2_SUPERVISORS.has(r.supervisor) || SECTOR_3_SUPERVISORS.has(r.supervisor);
+    if(sectorSupervisors ? !sectorSupervisors.has(r.supervisor) : (isSpecialGroup(r.supervisor) || inSector23)) continue;
     (bySupervisor[r.supervisor] ||= []).push(r);
   }
   // Период посчитан по новой формуле — два канала отдельно; старый (радио и
@@ -2879,6 +2889,7 @@ $("calcBtn").addEventListener("click", async () => {
     const noviceRated = computeGlobalNovices(parsedGroups);
     const supervisorRated = computeSupervisorRating(parsedGroups);
     const sector2SupervisorRated = computeSupervisorRating(parsedGroups, SECTOR_2_SUPERVISORS);
+    const sector3SupervisorRated = computeSupervisorRating(parsedGroups, SECTOR_3_SUPERVISORS);
 
     // "Теоретический" коэффициент ЛГ новичков считается внутри
     // computeMainRating (там total_score — правильный, посчитанный ВНУТРИ
@@ -2904,6 +2915,7 @@ $("calcBtn").addEventListener("click", async () => {
     currentNoviceRows = noviceRated;
     currentSupervisorRows = supervisorRated;
     currentSector2SupervisorRows = sector2SupervisorRated;
+    currentSector3SupervisorRows = sector3SupervisorRated;
 
     $("channelPanel").style.display = "none";
     if(isSectorUploader()){
@@ -3186,6 +3198,7 @@ function renderResults(){
   renderNovices();
   renderSupervisors();
   renderSector2Supervisors();
+  renderSector3Supervisors();
   renderDynamicsTab();
   $("resultsPanel").scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -3268,6 +3281,10 @@ function renderSupervisors(){
 
 function renderSector2Supervisors(){
   renderSupervisorTable($("sector2SupervisorContainer"), currentSector2SupervisorRows || []);
+}
+
+function renderSector3Supervisors(){
+  renderSupervisorTable($("sector3SupervisorContainer"), currentSector3SupervisorRows || []);
 }
 
 // opts.highlight — Set названий групп, которые подсветить (своя группа).
