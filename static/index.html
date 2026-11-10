@@ -932,7 +932,7 @@ function renderGroupBlocks(container, rows, groupNames, opts){
 //    "Супервайзеры" (сравнение групп сектора между собой);
 //  - обычный супервайзер (headSector null) — лист "Операторы" только с его
 //    группой(ами) и БЕЗ бонусов/ЗП: на экране они ему тоже скрыты. Исключение —
-//    супервайзеры Сектора 2 (supervisorSeesPay): им ЗП своих операторов открыта.
+//    супервайзеры Секторов 2 и 3 (supervisorSeesPay): им ЗП своих операторов открыта.
 function buildViewerWorkbook(headSector, rows, periodLabel, weightsInfo){
   const sectorSet = headSector === 2 ? SECTOR_2_SUPERVISORS : headSector === 3 ? SECTOR_3_SUPERVISORS : null;
   const own = sectorSet ? rows.filter(r => sectorSet.has(r.supervisor)) : rows;
@@ -1855,11 +1855,11 @@ function sector2ZeroesLk(supervisor, fio){
   return SECTOR_2_SUPERVISORS.has(supervisor) && !SECTOR_2_LK_WEIGHT_EXCEPTIONS_FIO.has(fio);
 }
 // Обычному супервайзеру бонусы и ЗП его операторов в таблице и Excel скрыты;
-// исключение — группы Сектора 2: их супервайзеры видят ЗП своих операторов
+// исключение — группы Секторов 2 и 3: их супервайзеры видят ЗП своих операторов
 // (по запросу заказчика). Решается по ГРУППЕ: у супервайзера с группами в
-// разных секторах ЗП открыта только у блока Сектора 2.
+// разных секторах ЗП открыта только у блоков Секторов 2/3.
 function supervisorSeesPay(groupName){
-  return SECTOR_2_SUPERVISORS.has(groupName);
+  return SECTOR_2_SUPERVISORS.has(groupName) || SECTOR_3_SUPERVISORS.has(groupName);
 }
 
 // Сектор №3 (5 обычных групп, отдельный руководитель — Сорокин Никита).
