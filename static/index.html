@@ -5250,6 +5250,21 @@ function rowToArray(r, dual, lkOff){
 }
 function rgbToArgb(hex){ return "FF" + hex.toUpperCase(); }
 
+// Коэффициенты в Excel — только ЧИСЛА с явным форматом. Текст "1.05" Excel и
+// Google Sheets с русской локалью принимают за дату (01.05), а числа в
+// колонке, на которую перенёсся формат даты, показывают 31.12.
+const COEF_FMT = "0.00";
+const COEF_DEFAULT_FMT = '0.00" (по умолч.)"';
+// "Коэффициент" (coefCol) и "Коэфф. пред. недели (в ЗП)" (coefCol + 1) у строк
+// rows, лежащих в листе с строки dataStart; "(по умолч.)" — часть формата.
+function applyCoefFormats(ws, rows, dataStart, coefCol){
+  rows.forEach((r, i) => {
+    const coef = ws[XLSX.utils.encode_cell({ r: dataStart + i, c: coefCol })];
+    if(coef && coef.t === "n") coef.z = COEF_FMT;
+    const used = ws[XLSX.utils.encode_cell({ r: dataStart + i, c: coefCol + 1 })];
+    if(used && used.t === "n") used.z = r.salaryCoeffFromPrev ? COEF_FMT : COEF_DEFAULT_FMT;
+  });
+}
 function applyPlaceGradients(ws, sortedRows, colsConfig, dataStartRow){
   const offset = dataStartRow === undefined ? 1 : dataStartRow;
   colsConfig.forEach(({idx, field, filterFn}) => {
@@ -5417,12 +5432,10 @@ function buildGroupedMainSheet(sourceRows, opts){
   sourceRows = sourceRows || currentRows;
   const hideFinalPay = !!(opts && opts.hideFinalPay);
   const withTier = periodType === "week";
-  // Тот же текст/логика, что и на экране (buildDetailTable): пусто, если
-  // salaryCoeffUsed нет, иначе значение + пометка "(по умолч.)", если
-  // коэффициент не найден в данных прошлой недели (r.salaryCoeffFromPrev).
-  const salaryCoeffUsedCell = r => r.salaryCoeffUsed == null
-    ? ""
-    : `${r.salaryCoeffUsed}${r.salaryCoeffFromPrev ? "" : " (по умолч.)"}`;
+  // Как на экране (buildDetailTable): пусто, если salaryCoeffUsed нет, иначе
+  // ЧИСЛО. Пометка "(по умолч.)" (коэффициент не найден в данных прошлой
+  // недели, r.salaryCoeffFromPrev) уходит в формат ячейки — applyCoefFormats.
+  const salaryCoeffUsedCell = r => r.salaryCoeffUsed == null ? "" : r.salaryCoeffUsed;
   const dual = isDualRows(sourceRows);
   const lkOff = isLkOffRows(sourceRows);
   const rowFn = r => withTier
@@ -5460,6 +5473,7 @@ function buildGroupedMainSheet(sourceRows, opts){
     styleHeaderRow(ws, totalCols, headerRowA, "cat");
     styleHeaderRow(ws, totalCols, headerRowA + 1, "sub");
     applyPlaceGradients(ws, rows, placeColsMain(dual, lkOff), dataStart);
+    if(withTier) applyCoefFormats(ws, rows, dataStart, exportCols(dual, true, hideFinalPay, lkOff).tierStart + 1);
   });
   ws["!cols"] = [{ wch: 24 }, { wch: 18 }];
   return ws;
@@ -5515,6 +5529,10 @@ function buildSupervisorExportSheet(rows){
   ws["!merges"] = categoryHeaderMerges(0, totalCols, dual, lkOff);
   ws["!merges"].push({ s: { r: 0, c: finalCols - 1 }, e: { r: 1, c: finalCols - 1 } });
   applyPlaceGradients(ws, sorted, placeColsSup(dual, lkOff), 2);
+  sorted.forEach((r, i) => {
+    const coef = ws[XLSX.utils.encode_cell({ r: 2 + i, c: finalCols - 1 })];
+    if(coef && coef.t === "n") coef.z = COEF_FMT;
+  });
   styleHeaderRow(ws, finalCols, 0, "cat");
   styleHeaderRow(ws, finalCols, 1, "sub");
   const totalRowIdx = 2 + arr.length;
