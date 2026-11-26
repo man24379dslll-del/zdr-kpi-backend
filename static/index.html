@@ -836,6 +836,7 @@ function dbRowToDisplayRow(r){
     // докстринг assignDisplaySalaryCoeff — реальный сбой на проде).
     salaryCoeffUsed: r.coefficient, salaryCoeffFromPrev: true, channel: r.channel,
     work_hours: r.work_hours ?? null, shift_count: r.shift_count ?? null,
+    short_calls: r.short_calls ?? null, short_calls_pct: r.short_calls_pct ?? null,
   };
 }
 
@@ -1555,6 +1556,10 @@ function parseWorkbook(arrayBuffer){
     bonus2: findColBySuffix(headers, "за дост."),
     work_hours: optional("Рабочее время, ч"),
     shift_count: optional("Кол-во смен"), // чисто информационная, в формулу ЗП не входит
+    // Короткие звонки — только для информации: веса нет, на места/баллы не
+    // влияют. В старых файлах колонок нет (-1), пустая ячейка — null.
+    short_calls: optional("Короткие звонки < 10 сек"),
+    short_calls_pct: optional("Короткие звонки, %"),
   };
   const cardsMissing = [];
   if(col.c1_cards === -1) cardsMissing.push("Первый контакт");
@@ -1661,6 +1666,8 @@ function parseWorkbook(arrayBuffer){
       errors_count: errorsCountCol !== -1 ? num(row[errorsCountCol]) : null,
       work_hours: col.work_hours !== -1 ? numOrNull(row[col.work_hours]) : null,
       shift_count: col.shift_count !== -1 ? numOrNull(row[col.shift_count]) : null,
+      short_calls: col.short_calls !== -1 ? numOrNull(row[col.short_calls]) : null,
+      short_calls_pct: col.short_calls_pct !== -1 ? numOrNull(row[col.short_calls_pct]) : null,
     });
   }
   return { groups, errorsIsFallback, cardsMissing, salaryMissing, bonus075Label, bonus2Label, workHoursMissing };
@@ -2654,6 +2661,8 @@ function toDbRow(e, isNovice){
     channel: e.channel ?? null,
     work_hours: e.work_hours ?? null,
     shift_count: e.shift_count ?? null,
+    short_calls: e.short_calls ?? null,
+    short_calls_pct: e.short_calls_pct ?? null,
   };
 }
 
@@ -3075,8 +3084,13 @@ function rankBadge(value, hex, extraText){
 function isDualRows(rows){
   return rows.some(r => r.radio_place !== null && r.radio_place !== undefined);
 }
+// Короткие звонки (информационный показатель) — блок колонок только там, где
+// они есть в данных: в загрузках до 2026-11-26 этих колонок не было.
+function hasShortCalls(rows){
+  return !!rows && rows.some(r => r.short_calls != null || r.short_calls_pct != null);
+}
 
-function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk, dual){
+function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk, dual, short){
   const chanSub = `<th>карточек</th><th>сумма</th><th>ср.чек</th><th>конв.</th><th>с контакта</th><th class="block-end">место</th>`;
   return `
     <thead>
@@ -3091,6 +3105,7 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
           : `<th colspan="6" class="block-end">${channelLabel || "Радио+ТВ / Интернет"}</th>`}
         <th colspan="2" class="block-end">Время/контакт (без звонка)</th>
         <th colspan="3" class="block-end">% ошибок</th>
+        ${short ? `<th colspan="2" class="block-end" title="Только для информации — на баллы и места не влияет">Короткие звонки &lt; 10 сек</th>` : ``}
         <th rowspan="2">Сумма баллов</th>
         <th rowspan="2">Место</th>
         ${showDelta ? `<th rowspan="2" class="${showTier ? '' : 'block-end'}">Δ к пред. периоду</th>` : ``}
@@ -3103,6 +3118,7 @@ function detailTableHead(extraCol, showTier, channelLabel, showConvStatus, showD
         ${dual ? chanSub + chanSub : chanSub}
         <th>чч:мм:сс</th><th class="block-end">место</th>
         <th>кол-во</th><th>%</th><th class="block-end">место</th>
+        ${short ? `<th>кол-во</th><th class="block-end">%</th>` : ``}
       </tr>
     </thead>`;
 }
@@ -3117,11 +3133,12 @@ function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvSt
   hideLk = hideLk || isLkOffRows(rows); // ЛК выключена (вес 0) — колонок ЛК нет
   const sorted = sortByPlace(rows);
   const dual = isDualRows(rows);
+  const short = hasShortCalls(rows);
   const wrap = document.createElement("div");
   wrap.className = "subtable-wrap";
   const table = document.createElement("table");
   table.className = "detail";
-  table.innerHTML = detailTableHead(showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk, dual) + `<tbody></tbody>`;
+  table.innerHTML = detailTableHead(showGroupCol, showTier, channelLabel, showConvStatus, showDelta, hideFinalPay, hideLk, dual, short) + `<tbody></tbody>`;
   const tbody = table.querySelector("tbody");
 
   const c1Map = gradientMap(rows, "c1_place");
@@ -3149,6 +3166,7 @@ function buildDetailTable(rows, showGroupCol, showTier, channelLabel, showConvSt
         : `<td>${fmtCards(r.ch_cards)}</td><td>${fmt(r.ch_sum)}</td><td>${fmt(r.ch_check)}</td><td>${fmtPct(r.ch_conv)}</td><td>${fmt(r.ch_pc)}</td><td class="block-end">${rankBadge(r.ch_place, chMap(r.ch_place))}</td>`}
       <td>${fmtTime(r.time)}</td><td class="block-end">${rankBadge(r.time_place, timeMap(r.time_place))}</td>
       <td>${fmtCards(r.errors_count)}</td><td>${fmtPct(r.errors_pct)}</td><td class="block-end">${rankBadge(r.errors_place, errMap(r.errors_place))}</td>
+      ${short ? `<td>${fmtCards(r.short_calls)}</td><td class="block-end">${r.short_calls_pct == null ? "—" : fmtPct(r.short_calls_pct)}</td>` : ``}
       <td>${fmt(r.total_score)}</td>
       <td class="place-cell">${r.is_na ? "Н/О" : rankBadge(r.final_place, finalMap(r.final_place))}</td>
       ${showDelta ? `<td class="${showTier ? '' : 'block-end'}">${deltaBadge(r.deltaPlace)}</td>` : ``}
@@ -5231,8 +5249,9 @@ const EXPORT_HEADERS = [
 ];
 // dual — строки новой формулы (isDualRows): вместо одного блока канала два,
 // Радио+ТВ и Интернет, поэтому все колонки правее сдвигаются на 6 (см.
-// exportCols/categoryHeaderRows/placeCols).
-function rowToArray(r, dual, lkOff){
+// exportCols/categoryHeaderRows/placeCols). short — блок "Короткие звонки"
+// (2 колонки после "% ошибок", hasShortCalls), всё правее сдвигается на 2.
+function rowToArray(r, dual, lkOff, short){
   return [
     r.fio, r.status, displayGroupName(r.supervisor),
     r.c1_cards ?? "", r.c1_sum, r.c1_check, r.c1_conv, r.c1_pc, r.c1_place,
@@ -5245,6 +5264,7 @@ function rowToArray(r, dual, lkOff){
     ]),
     fmtTime(r.time), r.time_place,
     r.errors_count ?? "", r.errors_pct, r.errors_place,
+    ...(short ? [r.short_calls ?? "", r.short_calls_pct ?? ""] : []),
     r.total_score, r.is_na ? "Н/О" : r.final_place,
   ];
 }
@@ -5294,13 +5314,15 @@ function applyPlaceGradients(ws, sortedRows, colsConfig, dataStartRow){
 // обычного супервайзера не должен показывать то, что скрыто у него на экране.
 // lkOff — ЛК выключена (вес 0): блока ЛК (6 колонок) в файле нет, всё правее
 // него сдвигается на 6 влево.
-function exportCols(dual, withTier, hideFinalPay, lkOff){
-  const x = dual ? 6 : 0, y = lkOff ? -6 : 0;
+// short — блок "Короткие звонки" (2 колонки сразу после "% ошибок"): всё
+// правее сдвигается на 2. У листа супервайзеров этого блока нет.
+function exportCols(dual, withTier, hideFinalPay, lkOff, short){
+  const x = dual ? 6 : 0, y = lkOff ? -6 : 0, s = short ? 2 : 0;
   const tierCols = hideFinalPay ? 5 : 8;
-  return { x, y, ch: 15 + y, inet: 21 + y, time: 21 + x + y, errors: 23 + x + y, total: 26 + x + y, final: 27 + x + y, tierStart: 28 + x + y, totalCols: (withTier ? 28 + tierCols : 28) + x + y };
+  return { x, y, ch: 15 + y, inet: 21 + y, time: 21 + x + y, errors: 23 + x + y, short: 26 + x + y, total: 26 + x + y + s, final: 27 + x + y + s, tierStart: 28 + x + y + s, totalCols: (withTier ? 28 + tierCols : 28) + x + y + s };
 }
-function placeCols(dual, finalFilterFn, lkOff){
-  const c = exportCols(dual, false, undefined, lkOff);
+function placeCols(dual, finalFilterFn, lkOff, short){
+  const c = exportCols(dual, false, undefined, lkOff, short);
   return [
     { idx: 8, field: "c1_place" },
     ...(lkOff ? [] : [{ idx: 14, field: "lk_place" }]),
@@ -5312,7 +5334,7 @@ function placeCols(dual, finalFilterFn, lkOff){
     finalFilterFn ? { idx: c.final, field: "final_place", filterFn: finalFilterFn } : { idx: c.final, field: "final_place" },
   ];
 }
-const placeColsMain = (dual, lkOff) => placeCols(dual, r => !r.is_na, lkOff);
+const placeColsMain = (dual, lkOff, short) => placeCols(dual, r => !r.is_na, lkOff, short);
 const placeColsSup = (dual, lkOff) => placeCols(dual, undefined, lkOff);
 
 
@@ -5340,8 +5362,8 @@ function styleTitleRow(ws, rowIdx, colCount){
 
 // Двухстрочная шапка: сверху названия блоков (объединённые ячейки), снизу подписи колонок —
 // как на экране (строки "cat" и "sub").
-function categoryHeaderRows(leadLabels, withTier, dual, hideFinalPay, lkOff){
-  const c = exportCols(dual, withTier, hideFinalPay, lkOff);
+function categoryHeaderRows(leadLabels, withTier, dual, hideFinalPay, lkOff, short){
+  const c = exportCols(dual, withTier, hideFinalPay, lkOff, short);
   const totalCols = c.totalCols;
   const rowA = new Array(totalCols).fill("");
   const rowB = new Array(totalCols).fill("");
@@ -5356,6 +5378,7 @@ function categoryHeaderRows(leadLabels, withTier, dual, hideFinalPay, lkOff){
   }
   rowA[c.time] = "ВРЕМЯ/КОНТАКТ (БЕЗ ЗВОНКА)";
   rowA[c.errors] = "% ОШИБОК";
+  if(short) rowA[c.short] = "КОРОТКИЕ ЗВОНКИ < 10 СЕК";
   rowA[c.total] = "Сумма баллов";
   rowA[c.final] = "Место";
   if(withTier){
@@ -5371,11 +5394,12 @@ function categoryHeaderRows(leadLabels, withTier, dual, hideFinalPay, lkOff){
   [3, ...(lkOff ? [] : [9]), c.ch, ...(dual ? [c.inet] : [])].forEach(start => subLabels.forEach((s, i) => rowB[start + i] = s));
   rowB[c.time] = "чч:мм:сс"; rowB[c.time + 1] = "место";
   rowB[c.errors] = "кол-во"; rowB[c.errors + 1] = "%"; rowB[c.errors + 2] = "место";
+  if(short){ rowB[c.short] = "кол-во"; rowB[c.short + 1] = "%"; }
 
   return { rowA, rowB, totalCols };
 }
-function categoryHeaderMerges(baseRow, totalCols, dual, lkOff){
-  const c = exportCols(dual, false, undefined, lkOff);
+function categoryHeaderMerges(baseRow, totalCols, dual, lkOff, short){
+  const c = exportCols(dual, false, undefined, lkOff, short);
   // колонки блока ЛГ — всё, что правее "Места" (их число зависит от hideFinalPay)
   const tierCount = Math.max(0, totalCols - c.totalCols);
   const vertCols = [0, 1, 2, c.total, c.final, ...Array.from({ length: tierCount }, (_, i) => c.tierStart + i)];
@@ -5386,6 +5410,7 @@ function categoryHeaderMerges(baseRow, totalCols, dual, lkOff){
   if(dual) merges.push({ s: { r: baseRow, c: c.inet }, e: { r: baseRow, c: c.inet + 5 } });
   merges.push({ s: { r: baseRow, c: c.time }, e: { r: baseRow, c: c.time + 1 } });
   merges.push({ s: { r: baseRow, c: c.errors }, e: { r: baseRow, c: c.errors + 2 } });
+  if(short) merges.push({ s: { r: baseRow, c: c.short }, e: { r: baseRow, c: c.short + 1 } });
   return merges;
 }
 
@@ -5393,21 +5418,22 @@ function buildExportSheet(rows, withConvStatus){
   const sorted = sortByPlace(rows);
   const dual = isDualRows(rows);
   const lkOff = isLkOffRows(rows);
-  const { rowA, rowB, totalCols } = categoryHeaderRows(["ФИО","Статус","Группа"], false, dual, undefined, lkOff);
+  const short = hasShortCalls(rows);
+  const { rowA, rowB, totalCols } = categoryHeaderRows(["ФИО","Статус","Группа"], false, dual, undefined, lkOff, short);
   const finalCols = withConvStatus ? totalCols + 1 : totalCols;
   if(withConvStatus){
     rowA.push("Статус по сумме с контакта");
     rowB.push("");
   }
   const dataRows = sorted.map(r => {
-    const arr = rowToArray(r, dual, lkOff);
+    const arr = rowToArray(r, dual, lkOff, short);
     if(withConvStatus) arr.push(convBand(r.c1_pc).label);
     return arr;
   });
   const ws = XLSX.utils.aoa_to_sheet([rowA, rowB, ...dataRows]);
-  ws["!merges"] = categoryHeaderMerges(0, totalCols, dual, lkOff);
+  ws["!merges"] = categoryHeaderMerges(0, totalCols, dual, lkOff, short);
   if(withConvStatus) ws["!merges"].push({ s: { r: 0, c: finalCols - 1 }, e: { r: 1, c: finalCols - 1 } });
-  applyPlaceGradients(ws, sorted, placeColsMain(dual, lkOff), 2);
+  applyPlaceGradients(ws, sorted, placeColsMain(dual, lkOff, short), 2);
   styleHeaderRow(ws, finalCols, 0, "cat");
   styleHeaderRow(ws, finalCols, 1, "sub");
   if(withConvStatus){
@@ -5438,11 +5464,12 @@ function buildGroupedMainSheet(sourceRows, opts){
   const salaryCoeffUsedCell = r => r.salaryCoeffUsed == null ? "" : r.salaryCoeffUsed;
   const dual = isDualRows(sourceRows);
   const lkOff = isLkOffRows(sourceRows);
+  const short = hasShortCalls(sourceRows);
   const rowFn = r => withTier
-    ? [...rowToArray(r, dual, lkOff), r.tier ?? "", r.coefficient ?? "", salaryCoeffUsedCell(r), r.work_hours ?? "", r.shift_count ?? "",
+    ? [...rowToArray(r, dual, lkOff, short), r.tier ?? "", r.coefficient ?? "", salaryCoeffUsedCell(r), r.work_hours ?? "", r.shift_count ?? "",
        ...(hideFinalPay ? [] : [r.bonus075 ?? "", r.bonus2 ?? "", r.salary ?? ""])]
-    : rowToArray(r, dual, lkOff);
-  const { rowA, rowB, totalCols } = categoryHeaderRows(["ФИО","Статус","Группа"], withTier, dual, hideFinalPay, lkOff);
+    : rowToArray(r, dual, lkOff, short);
+  const { rowA, rowB, totalCols } = categoryHeaderRows(["ФИО","Статус","Группа"], withTier, dual, hideFinalPay, lkOff, short);
 
   const groupNames = [...new Set(sourceRows.map(r => r.supervisor))].sort(compareGroupNames);
   const aoa = [];
@@ -5463,7 +5490,7 @@ function buildGroupedMainSheet(sourceRows, opts){
     const dataStart = aoa.length;
     rows.forEach(r => aoa.push(rowFn(r)));
     blocks.push({ titleRow, headerRowA, dataStart, rows });
-    allMerges = allMerges.concat(categoryHeaderMerges(headerRowA, totalCols, dual, lkOff));
+    allMerges = allMerges.concat(categoryHeaderMerges(headerRowA, totalCols, dual, lkOff, short));
     aoa.push([]); // blank separator
   }
   const ws = XLSX.utils.aoa_to_sheet(aoa);
@@ -5472,8 +5499,8 @@ function buildGroupedMainSheet(sourceRows, opts){
     styleTitleRow(ws, titleRow, totalCols);
     styleHeaderRow(ws, totalCols, headerRowA, "cat");
     styleHeaderRow(ws, totalCols, headerRowA + 1, "sub");
-    applyPlaceGradients(ws, rows, placeColsMain(dual, lkOff), dataStart);
-    if(withTier) applyCoefFormats(ws, rows, dataStart, exportCols(dual, true, hideFinalPay, lkOff).tierStart + 1);
+    applyPlaceGradients(ws, rows, placeColsMain(dual, lkOff, short), dataStart);
+    if(withTier) applyCoefFormats(ws, rows, dataStart, exportCols(dual, true, hideFinalPay, lkOff, short).tierStart + 1);
   });
   ws["!cols"] = [{ wch: 24 }, { wch: 18 }];
   return ws;

@@ -404,6 +404,49 @@ def test_shift_count_is_none_when_column_missing():
     assert employees[0]["shift_count"] is None
 
 
+def test_short_calls_parsed_when_columns_present_and_empty_cell_is_none():
+    # "Короткие звонки < 10 сек" / "Короткие звонки, %" — информационный
+    # показатель (AJ/AK в файле с 2026-11-26). Пустая ячейка — None, не 0.
+    with_calls = _employee_row("Со звонками", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
+    with_calls["Короткие звонки < 10 сек"] = 3
+    with_calls["Короткие звонки, %"] = 6.67
+    without = _employee_row("Без данных", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
+    raw = _build_excel_bytes([_group_row("Тестовая группа"), with_calls, without])
+    by_fio = {e["fio"]: e for e in parse_weekly_rating_excel(raw)}
+    assert by_fio["Со звонками"]["short_calls"] == 3
+    assert by_fio["Со звонками"]["short_calls_pct"] == 6.67
+    assert by_fio["Без данных"]["short_calls"] is None
+    assert by_fio["Без данных"]["short_calls_pct"] is None
+
+
+def test_short_calls_are_none_when_columns_missing():
+    row = _employee_row("Тестов Т.", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
+    raw = _build_excel_bytes([_group_row("Тестовая группа"), row])
+    employees = parse_weekly_rating_excel(raw)
+    assert employees[0]["short_calls"] is None
+    assert employees[0]["short_calls_pct"] is None
+
+
+def test_short_calls_do_not_affect_places_or_scores():
+    # Показатель только для информации: одинаковый файл с разными короткими
+    # звонками даёт те же баллы, места и ЛГ у каждого сотрудника.
+    def computed(short_by_fio):
+        rows = []
+        for row in ROWS:
+            row = dict(row)
+            if row.get(FIO) in short_by_fio:
+                row["Короткие звонки < 10 сек"], row["Короткие звонки, %"] = short_by_fio[row[FIO]]
+            rows.append(row)
+        employees = parse_weekly_rating_excel(_build_excel_bytes(rows))
+        results = compute_weekly_rating(employees, CATEGORIES, na_predicate=is_na_row)
+        return {r.fio: (r.total_score, r.final_place, r.tier, r.coefficient, r.places, r.scores) for r in results}
+
+    fios = [r[FIO] for r in ROWS if not str(r.get(FIO, "")).startswith("ГРУППА")]
+    many = {fio: (50 + i * 7, 90.0 - i) for i, fio in enumerate(fios)}
+    none = {fio: (0, 0.0) for fio in fios}
+    assert computed(many) == computed(none) == computed({})
+
+
 def test_missing_mandatory_column_raises_400():
     row = _employee_row("Тестов Т.", "", 100, 50, 100, 30, 2, 1, 5, 1000, "radio")
     del row[C1_SUM]
@@ -670,6 +713,7 @@ def test_build_kpi_rating_row_maps_computed_fields_for_supabase():
     assert row["salary"] is None  # assign_salary тут не вызывается (это работа routers/ratings.py, не compute_weekly_rating)
     assert row["work_hours"] is None  # "Рабочее время, ч" не задана в тестовых строках
     assert row["shift_count"] is None  # "Кол-во смен" не задана в тестовых строках
+    assert row["short_calls"] is None and row["short_calls_pct"] is None  # колонок нет — просто null
 
     novikov = by_fio["Новиков Н."]
     novikov_row = build_kpi_rating_row("upload-123", novikov)

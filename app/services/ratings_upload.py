@@ -34,6 +34,7 @@ NUMERIC_FIELDS = (
     "errors_pct", "errors_place", "errors_score", "errors_count",
     "total_score", "final_place", "tier", "coefficient",
     "bonus075", "bonus2", "salary", "work_hours", "shift_count",
+    "short_calls", "short_calls_pct",  # только для информации, на места не влияют
 )
 ALLOWED_FIELDS = frozenset(TEXT_FIELDS + BOOL_FIELDS + NUMERIC_FIELDS)
 

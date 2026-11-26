@@ -62,6 +62,17 @@ def test_sanitize_rows_accepts_radio_and_inet_columns_and_rejects_bad_types():
             sanitize_rows([_row(**{field: "1"})])
 
 
+def test_sanitize_rows_accepts_short_calls_and_rejects_bad_types():
+    # Короткие звонки — информационные поля, пишутся как есть (null, если нет)
+    clean = sanitize_rows([_row(short_calls=3, short_calls_pct=6.67), _row()])
+    assert clean[0]["short_calls"] == 3 and clean[0]["short_calls_pct"] == 6.67
+    assert clean[1]["short_calls"] is None and clean[1]["short_calls_pct"] is None
+    for field in ("short_calls", "short_calls_pct"):
+        assert field in ALLOWED_FIELDS
+        with pytest.raises(UploadValidationError):
+            sanitize_rows([_row(**{field: "3"})])
+
+
 def test_sanitize_rows_rejects_empty_and_too_many():
     with pytest.raises(UploadValidationError):
         sanitize_rows([])

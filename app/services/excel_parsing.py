@@ -50,6 +50,9 @@
                                            отдельно через интерфейс, см. services/salary.py)
   AH Кол-во смен                       <- чисто информационная, см. SHIFT_COUNT_COLUMN
   AI Урезания по часам, ч              <- не используется в расчёте, не читаем
+  AJ Короткие звонки < 10 сек          <- чисто информационная (short_calls), не
+                                           имеет веса, на места/баллы не влияет
+  AK Короткие звонки, %                <- то же (short_calls_pct)
 
 "Кол-во" (карточки) колонки ненадёжны между версиями файла: в старых
 файлах их не было вообще ни у одного канала, у "Первый контакт" в части
@@ -164,6 +167,12 @@ WORK_HOURS_COLUMN = "Рабочее время, ч"
 # Кол-во смен — чисто информационная колонка (в формулу ЗП НЕ входит,
 # в отличие от work_hours выше), выводится в таблице рядом для справки.
 SHIFT_COUNT_COLUMN = "Кол-во смен"
+
+# Короткие звонки — чисто информационный показатель (по запросу заказчика
+# 2026-11-26): веса не имеет, в места/баллы/ЛГ/ЗП не входит. Обе колонки
+# необязательные (в старых файлах их нет); пустая ячейка — None, не 0.
+SHORT_CALLS_COLUMN = "Короткие звонки < 10 сек"
+SHORT_CALLS_PCT_COLUMN = "Короткие звонки, %"
 
 GROUP_ROW_PREFIX = "группа:"
 
@@ -450,6 +459,8 @@ def parse_weekly_rating_excel(raw: bytes, supervisor_channels: dict[str, str] | 
             "errors_count": _optional_num(row, ERRORS_COUNT_COLUMN),
             "work_hours": _optional_num(row, WORK_HOURS_COLUMN),
             "shift_count": _optional_num(row, SHIFT_COUNT_COLUMN),
+            "short_calls": _optional_num(row, SHORT_CALLS_COLUMN),
+            "short_calls_pct": _optional_num(row, SHORT_CALLS_PCT_COLUMN),
         })
 
     return employees

@@ -103,6 +103,9 @@ def build_kpi_rating_row(upload_id: str, r: EmployeeScore) -> dict:
 
         "work_hours": raw.get("work_hours"),  # участвует в формуле ЗП, см. services/salary.py
         "shift_count": raw.get("shift_count"),  # только для информации, в формулу не входит
+        # Короткие звонки — только для информации, на места/баллы не влияют.
+        "short_calls": raw.get("short_calls"),
+        "short_calls_pct": raw.get("short_calls_pct"),
     }
 
 
